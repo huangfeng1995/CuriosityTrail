@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTextEdit, QLineEdit, QMessageBox,
-    QListWidget, QListWidgetItem, QAbstractItemView
+    QListWidget, QListWidgetItem, QFrame
 )
 from PyQt5.QtCore import Qt, QTimer
 from config import REPORT_TEMPLATE
@@ -26,53 +26,76 @@ class ReportEditor(QWidget):
 
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setSpacing(16)
 
         title_layout = QHBoxLayout()
-        title_label = QLabel("报告标题：")
-        self.title_input = QLineEdit()
-        self.title_input.textChanged.connect(self.on_content_changed)
+        title_label = QLabel("报告标题")
+        title_label.setObjectName("fieldLabel")
         title_layout.addWidget(title_label)
-        title_layout.addWidget(self.title_input)
+        title_layout.addStretch()
+
+        self.title_input = QLineEdit()
+        self.title_input.setPlaceholderText("输入报告标题...")
+        self.title_input.textChanged.connect(self.on_content_changed)
+        title_layout.addWidget(self.title_input, 1)
+
         main_layout.addLayout(title_layout)
 
-        content_label = QLabel("报告内容：")
+        content_label = QLabel("报告内容")
+        content_label.setObjectName("fieldLabel")
         main_layout.addWidget(content_label)
 
         self.content_edit = QTextEdit()
         self.content_edit.textChanged.connect(self.on_content_changed)
         main_layout.addWidget(self.content_edit, 1)
 
-        linked_docs_label = QLabel("关联文献：")
-        main_layout.addWidget(linked_docs_label)
+        linked_section = QFrame()
+        linked_section.setObjectName("linkedSection")
+        linked_layout = QVBoxLayout(linked_section)
+        linked_layout.setContentsMargins(16, 12, 16, 12)
+        linked_layout.setSpacing(12)
 
-        docs_layout = QHBoxLayout()
+        linked_header = QHBoxLayout()
+        linked_title = QLabel("📎 关联文献")
+        linked_title.setObjectName("linkedTitle")
+        linked_header.addWidget(linked_title)
+        linked_header.addStretch()
+
+        btn_manage = QPushButton("管理关联")
+        btn_manage.setObjectName("secondaryBtn")
+        btn_manage.setCursor(Qt.PointingHandCursor)
+        btn_manage.clicked.connect(self.manage_linked_documents)
+        linked_header.addWidget(btn_manage)
+        linked_layout.addLayout(linked_header)
+
         self.linked_docs_list = QListWidget()
         self.linked_docs_list.setMaximumHeight(100)
         self.linked_docs_list.itemDoubleClicked.connect(self.open_linked_document)
-        docs_layout.addWidget(self.linked_docs_list)
+        linked_layout.addWidget(self.linked_docs_list)
 
-        docs_btn_layout = QVBoxLayout()
-        self.btn_manage_links = QPushButton("管理关联")
-        self.btn_manage_links.clicked.connect(self.manage_linked_documents)
-        docs_btn_layout.addWidget(self.btn_manage_links)
-        docs_btn_layout.addStretch()
-        docs_layout.addLayout(docs_btn_layout)
-        main_layout.addLayout(docs_layout)
+        main_layout.addWidget(linked_section)
 
         actions_layout = QHBoxLayout()
-        self.btn_save = QPushButton("保存")
-        self.btn_save.clicked.connect(self.save_report)
-        self.btn_export_txt = QPushButton("导出TXT")
-        self.btn_export_txt.clicked.connect(lambda: self.export_report("txt"))
-        self.btn_export_docx = QPushButton("导出DOCX")
-        self.btn_export_docx.clicked.connect(lambda: self.export_report("docx"))
+        actions_layout.setSpacing(12)
 
+        self.btn_save = QPushButton("💾 保存")
+        self.btn_save.setObjectName("primaryBtn")
+        self.btn_save.clicked.connect(self.save_report)
         actions_layout.addWidget(self.btn_save)
+
         actions_layout.addStretch()
+
+        self.btn_export_txt = QPushButton("📄 导出 TXT")
+        self.btn_export_txt.setObjectName("secondaryBtn")
+        self.btn_export_txt.clicked.connect(lambda: self.export_report("txt"))
         actions_layout.addWidget(self.btn_export_txt)
+
+        self.btn_export_docx = QPushButton("📝 导出 DOCX")
+        self.btn_export_docx.setObjectName("primaryBtn")
+        self.btn_export_docx.clicked.connect(lambda: self.export_report("docx"))
         actions_layout.addWidget(self.btn_export_docx)
+
         main_layout.addLayout(actions_layout)
 
     def load_report(self, report_id):
@@ -89,7 +112,7 @@ class ReportEditor(QWidget):
         if self.report_id:
             linked_docs = Report.get_linked_documents(self.report_id)
             for doc in linked_docs:
-                item = QListWidgetItem(doc.name)
+                item = QListWidgetItem(f"📄 {doc.name}")
                 item.setData(Qt.UserRole, doc.id)
                 self.linked_docs_list.addItem(item)
 
@@ -150,7 +173,7 @@ class ReportEditor(QWidget):
 
         default_name = self.title_input.text().strip() or "report"
         if export_type == "txt":
-            file_path = FilePicker.save_file(self, "导出TXT", default_name, "文本文件 (*.txt)")
+            file_path = FilePicker.save_file(self, "导出 TXT", default_name, "文本文件 (*.txt)")
             if file_path:
                 try:
                     ExportService.export_to_txt(self.report, file_path)
@@ -158,7 +181,7 @@ class ReportEditor(QWidget):
                 except Exception as e:
                     ConfirmDialog.error(self, "错误", f"导出失败：{str(e)}")
         elif export_type == "docx":
-            file_path = FilePicker.save_file(self, "导出DOCX", default_name, "Word文档 (*.docx)")
+            file_path = FilePicker.save_file(self, "导出 DOCX", default_name, "Word文档 (*.docx)")
             if file_path:
                 try:
                     ExportService.export_to_docx(self.report, file_path)
@@ -169,6 +192,10 @@ class ReportEditor(QWidget):
     def set_readonly(self, readonly=True):
         self.title_input.setReadOnly(readonly)
         self.content_edit.setReadOnly(readonly)
+        if readonly:
+            self.btn_save.hide()
+            self.btn_export_txt.hide()
+            self.btn_export_docx.hide()
 
     def closeEvent(self, event):
         if self.is_modified:

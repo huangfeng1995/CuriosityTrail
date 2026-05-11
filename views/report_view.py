@@ -1,7 +1,8 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QListWidget, QListWidgetItem,
-    QLineEdit, QComboBox, QMessageBox, QAbstractItemView
+    QLineEdit, QComboBox, QMessageBox, QAbstractItemView,
+    QFrame
 )
 from PyQt5.QtCore import Qt
 from models.report import Report
@@ -22,36 +23,48 @@ class ReportView(QWidget):
 
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(20)
 
         header_layout = QHBoxLayout()
-        title = QLabel("探索报告")
+        header_layout.setSpacing(16)
+
+        title = QLabel("📝 探索报告")
         title.setObjectName("viewTitle")
         header_layout.addWidget(title)
-
         header_layout.addStretch()
 
-        self.btn_new_blank = QPushButton("新建空白报告")
-        self.btn_new_blank.clicked.connect(lambda: self.create_report(use_template=False))
-        header_layout.addWidget(self.btn_new_blank)
+        btn_new_template = QPushButton("✨ 新建模板报告")
+        btn_new_template.setObjectName("primaryBtn")
+        btn_new_template.clicked.connect(lambda: self.create_report(use_template=True))
+        header_layout.addWidget(btn_new_template)
 
-        self.btn_new_template = QPushButton("新建模板报告")
-        self.btn_new_template.clicked.connect(lambda: self.create_report(use_template=True))
-        header_layout.addWidget(self.btn_new_template)
+        btn_new_blank = QPushButton("📄 新建空白报告")
+        btn_new_blank.clicked.connect(lambda: self.create_report(use_template=False))
+        header_layout.addWidget(btn_new_blank)
 
         main_layout.addLayout(header_layout)
 
         filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(12)
+
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索报告...")
+        self.search_input.setPlaceholderText("🔍 搜索报告...")
+        self.search_input.setMinimumWidth(250)
         self.search_input.textChanged.connect(self.on_search)
         filter_layout.addWidget(self.search_input)
 
+        spacer = QWidget()
+        spacer.setFixedWidth(20)
+        filter_layout.addSpacerItem(spacer)
+
         self.sort_combo = QComboBox()
-        self.sort_combo.addItems(["按修改时间", "按创建时间", "按标题"])
+        self.sort_combo.setMinimumWidth(130)
+        self.sort_combo.addItems(["🕐 修改时间", "🕓 创建时间", "📋 按标题"])
         self.sort_combo.currentIndexChanged.connect(self.on_sort_changed)
         filter_layout.addWidget(self.sort_combo)
+
+        filter_layout.addStretch()
 
         main_layout.addLayout(filter_layout)
 
@@ -62,21 +75,42 @@ class ReportView(QWidget):
         self.report_list.customContextMenuRequested.connect(self.show_context_menu)
         main_layout.addWidget(self.report_list, 1)
 
-        main_layout.addWidget(self.btn_new_blank)
-        main_layout.addWidget(self.btn_new_template)
-
     def load_reports(self, search=None, sort_by="modified_at"):
         self.report_list.clear()
         reports = Report.get_all(search=search, order_by=sort_by)
 
         for report in reports:
             doc_count = Report.get_document_count(report.id)
-            display_text = f"{report.title}\n创建: {format_datetime(report.created_at)} | 修改: {format_datetime(report.modified_at)} | 关联文献: {doc_count}"
-            item = QListWidgetItem(display_text)
+
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, report.id)
             item.setData(Qt.UserRole + 1, report.title)
             item.setData(Qt.UserRole + 2, report.content)
+
+            created = format_datetime(report.created_at)
+            modified = format_datetime(report.modified_at)
+
+            item.setSizeHint(Qt.QSize(0, 72))
+
             self.report_list.addItem(item)
+
+        self.update_list_items()
+
+    def update_list_items(self):
+        for i in range(self.report_list.count()):
+            item = self.report_list.item(i)
+            report_id = item.data(Qt.UserRole)
+            report = Report.get_by_id(report_id)
+            if report:
+                doc_count = Report.get_document_count(report.id)
+                created = format_datetime(report.created_at)
+                modified = format_datetime(report.modified_at)
+
+                title_text = f"<b>{report.title}</b>"
+                meta_text = f"<span style='color: #888;'>创建: {created} · 修改: {modified}</span>"
+                doc_text = f"<span style='color: #4A90D9;'>📎 {doc_count} 篇关联文献</span>"
+
+                item.setText(f"{title_text}\n{meta_text} · {doc_text}")
 
     def on_search(self, text):
         sort_by = self.get_sort_field()
@@ -126,20 +160,36 @@ class ReportView(QWidget):
             return
 
         report_id = item.data(Qt.UserRole)
-        menu = QMenu(self)
+        report = Report.get_by_id(report_id)
+        if not report:
+            return
 
-        action_view = menu.addAction("查看")
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #fff;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 8px 20px;
+                border-radius: 4px;
+            }
+        """)
+
+        action_view = menu.addAction("👁️  查看报告")
         action_view.triggered.connect(lambda: self.open_editor(report_id, readonly=True))
 
-        action_edit = menu.addAction("编辑")
+        action_edit = menu.addAction("✏️  编辑报告")
         action_edit.triggered.connect(lambda: self.open_editor(report_id, readonly=False))
 
-        action_export = menu.addAction("导出")
+        action_export = menu.addAction("📥  导出报告")
         action_export.triggered.connect(lambda: self.export_single_report(report_id))
 
         menu.addSeparator()
 
-        action_delete = menu.addAction("删除")
+        action_delete = menu.addAction("🗑️  删除报告")
         action_delete.triggered.connect(lambda: self.delete_report(report_id))
 
         menu.exec_(self.report_list.mapToGlobal(position))
@@ -147,18 +197,18 @@ class ReportView(QWidget):
     def open_editor(self, report_id, readonly=False):
         editor = ReportEditor(self, report_id)
         editor.set_readonly(readonly)
-        from widgets.dialogs import FilePicker
 
         dialog = self._create_editor_dialog(editor)
         dialog.setWindowTitle("查看报告" if readonly else "编辑报告")
-        dialog.resize(800, 600)
+        dialog.resize(900, 700)
         dialog.exec_()
         self.load_reports()
 
     def _create_editor_dialog(self, editor):
         from PyQt5.QtWidgets import QDialog, QVBoxLayout
-        dialog = QDialog(self, Qt.WindowMaximized | Qt.WindowCloseButtonHint)
+        dialog = QDialog(self, Qt.WindowMaximize | Qt.WindowCloseButtonHint)
         layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(editor)
         return dialog
 
@@ -188,7 +238,7 @@ class ReportView(QWidget):
         if not report:
             return
 
-        if ConfirmDialog.confirm(self, "确认", f"确定要删除报告「{report.title}」吗？\n注意：此操作不会删除已关联的PDF文献"):
+        if ConfirmDialog.confirm(self, "确认", f"确定要删除报告「{report.title}」吗？\n\n注意：此操作不会删除已关联的PDF文献"):
             Report.delete(report_id)
             self.load_reports()
             ConfirmDialog.info(self, "提示", "删除成功")

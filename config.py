@@ -46,7 +46,14 @@ THEME_COLORS = {
         "border": "#E0E4E8",
         "success": "#52C41A",
         "warning": "#FAAD14",
-        "error": "#F5222D"
+        "error": "#F5222D",
+        "btn_primary_bg": "#4A90D9",
+        "btn_primary_hover": "#5DADE2",
+        "btn_secondary_bg": "#FFFFFF",
+        "btn_secondary_border": "#E0E4E8",
+        "btn_secondary_text": "#333333",
+        "card_bg": "#FFFFFF",
+        "card_border": "#E0E6ED"
     },
     "dark": {
         "primary": "#4A90D9",
@@ -58,9 +65,46 @@ THEME_COLORS = {
         "border": "#404040",
         "success": "#52C41A",
         "warning": "#FAAD14",
-        "error": "#F5222D"
+        "error": "#F5222D",
+        "btn_primary_bg": "#4A90D9",
+        "btn_primary_hover": "#5DADE2",
+        "btn_secondary_bg": "#3D3D3D",
+        "btn_secondary_border": "#505050",
+        "btn_secondary_text": "#E8E8E8",
+        "card_bg": "#2D2D2D",
+        "card_border": "#3D3D3D"
     }
 }
+
+def get_btn_styles():
+    colors = THEME_COLORS.get("light", {})
+    return f"""
+    QPushButton[objectName="primaryBtn"] {{
+        background-color: {colors.get('btn_primary_bg', '#4A90D9')};
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 13px;
+        font-weight: 500;
+    }}
+    QPushButton[objectName="primaryBtn"]:hover {{
+        background-color: {colors.get('btn_primary_hover', '#5DADE2')};
+    }}
+    QPushButton[objectName="secondaryBtn"] {{
+        background-color: {colors.get('btn_secondary_bg', '#FFFFFF')};
+        color: {colors.get('btn_secondary_text', '#333333')};
+        border: 1px solid {colors.get('btn_secondary_border', '#E0E4E8')};
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 13px;
+        font-weight: 500;
+    }}
+    QPushButton[objectName="secondaryBtn"]:hover {{
+        border-color: #4A90D9;
+        color: #4A90D9;
+    }}
+    """
 
 REPORT_TEMPLATE = """1. 探索主题
 

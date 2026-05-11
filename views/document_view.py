@@ -19,36 +19,43 @@ class DocumentView(QWidget):
 
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(20)
 
         header_layout = QHBoxLayout()
-        title = QLabel("文献库")
+        header_layout.setSpacing(16)
+
+        title = QLabel("📚 文献库")
         title.setObjectName("viewTitle")
         header_layout.addWidget(title)
-
         header_layout.addStretch()
 
-        self.btn_upload = QPushButton("上传PDF")
-        self.btn_upload.clicked.connect(self.upload_documents)
-        header_layout.addWidget(self.btn_upload)
+        btn_upload = QPushButton("⬆️  上传 PDF")
+        btn_upload.setObjectName("primaryBtn")
+        btn_upload.clicked.connect(self.upload_documents)
+        header_layout.addWidget(btn_upload)
 
-        self.btn_manage_cats = QPushButton("管理分类")
-        self.btn_manage_cats.clicked.connect(self.manage_categories)
-        header_layout.addWidget(self.btn_manage_cats)
+        btn_manage_cats = QPushButton("📁  管理分类")
+        btn_manage_cats.clicked.connect(self.manage_categories)
+        header_layout.addWidget(btn_manage_cats)
 
         main_layout.addLayout(header_layout)
 
         filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(12)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索文献...")
+        self.search_input.setPlaceholderText("🔍 搜索文献...")
+        self.search_input.setMinimumWidth(200)
         self.search_input.textChanged.connect(self.on_search)
         filter_layout.addWidget(self.search_input)
 
         self.category_filter = QComboBox()
+        self.category_filter.setMinimumWidth(140)
         self.category_filter.currentIndexChanged.connect(self.on_category_filter_changed)
         filter_layout.addWidget(self.category_filter)
+
+        filter_layout.addStretch()
 
         main_layout.addLayout(filter_layout)
 
@@ -60,26 +67,42 @@ class DocumentView(QWidget):
         main_layout.addWidget(self.doc_list, 1)
 
     def load_categories(self):
+        self.category_filter.blockSignals(True)
         self.category_filter.clear()
-        self.category_filter.addItem("全部分类", None)
+        self.category_filter.addItem("📂 全部分类", None)
         categories = Category.get_all()
         for cat in categories:
-            self.category_filter.addItem(cat.name, cat.id)
+            icon = "📁" if cat.is_default else "📂"
+            self.category_filter.addItem(f"{icon} {cat.name}", cat.id)
+        self.category_filter.blockSignals(False)
 
     def load_documents(self, search=None, category_id=None):
         self.doc_list.clear()
         documents = Document.get_all(search=search, category_id=category_id)
 
         for doc in documents:
-            category = Category.get_by_id(doc.category_id) if doc.category_id else None
-            category_name = category.name if category else "未分类"
-            exists = "✓" if os.path.exists(doc.file_path) else "✗"
-            display_text = f"{doc.name} [{category_name}] {exists}\n添加时间: {format_datetime(doc.created_at)}"
-            item = QListWidgetItem(display_text)
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, doc.id)
-            item.setData(Qt.UserRole + 1, doc.name)
-            item.setData(Qt.UserRole + 2, doc.file_path)
+            item.setSizeHint(Qt.QSize(0, 64))
             self.doc_list.addItem(item)
+
+        self.update_list_items()
+
+    def update_list_items(self):
+        for i in range(self.doc_list.count()):
+            item = self.doc_list.item(i)
+            doc_id = item.data(Qt.UserRole)
+            doc = Document.get_by_id(doc_id)
+            if doc:
+                category = Category.get_by_id(doc.category_id) if doc.category_id else None
+                category_name = category.name if category else "未分类"
+                exists = "✅" if os.path.exists(doc.file_path) else "❌"
+                created = format_datetime(doc.created_at)
+
+                title_text = f"<b>{doc.name}</b>"
+                meta_text = f"<span style='color: #888;'>分类: {category_name} · 添加: {created}</span>"
+
+                item.setText(f"{title_text}\n{meta_text} {exists}")
 
     def on_search(self, text):
         category_id = self.category_filter.currentData()
@@ -91,8 +114,7 @@ class DocumentView(QWidget):
         self.load_documents(search=search, category_id=category_id)
 
     def upload_documents(self):
-        from widgets.dialogs import FilePicker
-        files = FilePicker.open_files(self, "选择PDF文件", "PDF文件 (*.pdf)")
+        files = FilePicker.open_files(self, "选择 PDF 文件", "PDF 文件 (*.pdf)")
         if not files:
             return
 
@@ -110,9 +132,9 @@ class DocumentView(QWidget):
                 error_count += 1
 
         if success_count > 0:
-            ConfirmDialog.info(self, "提示", f"成功上传 {success_count} 个文件")
+            ConfirmDialog.info(self, "提示", f"✅ 成功上传 {success_count} 个文件")
         if error_count > 0:
-            ConfirmDialog.warning(self, "提示", f"有 {error_count} 个文件上传失败")
+            ConfirmDialog.warning(self, "提示", f"⚠️ 有 {error_count} 个文件上传失败")
 
         self.load_documents()
         self.load_categories()
@@ -134,19 +156,31 @@ class DocumentView(QWidget):
             return
 
         menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #fff;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 8px 20px;
+                border-radius: 4px;
+            }
+        """)
 
-        action_view = menu.addAction("查看")
+        action_view = menu.addAction("👁️  查看")
         action_view.triggered.connect(lambda: self.view_document(item))
 
-        action_rename = menu.addAction("重命名")
+        action_rename = menu.addAction("✏️  重命名")
         action_rename.triggered.connect(lambda: self.rename_document(item))
 
-        action_move = menu.addAction("移动分类")
+        action_move = menu.addAction("📁  移动分类")
         action_move.triggered.connect(lambda: self.move_document(item))
 
         menu.addSeparator()
 
-        action_delete = menu.addAction("删除")
+        action_delete = menu.addAction("🗑️  删除")
         action_delete.triggered.connect(lambda: self.delete_document(item))
 
         menu.exec_(self.doc_list.mapToGlobal(position))
@@ -164,7 +198,6 @@ class DocumentView(QWidget):
             if new_name and new_name != doc.name:
                 Document.update(doc_id, new_name)
                 self.load_documents()
-                self.load_categories()
 
     def move_document(self, item):
         doc_id = item.data(Qt.UserRole)
@@ -186,7 +219,7 @@ class DocumentView(QWidget):
         if not doc:
             return
 
-        if ConfirmDialog.confirm(self, "确认", f"确定要删除文献「{doc.name}」吗？\n注意：这将同时删除本地文件"):
+        if ConfirmDialog.confirm(self, "确认", f"确定要删除文献「{doc.name}」吗？\n\n⚠️ 注意：这将同时删除本地文件"):
             Document.delete(doc_id)
             self.load_documents()
             self.load_categories()
@@ -197,8 +230,8 @@ class DocumentView(QWidget):
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QListWidget, QListWidgetItem, QPushButton
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("管理分类")
-        dialog.setMinimumSize(350, 400)
+        dialog.setWindowTitle("📁 管理分类")
+        dialog.setMinimumSize(400, 450)
 
         layout = QVBoxLayout(dialog)
 
@@ -207,22 +240,23 @@ class DocumentView(QWidget):
 
         categories = Category.get_all()
         for cat in categories:
-            item = QListWidgetItem(cat.name)
+            icon = "📂" if cat.is_default else "📁"
+            item = QListWidgetItem(f"{icon} {cat.name}")
             item.setData(Qt.UserRole, cat.id)
             item.setData(Qt.UserRole + 1, cat.is_default)
             cat_list.addItem(item)
 
         btn_layout = QHBoxLayout()
 
-        btn_add = QPushButton("新建分类")
+        btn_add = QPushButton("➕ 新建")
         btn_add.clicked.connect(lambda: self.add_category(cat_list))
         btn_layout.addWidget(btn_add)
 
-        btn_rename = QPushButton("重命名")
+        btn_rename = QPushButton("✏️ 重命名")
         btn_rename.clicked.connect(lambda: self.rename_category(cat_list))
         btn_layout.addWidget(btn_rename)
 
-        btn_delete = QPushButton("删除")
+        btn_delete = QPushButton("🗑️ 删除")
         btn_delete.clicked.connect(lambda: self.delete_category(cat_list))
         btn_layout.addWidget(btn_delete)
 
@@ -254,10 +288,10 @@ class DocumentView(QWidget):
         cat_id = current_item.data(Qt.UserRole)
         is_default = current_item.data(Qt.UserRole + 1)
         if is_default:
-            ConfirmDialog.warning(self, "提示", "默认分类不能重命名")
+            ConfirmDialog.warning(self, "提示", "默认分类「未分类」不能重命名")
             return
 
-        old_name = current_item.text()
+        old_name = current_item.text().replace("📂 ", "").replace("📁 ", "")
         from widgets.dialogs import RenameDialog
         dialog = RenameDialog(self, old_name, "重命名分类")
         if dialog.exec_() == dialog.Accepted:
@@ -277,10 +311,10 @@ class DocumentView(QWidget):
         cat_id = current_item.data(Qt.UserRole)
         is_default = current_item.data(Qt.UserRole + 1)
         if is_default:
-            ConfirmDialog.warning(self, "提示", "默认分类不能删除")
+            ConfirmDialog.warning(self, "提示", "默认分类「未分类」不能删除")
             return
 
-        if ConfirmDialog.confirm(self, "确认", "确定要删除此分类吗？\n注意：分类下的文献将移动到「未分类」"):
+        if ConfirmDialog.confirm(self, "确认", "确定要删除此分类吗？\n⚠️ 注意：分类下的文献将移动到「未分类」"):
             Category.delete(cat_id)
             self.refresh_category_list(cat_list)
 
@@ -288,7 +322,8 @@ class DocumentView(QWidget):
         cat_list.clear()
         categories = Category.get_all()
         for cat in categories:
-            item = QListWidgetItem(cat.name)
+            icon = "📂" if cat.is_default else "📁"
+            item = QListWidgetItem(f"{icon} {cat.name}")
             item.setData(Qt.UserRole, cat.id)
             item.setData(Qt.UserRole + 1, cat.is_default)
             cat_list.addItem(item)

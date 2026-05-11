@@ -39,124 +39,270 @@ class ThemeManager:
 
         bg_main = colors["background"]
         bg_card = colors["card_background"]
+        bg_sidebar = "#2C3E50" if is_dark else "#34495E"
         text_primary = colors["text_primary"]
         text_secondary = colors["text_secondary"]
+        text_on_dark = "#ECF0F1"
         border = colors["border"]
         primary = colors["primary"]
+        primary_hover = "#5DADE2"
+        success = colors["success"]
+        warning = colors["warning"]
+        error = colors["error"]
+        shadow = "rgba(0,0,0,0.1)" if is_dark else "rgba(0,0,0,0.15)"
 
         stylesheet = f"""
-        QMainWindow {{
-            background-color: {bg_main};
-        }}
-        QWidget {{
+        QMainWindow, QWidget {{
             background-color: {bg_main};
             color: {text_primary};
+            font-family: "SF Pro Display", "Segoe UI", "Microsoft YaHei", sans-serif;
         }}
-        QFrame {{
-            background-color: {bg_main};
-            border: none;
-        }}
+
         QLabel {{
             background-color: transparent;
             color: {text_primary};
+            font-size: 13px;
         }}
+
+        #viewTitle {{
+            font-size: 22px;
+            font-weight: 600;
+            color: {text_primary};
+            padding: 5px 0;
+        }}
+
+        #sectionTitle {{
+            font-size: 15px;
+            font-weight: 600;
+            color: {text_primary};
+            padding-bottom: 8px;
+        }}
+
         QPushButton {{
             background-color: {primary};
             color: white;
             border: none;
-            border-radius: 4px;
-            padding: 6px 16px;
-            font-size: 12px;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 13px;
+            font-weight: 500;
         }}
         QPushButton:hover {{
-            background-color: {colors["secondary"]};
+            background-color: {primary_hover};
         }}
         QPushButton:pressed {{
             background-color: {primary};
+            padding-top: 11px;
         }}
         QPushButton:disabled {{
             background-color: {border};
             color: {text_secondary};
         }}
+
+        #navBtn {{
+            background-color: transparent;
+            color: {text_on_dark};
+            border: none;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 14px;
+            text-align: left;
+            font-weight: 400;
+        }}
+        #navBtn:hover {{
+            background-color: rgba(255,255,255,0.1);
+        }}
+        #navBtn.active {{
+            background-color: {primary};
+            font-weight: 500;
+        }}
+
         QLineEdit, QTextEdit, QPlainTextEdit {{
             background-color: {bg_card};
             color: {text_primary};
-            border: 1px solid {border};
-            border-radius: 4px;
-            padding: 4px 8px;
+            border: 2px solid {border};
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 13px;
         }}
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
-            border: 1px solid {primary};
+            border: 2px solid {primary};
         }}
-        QListWidget, QTableWidget {{
+        QLineEdit {{ padding: 8px 12px; }}
+
+        QListWidget {{
             background-color: {bg_card};
             color: {text_primary};
-            border: 1px solid {border};
-            border-radius: 4px;
-            alternate-background-color: {bg_main};
+            border: none;
+            border-radius: 12px;
+            padding: 8px;
+            font-size: 13px;
+            outline: none;
         }}
-        QListWidget::item:selected, QTableWidget::item:selected {{
+        QListWidget::item {{
+            background-color: transparent;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 4px 0;
+        }}
+        QListWidget::item:selected {{
             background-color: {primary};
             color: white;
         }}
-        QListWidget::item:hover, QTableWidget::item:hover {{
-            background-color: {border};
+        QListWidget::item:hover {{
+            background-color: rgba(74,144,217,0.1);
         }}
+
+        QComboBox {{
+            background-color: {bg_card};
+            color: {text_primary};
+            border: 2px solid {border};
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+        }}
+        QComboBox:hover {{
+            border: 2px solid {primary};
+        }}
+        QComboBox::drop-down {{
+            border: none;
+            padding-right: 8px;
+        }}
+        QComboBox::down-arrow {{
+            image: none;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid {text_secondary};
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: {bg_card};
+            color: {text_primary};
+            border: 1px solid {border};
+            border-radius: 8px;
+            selection-background-color: {primary};
+            padding: 6px;
+        }}
+
         QMenu {{
             background-color: {bg_card};
             color: {text_primary};
             border: 1px solid {border};
+            border-radius: 10px;
+            padding: 6px;
+        }}
+        QMenu::item {{
+            background-color: transparent;
+            border-radius: 6px;
+            padding: 10px 20px;
         }}
         QMenu::item:selected {{
             background-color: {primary};
             color: white;
         }}
-        QComboBox {{
-            background-color: {bg_card};
-            color: {text_primary};
-            border: 1px solid {border};
-            border-radius: 4px;
-            padding: 4px 8px;
-        }}
-        QComboBox:hover {{
-            border: 1px solid {primary};
-        }}
-        QComboBox::drop-down {{
-            border: none;
-        }}
+
         QScrollBar:vertical {{
-            background-color: {bg_main};
-            width: 10px;
-            border-radius: 5px;
+            background-color: transparent;
+            width: 8px;
+            border-radius: 4px;
+            margin: 4px 0;
         }}
         QScrollBar::handle:vertical {{
             background-color: {border};
-            border-radius: 5px;
-            min-height: 20px;
+            border-radius: 4px;
+            min-height: 30px;
         }}
         QScrollBar::handle:vertical:hover {{
             background-color: {text_secondary};
         }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0;
+        }}
+
         QScrollBar:horizontal {{
-            background-color: {bg_main};
-            height: 10px;
-            border-radius: 5px;
+            background-color: transparent;
+            height: 8px;
+            border-radius: 4px;
+            margin: 0 4px;
         }}
         QScrollBar::handle:horizontal {{
             background-color: {border};
-            border-radius: 5px;
-            min-width: 20px;
+            border-radius: 4px;
+            min-width: 30px;
         }}
         QScrollBar::handle:horizontal:hover {{
             background-color: {text_secondary};
         }}
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            width: 0;
+        }}
+
+        QDialog {{
+            background-color: {bg_main};
+            border-radius: 16px;
+        }}
+
+        QMessageBox {{
+            background-color: {bg_card};
+            border-radius: 12px;
+        }}
         """
 
-        if is_dark:
-            stylesheet += """
-            QInputDialog, QFileDialog, QMessageBox, QColorDialog {
-                background-color: """ + bg_card + """;
-            }
-            """
-
         return stylesheet
+
+    @classmethod
+    def get_sidebar_stylesheet(cls):
+        is_dark = cls.is_dark()
+        bg_sidebar = "#2C3E50" if is_dark else "#34495E"
+        bg_sidebar_hover = "#3D566E" if is_dark else "#3D566E"
+        text_on_dark = "#ECF0F1"
+        primary = "#3498DB"
+
+        return f"""
+        QFrame#sidebar {{
+            background-color: {bg_sidebar};
+            border: none;
+        }}
+        #sidebarTitle {{
+            font-size: 18px;
+            font-weight: 700;
+            color: white;
+            padding: 20px 16px 4px;
+        }}
+        #sidebarSubtitle {{
+            font-size: 12px;
+            color: rgba(255,255,255,0.6);
+            padding: 0px 16px 20px;
+        }}
+        #navBtn {{
+            background-color: transparent;
+            color: {text_on_dark};
+            border: none;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 14px;
+            text-align: left;
+            font-weight: 400;
+            margin: 2px 8px;
+        }}
+        #navBtn:hover {{
+            background-color: rgba(255,255,255,0.1);
+        }}
+        #navBtn.active {{
+            background-color: {primary};
+        }}
+        """
+
+    @classmethod
+    def get_card_stylesheet(cls):
+        colors = cls.get_theme()
+        bg_card = colors["card_background"]
+        border = colors["border"]
+        shadow = "rgba(0,0,0,0.08)" if cls.is_dark() else "rgba(0,0,0,0.08)"
+
+        return f"""
+        QFrame.card {{
+            background-color: {bg_card};
+            border-radius: 12px;
+            border: 1px solid {border};
+        }}
+        """

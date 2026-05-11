@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QFrame,
-    QLabel, QPushButton, QLineEdit
+    QLabel, QPushButton, QLineEdit, QScrollArea
 )
 from PyQt5.QtCore import Qt
 from widgets.sidebar import Sidebar
@@ -36,11 +36,12 @@ class MainWindow(QFrame):
         top_bar = self.create_top_bar()
         content_layout.addWidget(top_bar)
 
-        self.stacked_widget = QWidget()
-        self.stacked_layout = QVBoxLayout(self.stacked_widget)
-        self.stacked_layout.setContentsMargins(0, 0, 0, 0)
-        self.stacked_layout.setSpacing(0)
-        content_layout.addWidget(self.stacked_widget, 1)
+        self.content_container = QFrame()
+        self.content_container.setObjectName("contentContainer")
+        self.content_layout_inner = QVBoxLayout(self.content_container)
+        self.content_layout_inner.setContentsMargins(24, 24, 24, 24)
+        self.content_layout_inner.setSpacing(16)
+        content_layout.addWidget(self.content_container, 1)
 
         main_layout.addWidget(self.content_area, 1)
 
@@ -49,29 +50,34 @@ class MainWindow(QFrame):
         self.views["settings"] = SettingsView()
 
         for view_name, view in self.views.items():
-            self.stacked_layout.addWidget(view)
+            self.content_layout_inner.addWidget(view)
             view.setVisible(view_name == self.current_view)
 
     def create_top_bar(self):
-        from PyQt5.QtWidgets import QFrame
         frame = QFrame()
         frame.setObjectName("topBar")
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(15, 8, 15, 8)
+        layout.setContentsMargins(20, 12, 20, 12)
 
-        app_title = QLabel("Curiosity Trail 寻迹")
+        app_title = QLabel("🔬 Curiosity Trail")
         app_title.setObjectName("appTitle")
         layout.addWidget(app_title)
 
         layout.addStretch()
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索...")
-        self.search_input.setMaximumWidth(200)
+        self.search_input.setPlaceholderText("🔍 搜索...")
+        self.search_input.setMaximumWidth(280)
         self.search_input.textChanged.connect(self.on_global_search)
         layout.addWidget(self.search_input)
 
-        self.btn_theme = QPushButton("切换主题")
+        spacer = QWidget()
+        spacer.setFixedWidth(12)
+        layout.addWidget(spacer)
+
+        self.btn_theme = QPushButton("🌙")
+        self.btn_theme.setFixedSize(40, 40)
+        self.btn_theme.setCursor(Qt.PointingHandCursor)
         self.btn_theme.clicked.connect(self.toggle_theme)
         layout.addWidget(self.btn_theme)
 
@@ -79,27 +85,33 @@ class MainWindow(QFrame):
 
     def apply_theme(self):
         colors = ThemeManager.get_theme()
+        is_dark = ThemeManager.is_dark()
+
+        bg_main = colors["background"]
+        bg_card = colors["card_background"]
+        bg_topbar = bg_card
+        border = colors["border"]
+        primary = colors["primary"]
+        text_primary = colors["text_primary"]
+        text_secondary = colors["text_secondary"]
+
         self.setStyleSheet(f"""
             QFrame#topBar {{
-                background-color: {colors['card_background']};
-                border-bottom: 1px solid {colors['border']};
+                background-color: {bg_topbar};
+                border-bottom: 1px solid {border};
             }}
             #appTitle {{
-                font-size: 14px;
-                font-weight: bold;
-                color: {colors['primary']};
+                font-size: 16px;
+                font-weight: 700;
+                color: {text_primary};
             }}
-            QPushButton#themeToggle {{
+            QFrame#contentContainer {{
+                background-color: {bg_main};
+            }}
+            QPushButton#themeToggleBtn {{
                 background-color: transparent;
-                color: {colors['text_secondary']};
-                border: 1px solid {colors['border']};
-                border-radius: 4px;
-                padding: 4px 12px;
-                font-size: 11px;
-            }}
-            QPushButton#themeToggle:hover {{
-                border-color: {colors['primary']};
-                color: {colors['primary']};
+                border: none;
+                font-size: 18px;
             }}
         """)
 
@@ -132,6 +144,11 @@ class MainWindow(QFrame):
         new_theme = "dark" if current == "light" else "light"
         ThemeManager.set_theme(new_theme)
         self.apply_theme()
+
+        if ThemeManager.is_dark():
+            self.btn_theme.setText("☀️")
+        else:
+            self.btn_theme.setText("🌙")
 
     def refresh_theme(self):
         ThemeManager.load_saved_theme()
