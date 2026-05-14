@@ -3,8 +3,8 @@ import { Card, Button, Space, message, Upload, Typography, Row, Col, Statistic }
 import { Database, FileText, FolderOpen, TrendingUp } from 'lucide-react';
 import { CloudDownloadOutlined, CloudUploadOutlined } from '@ant-design/icons';
 import axios from 'axios';
-import { BarChart, PieChart, LineChart } from 'recharts';
-import { Bar, Pie, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { BarChart, PieChart } from 'recharts';
+import { Bar, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const { Title, Paragraph } = Typography;
 
@@ -14,62 +14,85 @@ function Settings({ isDark }) {
   const [stats, setStats] = useState({ reports: 0, documents: 0, categories: 0 });
   const [reportTrend, setReportTrend] = useState([]);
   const [categoryDistribution, setCategoryDistribution] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchStats();
-    fetchReportTrend();
-    fetchCategoryDistribution();
+    fetchAllData();
   }, []);
 
-  const fetchStats = async () => {
+  const fetchAllData = async () => {
+    setLoading(true);
     try {
       const [reportsRes, docsRes, catsRes] = await Promise.all([
         axios.get('/api/reports'),
         axios.get('/api/documents'),
         axios.get('/api/categories'),
       ]);
+
+      // 统计数据
       setStats({
         reports: reportsRes.data.length,
         documents: docsRes.data.length,
-        categories: catsRes.data.length - 1,
+        categories: catsRes.data.filter(c => !c.is_default).length,
       });
-    } catch (err) {
-      console.error('Failed to fetch stats');
-    }
-  };
 
-  const fetchReportTrend = async () => {
-    const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-    const currentMonth = new Date().getMonth();
-    const trend = [];
-    
-    for (let i = 5; i >= 0; i--) {
-      const monthIndex = (currentMonth - i + 12) % 12;
-      const year = new Date().getFullYear() - (monthIndex > currentMonth ? 1 : 0);
-      trend.push({
-        month: months[monthIndex],
-        count: Math.floor(Math.random() * 10) + 1,
-      });
-    }
-    setReportTrend(trend);
-  };
+      // 报告趋势（基于实际报告的创建时间）
+      const reports = reportsRes.data;
+      if (reports.length > 0) {
+        const monthCounts = {};
+        const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+        
+        // 初始化最近6个月
+        for (let i = 5; i >= 0; i--) {
+          const date = new Date();
+          date.setMonth(date.getMonth() - i);
+          const monthKey = `${date.getFullYear()}-${date.getMonth()}`;
+          monthCounts[monthKey] = {
+            month: months[date.getMonth()],
+            count: 0
+          };
+        }
 
-  const fetchCategoryDistribution = async () => {
-    try {
-      const res = await axios.get('/api/categories');
-      const categories = res.data.filter(c => !c.is_default);
-      const distribution = categories.map(cat => ({
-        name: cat.name,
-        value: Math.floor(Math.random() * 15) + 1,
-      }));
-      setCategoryDistribution(distribution);
+        // 统计每个月的报告数量
+        reports.forEach(report => {
+          const date = new Date(report.created_at);
+          const monthKey = `${date.getFullYear()}-${date.getMonth()}`;
+          if (monthCounts[monthKey]) {
+            monthCounts[monthKey].count++;
+          }
+        });
+
+        const trend = Object.values(monthCounts);
+        if (trend.length > 0) {
+          setReportTrend(trend);
+        }
+      }
+
+      // 分类分布（基于实际文献的分类）
+      const documents = docsRes.data;
+      const categories = catsRes.data;
+      
+      if (documents.length > 0) {
+        const categoryCounts = {};
+        
+        documents.forEach(doc => {
+          const catName = doc.category_name || '未分类';
+          categoryCounts[catName] = (categoryCounts[catName] || 0) + 1;
+        });
+
+        const distribution = Object.entries(categoryCounts).map(([name, value]) => ({
+          name,
+          value
+        }));
+
+        if (distribution.length > 0) {
+          setCategoryDistribution(distribution);
+        }
+      }
     } catch (err) {
-      setCategoryDistribution([
-        { name: '未分类', value: 5 },
-        { name: '生物学', value: 8 },
-        { name: '化学', value: 3 },
-        { name: '物理学', value: 6 },
-      ]);
+      console.error('获取统计数据失败:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -133,6 +156,7 @@ function Settings({ isDark }) {
       <Row gutter={[20, 20]}>
         <Col xs={24} sm={12} lg={8}>
           <Card 
+            loading={loading}
             style={{ 
               background: isDark ? '#1f2937' : '#ffffff',
               border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
@@ -150,6 +174,7 @@ function Settings({ isDark }) {
         </Col>
         <Col xs={24} sm={12} lg={8}>
           <Card 
+            loading={loading}
             style={{ 
               background: isDark ? '#1f2937' : '#ffffff',
               border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
@@ -167,6 +192,7 @@ function Settings({ isDark }) {
         </Col>
         <Col xs={24} sm={24} lg={8}>
           <Card 
+            loading={loading}
             style={{ 
               background: isDark ? '#1f2937' : '#ffffff',
               border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
@@ -191,93 +217,122 @@ function Settings({ isDark }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <TrendingUp size={16} style={{ color: isDark ? '#60a5fa' : '#1e3a5f' }} />
                 <span style={{ fontFamily: 'Noto Serif SC, serif', fontWeight: 600 }}>
-                  报告增长趋势
+                  报告增长趋势（近6个月）
                 </span>
               </div>
             }
+            loading={loading}
             style={{ 
               background: isDark ? '#1f2937' : '#ffffff',
               border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
               borderRadius: 12,
             }}
           >
-            <div style={{ height: 200 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={reportTrend}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#374151' : '#e5e7eb'} />
-                  <XAxis 
-                    dataKey="month" 
-                    tick={{ fill: isDark ? '#9ca3af' : '#6b7280', fontSize: 12 }}
-                    axisLine={{ stroke: isDark ? '#374151' : '#e5e7eb' }}
-                  />
-                  <YAxis 
-                    tick={{ fill: isDark ? '#9ca3af' : '#6b7280', fontSize: 12 }}
-                    axisLine={{ stroke: isDark ? '#374151' : '#e5e7eb' }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ 
-                      background: isDark ? '#1f2937' : '#ffffff',
-                      border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-                      borderRadius: 8,
-                    }}
-                  />
-                  <Bar 
-                    dataKey="count" 
-                    fill={isDark ? '#60a5fa' : '#1e3a5f'} 
-                    radius={[4, 4, 0, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            {reportTrend.length > 0 ? (
+              <div style={{ height: 200 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={reportTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#374151' : '#e5e7eb'} />
+                    <XAxis 
+                      dataKey="month" 
+                      tick={{ fill: isDark ? '#9ca3af' : '#6b7280', fontSize: 12 }}
+                      axisLine={{ stroke: isDark ? '#374151' : '#e5e7eb' }}
+                    />
+                    <YAxis 
+                      tick={{ fill: isDark ? '#9ca3af' : '#6b7280', fontSize: 12 }}
+                      axisLine={{ stroke: isDark ? '#374151' : '#e5e7eb' }}
+                      allowDecimals={false}
+                    />
+                    <Tooltip 
+                      contentStyle={{ 
+                        background: isDark ? '#1f2937' : '#ffffff',
+                        border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                        borderRadius: 8,
+                      }}
+                    />
+                    <Bar 
+                      dataKey="count" 
+                      fill={isDark ? '#60a5fa' : '#1e3a5f'} 
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div style={{ 
+                height: 200, 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                color: isDark ? '#6b7280' : '#9ca3af',
+                fontSize: 14,
+              }}>
+                暂无报告数据
+              </div>
+            )}
           </Card>
         </Col>
         <Col xs={24} lg={10}>
           <Card 
             title={
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <PieChart size={16} style={{ color: isDark ? '#f59e0b' : '#d97706' }} />
+                <FolderOpen size={16} style={{ color: isDark ? '#f59e0b' : '#d97706' }} />
                 <span style={{ fontFamily: 'Noto Serif SC, serif', fontWeight: 600 }}>
                   文献分类分布
                 </span>
               </div>
             }
+            loading={loading}
             style={{ 
               background: isDark ? '#1f2937' : '#ffffff',
               border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
               borderRadius: 12,
             }}
           >
-            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={categoryDistribution}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={80}
-                    paddingAngle={2}
-                    dataKey="value"
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    labelLine={{ stroke: isDark ? '#6b7280' : '#9ca3af' }}
-                  >
-                    {categoryDistribution.map((entry, index) => (
-                      <cell 
-                        key={`cell-${index}`} 
-                        fill={['#1e3a5f', '#d97706', '#10b981', '#ef4444', '#8b5cf6'][index % 5]} 
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ 
-                      background: isDark ? '#1f2937' : '#ffffff',
-                      border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-                      borderRadius: 8,
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+            {categoryDistribution.length > 0 ? (
+              <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={categoryDistribution}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={80}
+                      paddingAngle={2}
+                      dataKey="value"
+                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                      labelLine={{ stroke: isDark ? '#6b7280' : '#9ca3af' }}
+                    >
+                      {categoryDistribution.map((entry, index) => (
+                        <cell 
+                          key={`cell-${index}`} 
+                          fill={['#1e3a5f', '#d97706', '#10b981', '#ef4444', '#8b5cf6'][index % 5]} 
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ 
+                        background: isDark ? '#1f2937' : '#ffffff',
+                        border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                        borderRadius: 8,
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div style={{ 
+                height: 200, 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                color: isDark ? '#6b7280' : '#9ca3af',
+                fontSize: 14,
+              }}>
+                暂无文献数据
+              </div>
+            )}
           </Card>
         </Col>
       </Row>
