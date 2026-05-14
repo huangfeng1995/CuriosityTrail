@@ -12,7 +12,10 @@ import {
   Typography,
   Empty,
   Tag,
+  Card,
+  Switch,
 } from 'antd';
+import { Calendar } from 'lucide-react';
 import {
   PlusOutlined,
   EditOutlined,
@@ -20,7 +23,6 @@ import {
   DeleteOutlined,
   FileTextOutlined,
   FilePdfOutlined,
-  MoreOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import axios from 'axios';
@@ -29,7 +31,7 @@ import ReportEditor from './ReportEditor';
 const { Option } = Select;
 const { Title, Text } = Typography;
 
-function Reports({ searchText }) {
+function Reports({ searchText, isDark }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState('modified_at');
@@ -39,14 +41,7 @@ function Reports({ searchText }) {
   const [editorMode, setEditorMode] = useState('view');
   const [form] = Form.useForm();
   const [localSearch, setLocalSearch] = useState('');
-  const [isDark, setIsDark] = useState(false);
-
-  useEffect(() => {
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme) {
-      setIsDark(savedTheme === 'dark');
-    }
-  }, []);
+  const [useTemplate, setUseTemplate] = useState(true);
 
   const fetchReports = async (search = '') => {
     setLoading(true);
@@ -67,7 +62,7 @@ function Reports({ searchText }) {
     return () => clearTimeout(timer);
   }, [sortBy, searchText]);
 
-  const handleCreate = async (useTemplate) => {
+  const handleCreate = async () => {
     try {
       const values = await form.validateFields();
       await axios.post('/api/reports', { title: values.title, use_template: useTemplate });
@@ -114,7 +109,6 @@ function Reports({ searchText }) {
 
   return (
     <div>
-      {/* 标题和操作区 */}
       <div style={{
         display: 'flex',
         flexDirection: window.innerWidth < 768 ? 'column' : 'row',
@@ -123,50 +117,109 @@ function Reports({ searchText }) {
         gap: window.innerWidth < 768 ? 12 : 0,
         marginBottom: 28,
       }}>
-        <Title level={2} style={{
-          margin: 0,
-          fontSize: 24,
-          fontWeight: 700,
-          color: isDark ? '#f1f5f9' : '#111827',
-        }}>
-          探索报告
-        </Title>
+        <div>
+          <Title level={2} style={{
+            margin: 0,
+            fontSize: 26,
+            fontWeight: 700,
+            color: isDark ? '#f9fafb' : '#111827',
+            fontFamily: 'Noto Serif SC, serif',
+          }}>
+            探索报告
+          </Title>
+          <div style={{
+            fontSize: 14,
+            color: isDark ? '#6b7280' : '#9ca3af',
+            marginTop: 4,
+          }}>
+            共 {reports.length} 篇报告
+          </div>
+        </div>
         <Space wrap style={{ justifyContent: 'flex-start' }}>
           <Select
-            style={{ width: 130 }}
+            style={{ width: 140 }}
             value={sortBy}
             onChange={setSortBy}
+            bordered={false}
+            dropdownStyle={{
+              background: isDark ? '#1f2937' : '#ffffff',
+              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+            }}
           >
             <Option value="modified_at">修改时间</Option>
             <Option value="created_at">创建时间</Option>
             <Option value="title">标题</Option>
           </Select>
-          <Button type="primary" size="large" icon={<PlusOutlined />} onClick={() => setCreateModalVisible(true)}>
+          <Button 
+            type="primary" 
+            size="large" 
+            icon={<PlusOutlined size={18} />}
+            onClick={() => setCreateModalVisible(true)}
+            data-create-report
+            style={{ 
+              borderRadius: 8,
+              fontWeight: 600,
+              padding: '8px 20px',
+            }}
+          >
             新建报告
           </Button>
         </Space>
       </div>
 
-      {/* 搜索栏 */}
       {searchText === undefined && (
         <div style={{ marginBottom: 20 }}>
           <Input
             placeholder="搜索报告..."
-            prefix={<span style={{ color: isDark ? '#64748b' : '#9ca3af' }}>🔍</span>}
+            prefix={<span style={{ color: isDark ? '#6b7280' : '#9ca3af', marginRight: 8 }}>🔍</span>}
             value={localSearch}
             onChange={(e) => setLocalSearch(e.target.value)}
             allowClear
+            style={{
+              borderRadius: 10,
+              height: 42,
+              background: isDark ? '#1f2937' : '#ffffff',
+              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+            }}
           />
         </div>
       )}
 
-      {/* 卡片列表 */}
       {reports.length === 0 ? (
-        <Empty
-          description="还没有报告，点击上方按钮创建"
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          style={{ margin: '60px 0' }}
-        />
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '60px 0',
+        }}>
+          <div style={{
+            width: 100,
+            height: 100,
+            borderRadius: 20,
+            background: isDark ? '#1f2937' : '#f8f9fa',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 20,
+          }}>
+            <FileTextOutlined size={40} style={{ color: isDark ? '#4b5563' : '#d1d5db' }} />
+          </div>
+          <Title level={4} style={{
+            margin: 0,
+            color: isDark ? '#9ca3af' : '#6b7280',
+            fontSize: 18,
+            fontWeight: 500,
+          }}>
+            暂无报告
+          </Title>
+          <Text style={{
+            color: isDark ? '#6b7280' : '#9ca3af',
+            marginTop: 8,
+          }}>
+            点击上方按钮创建第一篇探索报告
+          </Text>
+        </div>
       ) : (
         <List
           grid={{
@@ -182,36 +235,24 @@ function Reports({ searchText }) {
           dataSource={reports}
           renderItem={(item) => (
             <List.Item style={{ display: 'block' }}>
-              {/* 新的卡片设计 */}
-              <div
-                style={{
-                  background: isDark ? '#0f172a' : '#ffffff',
-                  borderRadius: 14,
-                  padding: 20,
-                  cursor: 'pointer',
-                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                  border: `1px solid ${isDark ? '#334155' : '#e5e7eb'}`,
-                  boxShadow: isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.06)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  height: '100%',
-                }}
+              <Card
+                hoverable
                 onClick={() => openEditor(item, 'view')}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = isDark ? '0 10px 25px -15px rgba(0,0,0,0.5)' : '0 10px 25px -15px rgba(0,0,0,0.12)';
+                style={{
+                  background: isDark ? '#1f2937' : '#ffffff',
+                  borderRadius: 12,
+                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                  boxShadow: isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
+                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
                 }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.06)';
-                }}
+                bodyStyle={{ padding: 20 }}
               >
-                {/* 标题 */}
                 <div style={{
                   fontSize: 16,
                   fontWeight: 600,
-                  marginBottom: 10,
-                  color: isDark ? '#f1f5f9' : '#111827',
+                  marginBottom: 12,
+                  color: isDark ? '#f9fafb' : '#111827',
+                  fontFamily: 'Noto Serif SC, serif',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -219,93 +260,101 @@ function Reports({ searchText }) {
                   {item.title}
                 </div>
 
-                {/* 预览内容 */}
                 <div style={{
-                  fontSize: 13,
-                  color: isDark ? '#94a3b8' : '#6b7280',
+                  fontSize: 14,
+                  color: isDark ? '#9ca3af' : '#6b7280',
+                  lineHeight: 1.6,
                   marginBottom: 16,
-                  lineHeight: 1.5,
                   overflow: 'hidden',
                   display: '-webkit-box',
                   WebkitLineClamp: 2,
                   WebkitBoxOrient: 'vertical',
-                  flex: 1,
+                  minHeight: '44px',
                 }}>
-                  {item.content || '还没有内容...'}
+                  {item.content ? item.content.substring(0, 100) + (item.content.length > 100 ? '...' : '') : '还没有内容...'}
                 </div>
 
-                {/* 底部信息 */}
                 <div style={{
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  marginTop: 'auto',
+                  paddingTop: 12,
+                  borderTop: `1px solid ${isDark ? '#374151' : '#f3f4f6'}`,
                 }}>
-                  <div style={{
-                    fontSize: 12,
-                    color: isDark ? '#64748b' : '#9ca3af',
-                  }}>
-                    {dayjs(item.modified_at).format('MM月DD日')}
-                  </div>
-
-                  {/* 标签和操作 */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Calendar size={14} style={{ color: isDark ? '#6b7280' : '#9ca3af' }} />
+                      <span style={{
+                        fontSize: 12,
+                        color: isDark ? '#6b7280' : '#9ca3af',
+                      }}>
+                        {dayjs(item.modified_at).format('YYYY-MM-DD')}
+                      </span>
+                    </div>
                     {item.document_count > 0 && (
                       <Tag color={isDark ? 'blue' : 'indigo'} style={{
                         fontSize: 11,
                         borderRadius: 6,
-                        paddingInline: 8,
+                        padding: '2px 8px',
                       }}>
-                        <FilePdfOutlined /> {item.document_count}
+                        <FilePdfOutlined size={12} style={{ marginRight: 4 }} />
+                        {item.document_count}
                       </Tag>
                     )}
-
-                    <Space size="small" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<EyeOutlined />}
-                        style={{ color: isDark ? '#94a3b8' : '#6b7280' }}
-                        onClick={() => openEditor(item, 'view')}
-                      />
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<EditOutlined />}
-                        style={{ color: isDark ? '#94a3b8' : '#6b7280' }}
-                        onClick={() => openEditor(item, 'edit')}
-                      />
-                      <Popconfirm
-                        title="确定删除？"
-                        onConfirm={() => handleDelete(item.id)}
-                        okText="确定"
-                        cancelText="取消"
-                      >
-                        <Button
-                          type="text"
-                          size="small"
-                          danger
-                          icon={<DeleteOutlined />}
-                        />
-                      </Popconfirm>
-                    </Space>
                   </div>
+
+                  <Space size="small" onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EyeOutlined size={14} />}
+                      onClick={() => openEditor(item, 'view')}
+                      style={{ 
+                        color: isDark ? '#9ca3af' : '#6b7280',
+                        padding: '4px 10px',
+                      }}
+                    />
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EditOutlined size={14} />}
+                      onClick={() => openEditor(item, 'edit')}
+                      style={{ 
+                        color: isDark ? '#9ca3af' : '#6b7280',
+                        padding: '4px 10px',
+                      }}
+                    />
+                    <Popconfirm
+                      title="确定删除？"
+                      onConfirm={() => handleDelete(item.id)}
+                      okText="确定"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined size={14} />}
+                        style={{ padding: '4px 10px' }}
+                      />
+                    </Popconfirm>
+                  </Space>
                 </div>
-              </div>
+              </Card>
             </List.Item>
           )}
         />
       )}
 
-      {/* 创建弹窗 */}
       <Modal
         title="创建新报告"
         open={createModalVisible}
-        onOk={() => handleCreate(true)}
+        onOk={handleCreate}
         onCancel={() => setCreateModalVisible(false)}
         centered
-        width={window.innerWidth < 768 ? '90%' : 480}
-        okText="使用模板创建"
+        width={window.innerWidth < 768 ? '90%' : 520}
+        okText="创建"
         cancelText="取消"
       >
         <Form form={form} layout="vertical">
@@ -314,17 +363,48 @@ function Reports({ searchText }) {
             label="报告标题"
             rules={[{ required: true, message: '请输入标题' }]}
           >
-            <Input placeholder="例如：植物生长观察" size="large" />
+            <Input 
+              placeholder="例如：植物生长观察报告" 
+              size="large"
+              style={{ borderRadius: 8 }}
+            />
+          </Form.Item>
+          <Form.Item>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+            }}>
+              <span style={{
+                fontSize: 14,
+                color: isDark ? '#9ca3af' : '#6b7280',
+              }}>
+                使用科学探究模板：
+              </span>
+              <Switch
+                checked={useTemplate}
+                onChange={setUseTemplate}
+                checkedChildren="是"
+                unCheckedChildren="否"
+              />
+            </div>
+            <div style={{
+              fontSize: 12,
+              color: isDark ? '#6b7280' : '#9ca3af',
+              marginTop: 8,
+            }}>
+              模板包含：探索主题、背景介绍、提出问题、猜想与假设、实验材料与工具、实验步骤、实验数据与现象、分析与结论、反思与改进、参考文献
+            </div>
           </Form.Item>
         </Form>
       </Modal>
 
-      {/* 编辑器 */}
       <ReportEditor
         visible={editorVisible}
         onCancel={() => setEditorVisible(false)}
         report={selectedReport}
         mode={editorMode}
+        isDark={isDark}
         onSave={() => { setEditorVisible(false); fetchReports(); }}
       />
     </div>

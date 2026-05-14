@@ -9,12 +9,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ant-design/icons": "^5.2.6",
+    "antd": "^5.12.8",
+    "axios": "^1.6.5",
+    "dayjs": "^1.11.10",
+    "lucide-react": "^1.14.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "antd": "^5.12.8",
-    "dayjs": "^1.11.10",
-    "@ant-design/icons": "^5.2.6",
-    "axios": "^1.6.5"
+    "react-markdown": "^10.1.0",
+    "recharts": "^3.8.1",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/react": "^18.2.47",
