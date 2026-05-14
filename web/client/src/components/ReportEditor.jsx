@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal, Form, Input, Button, Space, List, message, Checkbox, Typography } from 'antd';
-import { X, Clock } from 'lucide-react';
 import { SaveOutlined, FileTextOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
@@ -14,8 +13,6 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
   const [loading, setLoading] = useState(false);
   const [documents, setDocuments] = useState([]);
   const [linkedDocuments, setLinkedDocuments] = useState([]);
-  const [saveStatus, setSaveStatus] = useState('saved');
-  const [lastSaved, setLastSaved] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
 
   const isView = mode === 'view';
@@ -27,32 +24,6 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
     }
   }, [visible, report]);
 
-  useEffect(() => {
-    let timeout;
-    const handleAutoSave = async () => {
-      if (!isView && report) {
-        try {
-          const values = form.getFieldsValue();
-          if (values.title || values.content) {
-            setSaveStatus('saving');
-            await axios.put(`/api/reports/${report.id}`, values);
-            setSaveStatus('saved');
-            setLastSaved(new Date());
-          }
-        } catch (err) {
-          setSaveStatus('saved');
-        }
-      }
-    };
-
-    form.watch(() => {
-      clearTimeout(timeout);
-      timeout = setTimeout(handleAutoSave, 2000);
-    });
-
-    return () => clearTimeout(timeout);
-  }, [form, isView, report]);
-
   const loadReportData = async () => {
     try {
       const res = await axios.get(`/api/reports/${report.id}`);
@@ -61,7 +32,6 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
         content: res.data.content,
       });
       setLinkedDocuments(res.data.documents || []);
-      setLastSaved(new Date(res.data.modified_at));
     } catch (err) {
       message.error('加载报告失败');
     }
@@ -85,8 +55,6 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
         document_ids: linkedDocuments.map(d => d.id),
       });
       message.success('保存成功');
-      setSaveStatus('saved');
-      setLastSaved(new Date());
       onSave();
     } catch (err) {
       message.error(err.response?.data?.error || '保存失败');
@@ -122,9 +90,6 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
 
   const isDocLinked = (docId) => linkedDocuments.some(d => d.id === docId);
 
-  const WORD_COUNT = form.getFieldValue('content')?.length || 0;
-  const READ_TIME = Math.ceil(WORD_COUNT / 300);
-
   return (
     <Modal
       title={
@@ -137,42 +102,17 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
           }}>
             {isView ? '查看报告' : '编辑报告'}
           </Title>
-          {!isView && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              {window.innerWidth > 768 && (
-                <Button
-                  type={showPreview ? 'primary' : 'text'}
-                  size="small"
-                  onClick={() => setShowPreview(!showPreview)}
-                  style={{
-                    color: showPreview ? (isDark ? '#f9fafb' : '#ffffff') : (isDark ? '#9ca3af' : '#6b7280'),
-                  }}
-                >
-                  {showPreview ? '编辑' : '预览'}
-                </Button>
-              )}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontSize: 12,
-                color: saveStatus === 'saving' ? '#f59e0b' : (isDark ? '#6b7280' : '#9ca3af'),
-              }}>
-                {saveStatus === 'saving' ? (
-                  <>
-                    <Clock size={12} style={{ animation: 'spin 1s linear infinite' }} />
-                    <span>保存中...</span>
-                  </>
-                ) : lastSaved ? (
-                  <>
-                    <span>✓ 已保存</span>
-                    <span style={{ color: isDark ? '#4b5563' : '#d1d5db' }}>
-                      {lastSaved.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </>
-                ) : null}
-              </div>
-            </div>
+          {!isView && window.innerWidth > 768 && (
+            <Button
+              type={showPreview ? 'primary' : 'text'}
+              size="small"
+              onClick={() => setShowPreview(!showPreview)}
+              style={{
+                color: showPreview ? (isDark ? '#f9fafb' : '#ffffff') : (isDark ? '#9ca3af' : '#6b7280'),
+              }}
+            >
+              {showPreview ? '编辑' : '预览'}
+            </Button>
           )}
         </div>
       }
@@ -208,12 +148,6 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
               }}
             />
           </Form.Item>
-
-          {!isView && !showPreview && (
-            <div style={{ marginBottom: 16, fontSize: 12, color: isDark ? '#6b7280' : '#9ca3af' }}>
-              {WORD_COUNT} 字 · 约 {READ_TIME} 分钟阅读
-            </div>
-          )}
 
           <Form.Item name="content" label={!isView && !showPreview ? '报告内容' : null}>
             {isView || showPreview ? (
@@ -367,12 +301,6 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
           )}
         </Form>
       </div>
-      <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
     </Modal>
   );
 }

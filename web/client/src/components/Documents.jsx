@@ -236,10 +236,12 @@ function Documents({ searchText, isDark }) {
             allowClear
             value={selectedCategory}
             onChange={setSelectedCategory}
-            bordered={false}
-            dropdownStyle={{
-              background: isDark ? '#1f2937' : '#ffffff',
-              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+            variant="borderless"
+            styles={{
+              popup: {
+                background: isDark ? '#1f2937' : '#ffffff',
+                border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+              },
             }}
           >
             {categories.map(cat => (

@@ -140,10 +140,12 @@ function Reports({ searchText, isDark }) {
             style={{ width: 140 }}
             value={sortBy}
             onChange={setSortBy}
-            bordered={false}
-            dropdownStyle={{
-              background: isDark ? '#1f2937' : '#ffffff',
-              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+            variant="borderless"
+            styles={{
+              popup: {
+                background: isDark ? '#1f2937' : '#ffffff',
+                border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+              },
             }}
           >
             <Option value="modified_at">修改时间</Option>
