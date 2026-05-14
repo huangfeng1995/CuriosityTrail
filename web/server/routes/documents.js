@@ -1,11 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../database');
+const { all, get, run } = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
 const docsDir = path.join(__dirname, '../../documents');
+if (!fs.existsSync(docsDir)) {
+  fs.mkdirSync(docsDir, { recursive: true });
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, docsDir),
@@ -26,65 +29,83 @@ const upload = multer({
   }
 });
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const { search, category_id } = req.query;
-  let query = 'SELECT d.*, c.name as category_name FROM documents d LEFT JOIN categories c ON d.category_id = c.id';
-  const params = [];
-  const conditions = [];
-  if (search) {
-    conditions.push('d.name LIKE ?');
-    params.push(`%${search}%`);
+  try {
+    let sql = 'SELECT d.*, c.name as category_name FROM documents d LEFT JOIN categories c ON d.category_id = c.id';
+    const params = [];
+    const conditions = [];
+    if (search) {
+      conditions.push('d.name LIKE ?');
+      params.push(`%${search}%`);
+    }
+    if (category_id) {
+      conditions.push('d.category_id = ?');
+      params.push(category_id);
+    }
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+    sql += ' ORDER BY d.created_at DESC';
+    const documents = await all(sql, params);
+    res.json(documents);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  if (category_id) {
-    conditions.push('d.category_id = ?');
-    params.push(category_id);
-  }
-  if (conditions.length > 0) {
-    query += ' WHERE ' + conditions.join(' AND ');
-  }
-  query += ' ORDER BY d.created_at DESC';
-  const documents = db.prepare(query).all(...params);
-  res.json(documents);
 });
 
-router.post('/upload', upload.array('files'), (req, res) => {
+router.post('/upload', upload.array('files'), async (req, res) => {
   const { category_id } = req.body;
-  const defaultCategory = db.prepare('SELECT * FROM categories WHERE is_default = 1').get();
-  const results = [];
-  for (const file of req.files) {
-    const name = path.basename(file.originalname, '.pdf');
-    const result = db.prepare('INSERT INTO documents (name, file_path, category_id) VALUES (?, ?, ?)').run(
-      name,
-      file.path,
-      category_id || defaultCategory.id
-    );
-    results.push({ id: result.lastInsertRowid, name, file_path: file.path });
+  try {
+    const defaultCategory = await get('SELECT * FROM categories WHERE is_default = 1');
+    const results = [];
+    for (const file of req.files) {
+      const name = path.basename(file.originalname, '.pdf');
+      const result = await run('INSERT INTO documents (name, file_path, category_id) VALUES (?, ?, ?)', [
+        name, file.path, category_id || defaultCategory.id
+      ]);
+      results.push({ id: result.lastID, name, file_path: file.path });
+    }
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json(results);
 });
 
-router.get('/:id/file', (req, res) => {
-  const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
-  if (!doc || !fs.existsSync(doc.file_path)) {
-    return res.status(404).json({ error: '文件不存在' });
+router.get('/:id/file', async (req, res) => {
+  try {
+    const doc = await get('SELECT * FROM documents WHERE id = ?', [req.params.id]);
+    if (!doc || !fs.existsSync(doc.file_path)) {
+      return res.status(404).json({ error: '文件不存在' });
+    }
+    res.sendFile(doc.file_path);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.sendFile(doc.file_path);
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { name, category_id } = req.body;
-  db.prepare('UPDATE documents SET name = ?, category_id = ? WHERE id = ?').run(name, category_id, id);
-  res.json({ success: true });
+  try {
+    await run('UPDATE documents SET name = ?, category_id = ? WHERE id = ?', [name, category_id, id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-router.delete('/:id', (req, res) => {
-  const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
-  if (doc && fs.existsSync(doc.file_path)) {
-    fs.unlinkSync(doc.file_path);
+router.delete('/:id', async (req, res) => {
+  try {
+    const doc = await get('SELECT * FROM documents WHERE id = ?', [req.params.id]);
+    if (doc && fs.existsSync(doc.file_path)) {
+      fs.unlinkSync(doc.file_path);
+    }
+    await run('DELETE FROM documents WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
-  res.json({ success: true });
 });
 
 module.exports = router;

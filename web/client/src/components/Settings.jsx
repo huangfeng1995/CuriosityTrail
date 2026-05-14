@@ -17,7 +17,7 @@ function Settings() {
       const link = document.createElement('a');
       const timestamp = new Date().toISOString().slice(0, 10);
       link.href = url;
-      link.setAttribute('download', `curiosity_backup_${timestamp}.zip');
+      link.setAttribute('download', `curiosity_backup_${timestamp}.zip`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -49,9 +49,9 @@ function Settings() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Title level={2}>⚙️ 系统设置</Title>
+      <Title level={2}>系统设置</Title>
 
-      <Card title="💾 数据备份与恢复">
+      <Card title="数据备份与恢复">
         <Paragraph>
           备份包含数据库和所有 PDF 文献，以便在需要时恢复。
         </Paragraph>
