@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Form, Input, Button, Space, List, message, Checkbox } from 'antd';
-import { SaveOutlined, FileTextOutlined, FileWordOutlined } from '@ant-design/icons';
+import { SaveOutlined, FileTextOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 const { TextArea } = Input;
@@ -91,7 +91,7 @@ function ReportEditor({ visible, onCancel, report, mode, onSave }) {
       title={isView ? '查看报告' : '编辑报告'}
       open={visible}
       onCancel={onCancel}
-      width={800}
+      width={window.innerWidth < 768 ? '95%' : 800}
       footer={isView ? null : [
         <Button key="cancel" onClick={onCancel}>取消</Button>,
         <Button key="save" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={loading}>
@@ -105,60 +105,68 @@ function ReportEditor({ visible, onCancel, report, mode, onSave }) {
           label="报告标题"
           rules={[{ required: true, message: '请输入标题' }]}
         >
-          <Input placeholder="请输入标题" disabled={isView} />
+          <Input placeholder="请输入标题" disabled={isView} size="large" />
         </Form.Item>
 
         <Form.Item name="content" label="报告内容">
           <TextArea
-            rows={15}
+            rows={window.innerWidth < 768 ? 12 : 15}
             placeholder="请输入报告内容"
             disabled={isView}
-            style={{ resize: 'none' }}
+            style={{ resize: 'none', fontSize: 14 }}
           />
         </Form.Item>
 
         {!isView && (
           <Form.Item label="关联文献">
-            <List
-              dataSource={documents}
-              renderItem={(item) => (
-                <List.Item>
-                  <Checkbox
-                    checked={isDocLinked(item.id)}
-                    onChange={() => toggleDocument(item)}
-                  >
-                    {item.name}
-                  </Checkbox>
-                </List.Item>
-              )}
-              style={{ maxHeight: 200, overflow: 'auto' }}
-            />
+            {documents.length === 0 ? (
+              <div style={{ color: '#999', fontSize: 12 }}>
+                暂无文献，请先在文献库上传 PDF
+              </div>
+            ) : (
+              <List
+                size="small"
+                dataSource={documents}
+                style={{ maxHeight: 200, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 8, padding: 8 }}
+                renderItem={(item) => (
+                  <List.Item style={{ padding: '4px 0' }}>
+                    <Checkbox
+                      checked={isDocLinked(item.id)}
+                      onChange={() => toggleDocument(item)}
+                    >
+                      {item.name}
+                    </Checkbox>
+                  </List.Item>
+                )}
+              />
+            )}
           </Form.Item>
         )}
 
         {isView && linkedDocuments.length > 0 && (
           <Form.Item label="关联文献">
             <List
+              size="small"
               dataSource={linkedDocuments}
+              style={{ maxHeight: 200, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 8, padding: 8 }}
               renderItem={(item) => (
-                <List.Item>
+                <List.Item style={{ padding: '4px 0' }}>
                   <a href={`/api/documents/${item.id}/file`} target="_blank" rel="noreferrer">
-                    {item.name}
+                    📄 {item.name}
                   </a>
                 </List.Item>
               )}
-              style={{ maxHeight: 200, overflow: 'auto' }}
             />
           </Form.Item>
         )}
 
         {!isView && (
           <Form.Item>
-            <Space>
+            <Space wrap>
               <Button icon={<FileTextOutlined />} onClick={() => handleExport('txt')}>
                 导出 TXT
               </Button>
-              <Button icon={<FileWordOutlined />} onClick={() => handleExport('docx')}>
+              <Button icon={<FileTextOutlined />} onClick={() => handleExport('docx')}>
                 导出 DOCX
               </Button>
             </Space>

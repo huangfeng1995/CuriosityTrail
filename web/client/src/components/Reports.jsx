@@ -1,24 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  List, 
-  Button, 
-  Space, 
-  Input, 
-  Select, 
-  Card, 
-  Modal, 
-  Form, 
-  message, 
-  Popconfirm, 
-  Tag 
+import {
+  List,
+  Button,
+  Space,
+  Input,
+  Select,
+  Card,
+  Modal,
+  Form,
+  message,
+  Popconfirm,
+  Tag,
+  Empty
 } from 'antd';
-import { 
-  PlusOutlined, 
-  EditOutlined, 
-  EyeOutlined, 
-  DeleteOutlined, 
-  FileTextOutlined, 
-  FilePdfOutlined 
+import {
+  PlusOutlined,
+  EditOutlined,
+  EyeOutlined,
+  DeleteOutlined,
+  FileTextOutlined,
+  FilePdfOutlined,
+  SearchOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import axios from 'axios';
@@ -35,6 +37,7 @@ function Reports({ searchText }) {
   const [editorVisible, setEditorVisible] = useState(false);
   const [editorMode, setEditorMode] = useState('view');
   const [form] = Form.useForm();
+  const [localSearch, setLocalSearch] = useState('');
 
   const fetchReports = async (search = '') => {
     setLoading(true);
@@ -49,8 +52,11 @@ function Reports({ searchText }) {
   };
 
   useEffect(() => {
-    fetchReports(searchText);
-  }, [searchText, sortBy]);
+    const timer = setTimeout(() => {
+      fetchReports(searchText !== false ? searchText : localSearch);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [sortBy, searchText]);
 
   const handleCreate = async (useTemplate) => {
     try {
@@ -99,72 +105,108 @@ function Reports({ searchText }) {
 
   return (
     <>
-      <Space direction="vertical" style={{ width: '100%' }} size="large">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0 }}>📝 探索报告</h2>
-          <Space>
+      <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        <div style={{
+          display: 'flex',
+          flexDirection: window.innerWidth < 768 ? 'column' : 'row',
+          justifyContent: 'space-between',
+          alignItems: window.innerWidth < 768 ? 'stretch' : 'center',
+          gap: 12
+        }}>
+          <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            📝 探索报告
+            <span style={{ fontSize: 14, color: '#999', fontWeight: 'normal' }}>
+              ({reports.length})
+            </span>
+          </h2>
+          <Space wrap style={{ justifyContent: window.innerWidth < 768 ? 'center' : 'flex-end' }}>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalVisible(true)}>
-              新建模板报告
-            </Button>
-            <Button onClick={() => { form.setFieldsValue({ useTemplate: false }); setCreateModalVisible(true); }}>
-              新建空白报告
+              新建报告
             </Button>
           </Space>
         </div>
 
-        <Select
-          style={{ width: 150 }}
-          value={sortBy}
-          onChange={setSortBy}
-        >
-          <Option value="modified_at">按修改时间</Option>
-          <Option value="created_at">按创建时间</Option>
-          <Option value="title">按标题</Option>
-        </Select>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <Input
+            placeholder="搜索报告..."
+            prefix={<SearchOutlined />}
+            style={{ flex: 1, minWidth: 200 }}
+            value={localSearch}
+            onChange={(e) => setLocalSearch(e.target.value)}
+            allowClear
+          />
+          <Select
+            style={{ width: 140 }}
+            value={sortBy}
+            onChange={setSortBy}
+          >
+            <Option value="modified_at">修改时间</Option>
+            <Option value="created_at">创建时间</Option>
+            <Option value="title">标题</Option>
+          </Select>
+        </div>
 
-        <List
-          grid={{ gutter: 16, xs: 1, sm: 1, md: 2, lg: 2, xl: 3, xxl: 3 }}
-          loading={loading}
-          dataSource={reports}
-          renderItem={(item) => (
-            <List.Item>
-              <Card
-                hoverable
-                actions={[
-                  <EyeOutlined key="view" onClick={() => openEditor(item, 'view')} />,
-                  <EditOutlined key="edit" onClick={() => openEditor(item, 'edit')} />,
-                  <FileTextOutlined key="txt" onClick={() => handleExport(item, 'txt')} />,
-                  <Popconfirm
-                    key="delete"
-                    title="确定要删除吗？"
-                    onConfirm={() => handleDelete(item.id)}
-                    okText="确定"
-                    cancelText="取消"
-                  >
-                    <DeleteOutlined />
-                  </Popconfirm>,
-                ]}
-              >
-                <Card.Meta
-                  title={item.title}
-                  description={
-                    <>
-                      <div style={{ marginBottom: 8 }}>
-                        创建: {dayjs(item.created_at).format('YYYY-MM-DD HH:mm')}
+        {reports.length === 0 ? (
+          <Empty description="暂无报告，点击上方按钮创建" />
+        ) : (
+          <List
+            grid={{ gutter: 16, xs: 1, sm: 1, md: 2, lg: 2, xl: 3, xxl: 3 }}
+            loading={loading}
+            dataSource={reports}
+            renderItem={(item) => (
+              <List.Item style={{ display: 'block' }}>
+                <Card
+                  hoverable
+                  style={{ height: '100%' }}
+                  actions={[
+                    <EyeOutlined key="view" onClick={() => openEditor(item, 'view')} />,
+                    <EditOutlined key="edit" onClick={() => openEditor(item, 'edit')} />,
+                    <Popconfirm
+                      key="delete"
+                      title="确定要删除吗？"
+                      onConfirm={() => handleDelete(item.id)}
+                      okText="确定"
+                      cancelText="取消"
+                    >
+                      <DeleteOutlined />
+                    </Popconfirm>,
+                  ]}
+                >
+                  <Card.Meta
+                    title={
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          flex: 1
+                        }}>{item.title}</span>
                       </div>
-                      <div style={{ marginBottom: 8 }}>
-                        修改: {dayjs(item.modified_at).format('YYYY-MM-DD HH:mm')}
-                      </div>
-                      <Tag color="blue">
-                        <FilePdfOutlined /> {item.document_count} 篇关联文献
-                      </Tag>
-                    </>
-                  }
-                />
-              </Card>
-            </List.Item>
-          )}
-        />
+                    }
+                    description={
+                      <>
+                        <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>
+                          {dayjs(item.modified_at).format('YYYY-MM-DD HH:mm')}
+                        </div>
+                        <Tag color="blue" icon={<FilePdfOutlined />}>
+                          {item.document_count} 篇关联
+                        </Tag>
+                      </>
+                    }
+                  />
+                  <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+                    <Button size="small" icon={<FileTextOutlined />} onClick={() => handleExport(item, 'txt')}>
+                      TXT
+                    </Button>
+                    <Button size="small" icon={<FileTextOutlined />} onClick={() => handleExport(item, 'docx')}>
+                      DOCX
+                    </Button>
+                  </div>
+                </Card>
+              </List.Item>
+            )}
+          />
+        )}
       </Space>
 
       <Modal
@@ -172,6 +214,7 @@ function Reports({ searchText }) {
         open={createModalVisible}
         onOk={() => handleCreate(true)}
         onCancel={() => setCreateModalVisible(false)}
+        width={window.innerWidth < 768 ? '95%' : 500}
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -181,6 +224,9 @@ function Reports({ searchText }) {
           >
             <Input placeholder="请输入报告标题" />
           </Form.Item>
+          <div style={{ fontSize: 12, color: '#999' }}>
+            点击确定将使用科学探究模板创建报告
+          </div>
         </Form>
       </Modal>
 
