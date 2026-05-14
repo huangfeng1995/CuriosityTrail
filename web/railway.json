@@ -1,0 +1,16 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "deploy": {
+    "startCommand": "npm start",
+    "healthcheckPath": "/"
+  },
+  "watch": {
+    "paths": [
+      "server/",
+      "client/dist/"
+    ],
+    "ignore": [
+      "server/node_modules/"
+    ]
+  }
+}

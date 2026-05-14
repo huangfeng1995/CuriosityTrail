@@ -72,8 +72,8 @@ router.get('/report/:id/docx', async (req, res) => {
 });
 
 router.get('/backup', async (req, res) => {
-  const dataDir = path.join(__dirname, '../../data');
-  const docsDir = path.join(__dirname, '../../documents');
+  const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
+  const docsDir = process.env.DOCS_DIR || path.join(__dirname, '../../documents');
   const timestamp = new Date().toISOString().slice(0, 10);
 
   res.setHeader('Content-Type', 'application/zip');
@@ -108,8 +108,8 @@ router.post('/restore', async (req, res) => {
 
     const dbSrc = path.join(extractDir, 'curiosity.db');
     const docsSrc = path.join(extractDir, 'documents');
-    const dataDir = path.join(__dirname, '../../data');
-    const docsDir = path.join(__dirname, '../../documents');
+    const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
+    const docsDir = process.env.DOCS_DIR || path.join(__dirname, '../../documents');
 
     if (fs.existsSync(dbSrc)) {
       fs.copyFileSync(dbSrc, path.join(dataDir, 'curiosity.db'));

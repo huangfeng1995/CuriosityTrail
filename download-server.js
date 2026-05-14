@@ -65,9 +65,13 @@ const server = http.createServer((req, res) => {
           </a>
           
           <div class="instructions">
-            <h3 style="margin-top: 0; color: #333;">如何在你自己的电脑上运行</h3>
+            <h3 style="margin-top: 0; color: #333;">快速开始</h3>
+            <h4 style="color: #667eea; margin-bottom: 10px;">✨ 给太太用？部署到云端！</h4>
+            <p style="margin: 0 0 15px 0; color: #666;">压缩包里有 <code>DEPLOY.md</code> 部署指南，按照步骤几分钟就能搞定！免费稳定～</p>
+            
+            <h4 style="color: #667eea; margin-bottom: 10px; margin-top: 20px;">💻 自己电脑上运行</h4>
             <div class="step">1️⃣ 下载并解压 <code>curiosity-trail-web.zip</code></div>
-            <div class="step">2️⃣ 安装 Node.js (如果还没安装的话，从 nodejs.org 下载)</div>
+            <div class="step">2️⃣ 安装 Node.js (从 nodejs.org 下载)</div>
             <div class="step">3️⃣ 打开终端，进入 <code>web/server</code> 文件夹</div>
             <div class="step">4️⃣ 运行 <code>npm install</code></div>
             <div class="step">5️⃣ 运行 <code>npm start</code></div>
