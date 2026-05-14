@@ -1,0 +1,19 @@
+# fly.toml - Fly.io 配置文件
+# 参考：https://fly.io/docs/reference/configuration/
+
+app = "curiosity-trail"
+primary_region = "hkg"
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false  # 不自动停止，保持24小时在线
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[mounts]
+  source = "curiosity_trail_data"
+  destination = "/app/data"

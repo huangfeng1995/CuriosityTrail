@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 // 使用 DATA_DIR 环境变量，或者回退到默认路径
-const dataDir = process.env.DATA_DIR || path.join(__dirname, '../data');
+const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }

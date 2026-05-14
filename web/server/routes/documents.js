@@ -5,7 +5,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-const docsDir = process.env.DOCS_DIR || path.join(__dirname, '../../documents');
+const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
+const docsDir = path.join(dataDir, 'uploads');
 if (!fs.existsSync(docsDir)) {
   fs.mkdirSync(docsDir, { recursive: true });
 }
