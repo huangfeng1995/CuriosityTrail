@@ -14,11 +14,13 @@ const categoriesRouter = require('./routes/categories');
 const reportsRouter = require('./routes/reports');
 const documentsRouter = require('./routes/documents');
 const exportRouter = require('./routes/export');
+const graphRouter = require('./routes/graph');
 
 app.use('/api/categories', categoriesRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/export', exportRouter);
+app.use('/api/graph', graphRouter);
 
 app.use(express.static(path.join(__dirname, '../client/dist')));
 
