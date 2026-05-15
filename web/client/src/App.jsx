@@ -109,14 +109,17 @@ function App() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                background: isDark ? '#1f2937' : '#ffffff',
+                background: isDark ? 'rgba(31, 41, 55, 0.8)' : 'rgba(255, 255, 255, 0.8)',
+                backdropFilter: 'blur(20px)',
+                WebkitBackdropFilter: 'blur(20px)',
                 position: 'fixed',
                 top: 0,
                 left: 0,
                 right: 0,
                 zIndex: 100,
                 height: 64,
-                boxShadow: isDark ? '0 1px 3px rgba(0,0,0,0.4)' : '0 1px 3px rgba(0,0,0,0.08)',
+                boxShadow: 'none',
+                borderBottom: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -124,10 +127,14 @@ function App() {
                   width: 36,
                   height: 36,
                   borderRadius: 10,
-                  background: isDark ? '#1e3a5f' : '#eef2ff',
+                  background: isDark ? 'linear-gradient(135deg, rgba(30, 58, 95, 0.6), rgba(96, 165, 250, 0.3))' : 'linear-gradient(135deg, rgba(238, 242, 255, 0.8), rgba(30, 58, 95, 0.1))',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  boxShadow: isDark ? '0 4px 12px rgba(0, 0, 0, 0.3)' : '0 4px 12px rgba(30, 58, 95, 0.1)',
+                  transition: 'all 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
                 }}>
                   <span style={{ fontSize: 18 }}>🔬</span>
                 </div>
@@ -137,7 +144,7 @@ function App() {
                     color: isDark ? '#f9fafb' : '#111827',
                     fontSize: 18,
                     fontWeight: 700,
-                    fontFamily: 'Noto Serif SC, serif',
+                    fontFamily: 'Inter, system-ui, sans-serif',
                   }}>
                     Curiosity
                   </Title>
@@ -157,7 +164,10 @@ function App() {
                   type="text"
                   icon={isDark ? <Sun size={18} /> : <Moon size={18} />}
                   onClick={() => setIsDark(!isDark)}
-                  style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
+                  style={{ 
+                    color: isDark ? '#9ca3af' : '#6b7280',
+                    transition: 'all 0.2s ease',
+                  }}
                 />
               </div>
             </Header>
@@ -182,11 +192,14 @@ function App() {
                 bottom: 0,
                 left: 0,
                 right: 0,
-                background: isDark ? '#1f2937' : '#ffffff',
-                borderTop: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                background: isDark ? 'rgba(31, 41, 55, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+                backdropFilter: 'blur(20px)',
+                WebkitBackdropFilter: 'blur(20px)',
+                borderTop: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
                 display: 'flex',
                 justifyContent: 'space-around',
                 padding: '8px 0',
+                paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
                 zIndex: 100,
               }}
             >
@@ -201,11 +214,11 @@ function App() {
                     cursor: 'pointer',
                     padding: '6px 16px',
                     color: current === item.key ? (isDark ? '#60a5fa' : '#1e3a5f') : (isDark ? '#6b7280' : '#9ca3af'),
-                    transition: 'all 0.2s ease',
+                    transition: 'all 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
                     transform: current === item.key ? 'scale(1.05)' : 'scale(1)',
                   }}
                 >
-                  <div style={{ marginBottom: 4 }}>{item.icon}</div>
+                  <div style={{ marginBottom: 4, transition: 'transform 0.2s ease' }}>{item.icon}</div>
                   <div style={{ fontSize: 11, fontWeight: current === item.key ? 600 : 400 }}>
                     {item.label}
                   </div>
@@ -222,23 +235,29 @@ function App() {
                 left: 0,
                 top: 0,
                 bottom: 0,
-                background: isDark ? '#1f2937' : '#ffffff',
-                borderRight: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                background: isDark ? 'rgba(31, 41, 55, 0.6)' : 'rgba(255, 255, 255, 0.6)',
+                backdropFilter: 'blur(20px)',
+                WebkitBackdropFilter: 'blur(20px)',
+                borderRight: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
               }}
             >
               <div style={{ 
                 padding: '24px', 
-                borderBottom: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                borderBottom: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <div style={{
                     width: 42,
                     height: 42,
                     borderRadius: 12,
-                    background: isDark ? '#1e3a5f' : '#eef2ff',
+                    background: isDark ? 'linear-gradient(135deg, rgba(30, 58, 95, 0.6), rgba(96, 165, 250, 0.3))' : 'linear-gradient(135deg, rgba(238, 242, 255, 0.8), rgba(30, 58, 95, 0.1))',
+                    backdropFilter: 'blur(10px)',
+                    WebkitBackdropFilter: 'blur(10px)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    boxShadow: isDark ? '0 4px 16px rgba(0, 0, 0, 0.3)' : '0 4px 16px rgba(30, 58, 95, 0.1)',
+                    transition: 'all 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
                   }}>
                     <span style={{ fontSize: 22 }}>🔬</span>
                   </div>
@@ -248,7 +267,7 @@ function App() {
                       color: isDark ? '#f9fafb' : '#111827',
                       fontSize: 22,
                       fontWeight: 700,
-                      fontFamily: 'Noto Serif SC, serif',
+                      fontFamily: 'Inter, system-ui, sans-serif',
                     }}>
                       Curiosity
                     </Title>
@@ -271,10 +290,21 @@ function App() {
                       marginBottom: 4,
                       borderRadius: 8,
                       cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                      background: current === item.key ? (isDark ? '#1e3a5f' : '#eef2ff') : 'transparent',
+                      transition: 'all 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+                      background: current === item.key ? (isDark ? 'rgba(30, 58, 95, 0.3)' : 'rgba(238, 242, 255, 0.8)') : 'transparent',
                       color: current === item.key ? (isDark ? '#f9fafb' : '#1e3a5f') : (isDark ? '#d1d5db' : '#4b5563'),
                       fontWeight: current === item.key ? 600 : 400,
+                      transform: current === item.key ? 'translateX(4px)' : 'translateX(0)',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (current !== item.key) {
+                        e.currentTarget.style.background = isDark ? 'rgba(55, 65, 81, 0.3)' : 'rgba(238, 242, 255, 0.5)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (current !== item.key) {
+                        e.currentTarget.style.background = 'transparent';
+                      }
                     }}
                   >
                     <span style={{ marginRight: 12 }}>{item.icon}</span>
@@ -295,9 +325,12 @@ function App() {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   padding: '12px 16px',
-                  background: isDark ? '#111827' : '#f8f9fa',
+                  background: isDark ? 'rgba(17, 24, 39, 0.5)' : 'rgba(248, 249, 250, 0.8)',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
                   borderRadius: 8,
-                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                  border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
+                  transition: 'all 0.2s ease',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     {isDark ? <Moon size={16} /> : <Sun size={16} />}
@@ -324,12 +357,15 @@ function App() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  background: isDark ? '#1f2937' : '#ffffff',
+                  background: isDark ? 'rgba(31, 41, 55, 0.6)' : 'rgba(255, 255, 255, 0.6)',
+                  backdropFilter: 'blur(20px)',
+                  WebkitBackdropFilter: 'blur(20px)',
                   position: 'sticky',
                   top: 0,
                   zIndex: 10,
-                  borderBottom: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                  borderBottom: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
                   height: 64,
+                  boxShadow: 'none',
                 }}
               >
                 <SearchBar 
@@ -349,6 +385,8 @@ function App() {
                     style={{ 
                       borderRadius: 8,
                       fontWeight: 600,
+                      boxShadow: isDark ? '0 4px 12px rgba(96, 165, 250, 0.3)' : '0 4px 12px rgba(30, 58, 95, 0.2)',
+                      transition: 'all 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
                     }}
                   >
                     新建报告
