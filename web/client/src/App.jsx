@@ -4,11 +4,15 @@ import { Sun, Moon, BookOpen, Settings as SettingsIcon } from 'lucide-react';
 import {
   FileTextOutlined,
   PlusOutlined,
+  NodeIndexOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import Reports from './components/Reports';
 import Documents from './components/Documents';
 import Settings from './components/Settings';
 import SearchBar from './components/SearchBar';
+import KnowledgeGraph from './components/KnowledgeGraph';
+import AgentAssistant from './components/AgentAssistant';
 
 const { Header, Sider, Content } = Layout;
 const { Title } = Typography;
@@ -89,6 +93,8 @@ function App() {
 
   const menuItems = [
     { key: 'reports', icon: <FileTextOutlined size={20} />, label: '探索报告' },
+    { key: 'agent', icon: <RobotOutlined size={20} />, label: 'AI 助手' },
+    { key: 'graph', icon: <NodeIndexOutlined size={20} />, label: '知识图谱' },
     { key: 'documents', icon: <BookOpen size={20} />, label: '文献库' },
     { key: 'settings', icon: <SettingsIcon size={20} />, label: '系统设置' },
   ];
@@ -365,6 +371,8 @@ function App() {
                 }}
               >
                 {current === 'reports' && <Reports searchText={searchText} isDark={isDark} />}
+                {current === 'agent' && <AgentAssistant isDark={isDark} />}
+                {current === 'graph' && <KnowledgeGraph isDark={isDark} />}
                 {current === 'documents' && <Documents searchText={searchText} isDark={isDark} />}
                 {current === 'settings' && <Settings isDark={isDark} />}
               </Content>
