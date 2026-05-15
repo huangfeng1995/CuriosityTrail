@@ -2,25 +2,75 @@ const express = require('express');
 const router = express.Router();
 const { all, get, run } = require('../database');
 
-const REPORT_TEMPLATE = `1. 探索主题
+const SCIENTIFIC_TEMPLATE = `1. 探索主题
 
 2. 背景介绍
 
-3. 提出问题
+3. 关键概念定义
+   - 定义1：
+   - 定义2：
 
-4. 猜想与假设
+4. 提出问题
 
-5. 实验材料与工具
+5. 猜想与假设
 
-6. 实验步骤
+6. 实验材料与工具
 
-7. 实验数据与现象
+7. 实验步骤
 
-8. 分析与结论
+8. 实验数据与现象
 
-9. 反思与改进
+9. 分析与结论
 
-10. 参考文献
+10. 边界条件与适用范围
+    - 适用情况：
+    - 不适用情况：
+
+11. 反例与例外
+    - 反例1：
+    - 反例2：
+
+12. 反思与改进
+
+13. 参考文献
+`;
+
+const SYNTHESIS_TEMPLATE = `## 综合调研报告
+
+### 一、初级调研：读懂对象
+
+1. 调研主题
+2. 基本事实收集
+3. 数据整理
+4. 初步观察与发现
+
+---
+
+### 二、中级调研：读懂争论
+
+1. 不同观点梳理
+   - 观点A：
+   - 观点B：
+   - 观点C：
+
+2. 利益关系分析
+3. 争议焦点
+
+---
+
+### 三、高级调研：读出新问题
+
+1. 发现的新问题
+2. 意外洞察
+3. 教科书没有的内容
+
+---
+
+### 四、所以呢？
+
+1. 我的结论
+2. 行动指南
+3. 下一步建议
 `;
 
 router.get('/', async (req, res) => {
@@ -65,9 +115,14 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { title, use_template = false } = req.body;
+  const { title, template = 'none' } = req.body;
   try {
-    const content = use_template ? REPORT_TEMPLATE : '';
+    let content = '';
+    if (template === 'scientific') {
+      content = SCIENTIFIC_TEMPLATE;
+    } else if (template === 'synthesis') {
+      content = SYNTHESIS_TEMPLATE;
+    }
     const result = await run('INSERT INTO reports (title, content) VALUES (?, ?)', [title, content]);
     const report = await get('SELECT * FROM reports WHERE id = ?', [result.lastID]);
     res.json({ ...report, document_count: 0 });

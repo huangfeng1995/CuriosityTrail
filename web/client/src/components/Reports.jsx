@@ -41,7 +41,7 @@ function Reports({ searchText, isDark }) {
   const [editorMode, setEditorMode] = useState('view');
   const [form] = Form.useForm();
   const [localSearch, setLocalSearch] = useState('');
-  const [useTemplate, setUseTemplate] = useState(true);
+  const [selectedTemplate, setSelectedTemplate] = useState('scientific');
 
   const fetchReports = async (search = '') => {
     setLoading(true);
@@ -65,7 +65,7 @@ function Reports({ searchText, isDark }) {
   const handleCreate = async () => {
     try {
       const values = await form.validateFields();
-      await axios.post('/api/reports', { title: values.title, use_template: useTemplate });
+      await axios.post('/api/reports', { title: values.title, template: selectedTemplate });
       message.success('创建成功');
       setCreateModalVisible(false);
       form.resetFields();
@@ -371,31 +371,35 @@ function Reports({ searchText, isDark }) {
               style={{ borderRadius: 8 }}
             />
           </Form.Item>
+          <Form.Item
+            name="template"
+            label="选择模板"
+          >
+            <Select
+              value={selectedTemplate}
+              onChange={setSelectedTemplate}
+              size="large"
+              style={{ borderRadius: 8, width: '100%' }}
+            >
+              <Option value="none">空白模板</Option>
+              <Option value="scientific">科学探究模板</Option>
+              <Option value="synthesis">综合调研模板</Option>
+            </Select>
+          </Form.Item>
           <Form.Item>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-            }}>
-              <span style={{
-                fontSize: 14,
-                color: isDark ? '#9ca3af' : '#6b7280',
-              }}>
-                使用科学探究模板：
-              </span>
-              <Switch
-                checked={useTemplate}
-                onChange={setUseTemplate}
-                checkedChildren="是"
-                unCheckedChildren="否"
-              />
-            </div>
             <div style={{
               fontSize: 12,
               color: isDark ? '#6b7280' : '#9ca3af',
-              marginTop: 8,
             }}>
-              模板包含：探索主题、背景介绍、提出问题、猜想与假设、实验材料与工具、实验步骤、实验数据与现象、分析与结论、反思与改进、参考文献
+              {selectedTemplate === 'scientific' && (
+                <span>科学探究模板包含：探索主题、背景介绍、关键概念定义、提出问题、猜想与假设、实验材料与工具、实验步骤、实验数据与现象、分析与结论、边界条件与适用范围、反例与例外、反思与改进、参考文献</span>
+              )}
+              {selectedTemplate === 'synthesis' && (
+                <span>综合调研模板包含：初级调研（读懂对象）、中级调研（读懂争论）、高级调研（读出新问题）、所以呢？（结论与行动指南）</span>
+              )}
+              {selectedTemplate === 'none' && (
+                <span>从空白开始撰写报告</span>
+              )}
             </div>
           </Form.Item>
         </Form>
