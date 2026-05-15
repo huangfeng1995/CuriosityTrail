@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, Button, Select, Modal, Space, message, Spin, Tooltip, Typography, Empty, Input } from 'antd';
 import { 
-  ZoomIn, 
-  ZoomOut, 
+  ZoomInOutlined, 
+  ZoomOutOutlined, 
   ReloadOutlined, 
   DownloadOutlined,
   FullscreenOutlined,
@@ -268,10 +268,10 @@ function KnowledgeGraph({ isDark }) {
 
           <Button.Group>
             <Tooltip title="放大">
-              <Button icon={<ZoomIn />} onClick={handleZoomIn} />
+              <Button icon={<ZoomInOutlined />} onClick={handleZoomIn} />
             </Tooltip>
             <Tooltip title="缩小">
-              <Button icon={<ZoomOut />} onClick={handleZoomOut} />
+              <Button icon={<ZoomOutOutlined />} onClick={handleZoomOut} />
             </Tooltip>
             <Tooltip title="重置视图">
               <Button icon={<ReloadOutlined />} onClick={handleReset} />
