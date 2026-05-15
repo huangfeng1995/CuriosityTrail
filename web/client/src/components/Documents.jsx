@@ -84,16 +84,16 @@ function Documents({ searchText, isDark }) {
 
     const handleDragLeave = () => {
       if (dropRef.current) {
-        dropRef.current.style.borderColor = isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)';
-        dropRef.current.style.background = isDark ? 'rgba(31, 41, 55, 0.3)' : 'rgba(255, 255, 255, 0.5)';
+        dropRef.current.style.borderColor = isDark ? '#374151' : '#e5e7eb';
+        dropRef.current.style.background = isDark ? '#1f2937' : '#ffffff';
       }
     };
 
     const handleDrop = async (e) => {
       e.preventDefault();
       if (dropRef.current) {
-        dropRef.current.style.borderColor = isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)';
-        dropRef.current.style.background = isDark ? 'rgba(31, 41, 55, 0.3)' : 'rgba(255, 255, 255, 0.5)';
+        dropRef.current.style.borderColor = isDark ? '#374151' : '#e5e7eb';
+        dropRef.current.style.background = isDark ? '#1f2937' : '#ffffff';
       }
 
       const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
@@ -217,7 +217,7 @@ function Documents({ searchText, isDark }) {
             fontSize: 26,
             fontWeight: 700,
             color: isDark ? '#f9fafb' : '#111827',
-            fontFamily: 'Inter, system-ui, sans-serif',
+            fontFamily: 'Noto Serif SC, serif',
           }}>
             文献库
           </Title>
@@ -239,11 +239,8 @@ function Documents({ searchText, isDark }) {
             variant="borderless"
             styles={{
               popup: {
-                background: isDark ? 'rgba(31, 41, 55, 0.95)' : 'rgba(255, 255, 255, 0.95)',
-                backdropFilter: 'blur(20px)',
-                WebkitBackdropFilter: 'blur(20px)',
-                border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
-                borderRadius: 12,
+                background: isDark ? '#1f2937' : '#ffffff',
+                border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
               },
             }}
           >
@@ -265,8 +262,6 @@ function Documents({ searchText, isDark }) {
                 borderRadius: 8,
                 fontWeight: 600,
                 padding: '8px 20px',
-                boxShadow: isDark ? '0 4px 12px rgba(96, 165, 250, 0.3)' : '0 4px 12px rgba(30, 58, 95, 0.2)',
-                transition: 'all 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
               }}
             >
               上传 PDF
@@ -286,10 +281,8 @@ function Documents({ searchText, isDark }) {
             style={{
               borderRadius: 10,
               height: 42,
-              background: isDark ? 'rgba(31, 41, 55, 0.6)' : 'rgba(255, 255, 255, 0.8)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
+              background: isDark ? '#1f2937' : '#ffffff',
+              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
             }}
           />
         </div>
@@ -299,12 +292,9 @@ function Documents({ searchText, isDark }) {
         <div style={{
           marginBottom: 20,
           padding: 16,
-          background: isDark ? 'rgba(31, 41, 55, 0.6)' : 'rgba(255, 255, 255, 0.8)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          borderRadius: 12,
-          border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
-          boxShadow: isDark ? '0 4px 20px rgba(0, 0, 0, 0.2)' : '0 4px 20px rgba(30, 58, 95, 0.08)',
+          background: isDark ? '#1f2937' : '#ffffff',
+          borderRadius: 10,
+          border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
         }}>
           <div style={{
             display: 'flex',
@@ -365,12 +355,10 @@ function Documents({ searchText, isDark }) {
         style={{
           marginBottom: 20,
           padding: 32,
-          border: `2px dashed ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
+          border: `2px dashed ${isDark ? '#374151' : '#e5e7eb'}`,
           borderRadius: 12,
-          background: isDark ? 'rgba(31, 41, 55, 0.3)' : 'rgba(255, 255, 255, 0.5)',
-          backdropFilter: 'blur(10px)',
-          WebkitBackdropFilter: 'blur(10px)',
-          transition: 'all 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+          background: isDark ? '#1f2937' : '#ffffff',
+          transition: 'all 0.2s ease',
           textAlign: 'center',
         }}
       >
@@ -403,14 +391,11 @@ function Documents({ searchText, isDark }) {
             width: 100,
             height: 100,
             borderRadius: 20,
-            background: isDark ? 'rgba(31, 41, 55, 0.6)' : 'rgba(248, 249, 250, 0.8)',
-            backdropFilter: 'blur(10px)',
-            WebkitBackdropFilter: 'blur(10px)',
+            background: isDark ? '#1f2937' : '#f8f9fa',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             marginBottom: 20,
-            boxShadow: isDark ? '0 4px 20px rgba(0, 0, 0, 0.2)' : '0 4px 20px rgba(30, 58, 95, 0.08)',
           }}>
             <FileTextOutlined size={40} style={{ color: isDark ? '#4b5563' : '#d1d5db' }} />
           </div>
@@ -444,44 +429,28 @@ function Documents({ searchText, isDark }) {
           dataSource={documents}
           renderItem={(item) => (
             <List.Item style={{ display: 'block' }}>
-              <div
+              <Card
+                hoverable
                 onClick={() => openDocument(item)}
                 style={{
-                  background: isDark ? 'rgba(31, 41, 55, 0.6)' : 'rgba(255, 255, 255, 0.8)',
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
+                  background: isDark ? '#1f2937' : '#ffffff',
                   borderRadius: 12,
-                  border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
-                  padding: 16,
-                  cursor: 'pointer',
-                  transition: 'all 0.25s cubic-bezier(0.22, 1, 0.36, 1)',
-                  boxShadow: isDark ? '0 4px 20px rgba(0, 0, 0, 0.2)' : '0 4px 20px rgba(30, 58, 95, 0.08)',
+                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                  boxShadow: isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
+                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
                 }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-4px)';
-                  e.currentTarget.style.boxShadow = isDark ? '0 12px 40px rgba(0, 0, 0, 0.3)' : '0 12px 40px rgba(30, 58, 95, 0.12)';
-                  e.currentTarget.style.borderColor = isDark ? 'rgba(96, 165, 250, 0.5)' : 'rgba(30, 58, 95, 0.3)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = isDark ? '0 4px 20px rgba(0, 0, 0, 0.2)' : '0 4px 20px rgba(30, 58, 95, 0.08)';
-                  e.currentTarget.style.borderColor = isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)';
-                }}
+                bodyStyle={{ padding: 16 }}
               >
                 <div style={{ display: 'flex', gap: 14 }}>
                   <div style={{
                     width: 56,
                     height: 72,
                     borderRadius: 8,
-                    background: isDark ? 'linear-gradient(135deg, rgba(30, 58, 95, 0.6), rgba(96, 165, 250, 0.3))' : 'linear-gradient(135deg, rgba(254, 243, 199, 0.8), rgba(217, 119, 6, 0.1))',
-                    backdropFilter: 'blur(10px)',
-                    WebkitBackdropFilter: 'blur(10px)',
+                    background: isDark ? '#1e3a5f' : '#fef3c7',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
-                    boxShadow: isDark ? '0 4px 12px rgba(0, 0, 0, 0.2)' : '0 4px 12px rgba(217, 119, 6, 0.1)',
-                    transition: 'all 0.2s ease',
                   }}>
                     <FileTextOutlined size={28} style={{ color: isDark ? '#60a5fa' : '#d97706' }} />
                   </div>
@@ -492,7 +461,6 @@ function Documents({ searchText, isDark }) {
                       fontWeight: 600,
                       marginBottom: 6,
                       color: isDark ? '#f9fafb' : '#111827',
-                      fontFamily: 'Inter, system-ui, sans-serif',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
@@ -517,14 +485,6 @@ function Documents({ searchText, isDark }) {
                         style={{
                           padding: '4px 10px',
                           fontSize: 12,
-                          borderRadius: 6,
-                          transition: 'all 0.2s ease',
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = isDark ? 'rgba(96, 165, 250, 0.1)' : 'rgba(30, 58, 95, 0.05)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = 'transparent';
                         }}
                       >
                         打开
@@ -536,14 +496,6 @@ function Documents({ searchText, isDark }) {
                         style={{
                           padding: '4px 10px',
                           fontSize: 12,
-                          borderRadius: 6,
-                          transition: 'all 0.2s ease',
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = isDark ? 'rgba(96, 165, 250, 0.1)' : 'rgba(30, 58, 95, 0.05)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = 'transparent';
                         }}
                       >
                         编辑
@@ -559,24 +511,13 @@ function Documents({ searchText, isDark }) {
                           size="small"
                           danger
                           icon={<DeleteOutlined size={12} />}
-                          style={{ 
-                            padding: '4px 10px', 
-                            fontSize: 12,
-                            borderRadius: 6,
-                            transition: 'all 0.2s ease',
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = 'transparent';
-                          }}
+                          style={{ padding: '4px 10px', fontSize: 12 }}
                         />
                       </Popconfirm>
                     </Space>
                   </div>
                 </div>
-              </div>
+              </Card>
             </List.Item>
           )}
         />
@@ -589,18 +530,6 @@ function Documents({ searchText, isDark }) {
         onCancel={() => setEditModalVisible(false)}
         centered
         width={window.innerWidth < 768 ? '90%' : 480}
-        styles={{
-          mask: {
-            backdropFilter: 'blur(4px)',
-          },
-          content: {
-            background: isDark ? 'rgba(31, 41, 55, 0.95)' : 'rgba(255, 255, 255, 0.95)',
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            borderRadius: 12,
-            border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
-          },
-        }}
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -617,7 +546,7 @@ function Documents({ searchText, isDark }) {
           <Form.Item name="category_id" label="分类">
             <Select 
               placeholder="请选择分类"
-              style={{ width: '100%', borderRadius: 8 }}
+              style={{ width: '100%' }}
             >
               {categories.map(cat => (
                 <Option key={cat.id} value={cat.id}>{cat.name}</Option>

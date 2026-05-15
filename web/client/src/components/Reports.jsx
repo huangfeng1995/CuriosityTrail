@@ -123,7 +123,7 @@ function Reports({ searchText, isDark }) {
             fontSize: 26,
             fontWeight: 700,
             color: isDark ? '#f9fafb' : '#111827',
-            fontFamily: 'Inter, system-ui, sans-serif',
+            fontFamily: 'Noto Serif SC, serif',
           }}>
             探索报告
           </Title>
@@ -162,8 +162,6 @@ function Reports({ searchText, isDark }) {
               borderRadius: 8,
               fontWeight: 600,
               padding: '8px 20px',
-              boxShadow: isDark ? '0 4px 12px rgba(96, 165, 250, 0.3)' : '0 4px 12px rgba(30, 58, 95, 0.2)',
-              transition: 'all 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
             }}
           >
             新建报告
@@ -206,7 +204,6 @@ function Reports({ searchText, isDark }) {
             alignItems: 'center',
             justifyContent: 'center',
             marginBottom: 20,
-            boxShadow: isDark ? '0 4px 20px rgba(0, 0, 0, 0.2)' : '0 4px 20px rgba(30, 58, 95, 0.08)',
           }}>
             <FileTextOutlined size={40} style={{ color: isDark ? '#4b5563' : '#d1d5db' }} />
           </div>
@@ -240,36 +237,24 @@ function Reports({ searchText, isDark }) {
           dataSource={reports}
           renderItem={(item) => (
             <List.Item style={{ display: 'block' }}>
-              <div
+              <Card
+                hoverable
                 onClick={() => openEditor(item, 'view')}
                 style={{
-                  background: isDark ? 'rgba(31, 41, 55, 0.6)' : 'rgba(255, 255, 255, 0.8)',
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
+                  background: isDark ? '#1f2937' : '#ffffff',
                   borderRadius: 12,
-                  border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
-                  padding: 20,
-                  cursor: 'pointer',
-                  transition: 'all 0.25s cubic-bezier(0.22, 1, 0.36, 1)',
-                  boxShadow: isDark ? '0 4px 20px rgba(0, 0, 0, 0.2)' : '0 4px 20px rgba(30, 58, 95, 0.08)',
+                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                  boxShadow: isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
+                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
                 }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-4px)';
-                  e.currentTarget.style.boxShadow = isDark ? '0 12px 40px rgba(0, 0, 0, 0.3)' : '0 12px 40px rgba(30, 58, 95, 0.12)';
-                  e.currentTarget.style.borderColor = isDark ? 'rgba(96, 165, 250, 0.5)' : 'rgba(30, 58, 95, 0.3)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = isDark ? '0 4px 20px rgba(0, 0, 0, 0.2)' : '0 4px 20px rgba(30, 58, 95, 0.08)';
-                  e.currentTarget.style.borderColor = isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)';
-                }}
+                bodyStyle={{ padding: 20 }}
               >
                 <div style={{
                   fontSize: 16,
                   fontWeight: 600,
                   marginBottom: 12,
                   color: isDark ? '#f9fafb' : '#111827',
-                  fontFamily: 'Inter, system-ui, sans-serif',
+                  fontFamily: 'Noto Serif SC, serif',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -296,7 +281,7 @@ function Reports({ searchText, isDark }) {
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   paddingTop: 12,
-                  borderTop: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
+                  borderTop: `1px solid ${isDark ? '#374151' : '#f3f4f6'}`,
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -329,15 +314,6 @@ function Reports({ searchText, isDark }) {
                       style={{ 
                         color: isDark ? '#9ca3af' : '#6b7280',
                         padding: '4px 10px',
-                        transition: 'all 0.2s ease',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.color = isDark ? '#60a5fa' : '#1e3a5f';
-                        e.currentTarget.style.background = isDark ? 'rgba(96, 165, 250, 0.1)' : 'rgba(30, 58, 95, 0.05)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.color = isDark ? '#9ca3af' : '#6b7280';
-                        e.currentTarget.style.background = 'transparent';
                       }}
                     />
                     <Button
@@ -348,15 +324,6 @@ function Reports({ searchText, isDark }) {
                       style={{ 
                         color: isDark ? '#9ca3af' : '#6b7280',
                         padding: '4px 10px',
-                        transition: 'all 0.2s ease',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.color = isDark ? '#60a5fa' : '#1e3a5f';
-                        e.currentTarget.style.background = isDark ? 'rgba(96, 165, 250, 0.1)' : 'rgba(30, 58, 95, 0.05)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.color = isDark ? '#9ca3af' : '#6b7280';
-                        e.currentTarget.style.background = 'transparent';
                       }}
                     />
                     <Popconfirm
@@ -371,21 +338,12 @@ function Reports({ searchText, isDark }) {
                         size="small"
                         danger
                         icon={<DeleteOutlined size={14} />}
-                        style={{ 
-                          padding: '4px 10px',
-                          transition: 'all 0.2s ease',
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = 'transparent';
-                        }}
+                        style={{ padding: '4px 10px' }}
                       />
                     </Popconfirm>
                   </Space>
                 </div>
-              </div>
+              </Card>
             </List.Item>
           )}
         />
@@ -400,18 +358,6 @@ function Reports({ searchText, isDark }) {
         width={window.innerWidth < 768 ? '90%' : 520}
         okText="创建"
         cancelText="取消"
-        styles={{
-          mask: {
-            backdropFilter: 'blur(4px)',
-          },
-          content: {
-            background: isDark ? 'rgba(31, 41, 55, 0.95)' : 'rgba(255, 255, 255, 0.95)',
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            borderRadius: 12,
-            border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
-          },
-        }}
       >
         <Form form={form} layout="vertical">
           <Form.Item

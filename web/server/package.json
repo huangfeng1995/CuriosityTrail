@@ -14,6 +14,8 @@
     "express-fileupload": "^1.4.3",
     "sqlite3": "^5.1.7",
     "archiver": "^6.0.1",
-    "adm-zip": "^0.5.10"
+    "adm-zip": "^0.5.10",
+    "uuid": "^9.0.0",
+    "axios": "^1.6.5"
   }
 }
