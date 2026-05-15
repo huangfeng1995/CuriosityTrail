@@ -1,0 +1,30 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "nixpacksPlan": {
+      "phases": {
+        "setup": {
+          "nixPackages": ["nodejs_20"]
+        },
+        "install": {
+          "commands": [
+            "cd web/server && npm ci --production",
+            "cd web/client && npm ci"
+          ]
+        },
+        "build": {
+          "commands": [
+            "cd web/client && npm run build"
+          ]
+        }
+      }
+    }
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10,
+    "script": "cd web/server && npm start"
+  }
+}
