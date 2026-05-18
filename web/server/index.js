@@ -16,6 +16,7 @@ const documentsRouter = require('./routes/documents');
 const exportRouter = require('./routes/export');
 const graphRouter = require('./routes/graph');
 const agentRouter = require('./routes/agent');
+const translateRouter = require('./routes/translate');
 
 app.use('/api/categories', categoriesRouter);
 app.use('/api/reports', reportsRouter);
@@ -23,6 +24,7 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/export', exportRouter);
 app.use('/api/graph', graphRouter);
 app.use('/api/agent', agentRouter);
+app.use('/api/translate', translateRouter);
 
 // 先检查是否有 Docker 环境下的 public 目录，再检查本地开发的 dist
 const staticPath = path.join(__dirname, 'public');

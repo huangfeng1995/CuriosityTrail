@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Form, Input, Button, Space, List, message, Checkbox, Typography } from 'antd';
-import { SaveOutlined, FileTextOutlined } from '@ant-design/icons';
+import { SaveOutlined, FileTextOutlined, TranslationOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import TranslationModal from './TranslationModal';
 
 const { TextArea } = Input;
 const { Title } = Typography;
@@ -14,6 +15,8 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
   const [documents, setDocuments] = useState([]);
   const [linkedDocuments, setLinkedDocuments] = useState([]);
   const [showPreview, setShowPreview] = useState(false);
+  const [translationModalVisible, setTranslationModalVisible] = useState(false);
+  const [selectedText, setSelectedText] = useState('');
 
   const isView = mode === 'view';
 
@@ -290,15 +293,25 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
           {!isView && (
             <Form.Item style={{ marginTop: 8 }}>
               <Space wrap>
-                <Button 
-                  icon={<FileTextOutlined size={16} />} 
+                <Button
+                  icon={<TranslationOutlined size={16} />}
+                  onClick={() => {
+                    setSelectedText(form.getFieldValue('content') || '');
+                    setTranslationModalVisible(true);
+                  }}
+                  style={{ borderRadius: 6 }}
+                >
+                  翻译全文
+                </Button>
+                <Button
+                  icon={<FileTextOutlined size={16} />}
                   onClick={() => handleExport('txt')}
                   style={{ borderRadius: 6 }}
                 >
                   导出 TXT
                 </Button>
-                <Button 
-                  icon={<FileTextOutlined size={16} />} 
+                <Button
+                  icon={<FileTextOutlined size={16} />}
                   onClick={() => handleExport('docx')}
                   style={{ borderRadius: 6 }}
                 >
@@ -309,6 +322,14 @@ function ReportEditor({ visible, onCancel, report, mode, isDark, onSave }) {
           )}
         </Form>
       </div>
+
+      <TranslationModal
+        visible={translationModalVisible}
+        onCancel={() => setTranslationModalVisible(false)}
+        text={selectedText}
+        title="翻译报告"
+        isDark={isDark}
+      />
     </Modal>
   );
 }

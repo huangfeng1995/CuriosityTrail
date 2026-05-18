@@ -86,6 +86,18 @@ function initDatabase() {
       )
     `);
 
+    db.run(`
+      CREATE TABLE IF NOT EXISTS translation_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_text TEXT,
+        translated_text TEXT,
+        source_lang TEXT,
+        target_lang TEXT,
+        service TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     db.get('SELECT COUNT(*) as count FROM categories WHERE is_default = 1', (err, row) => {
       if (err) return;
       if (row.count === 0) {
