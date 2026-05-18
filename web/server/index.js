@@ -24,14 +24,25 @@ app.use('/api/export', exportRouter);
 app.use('/api/graph', graphRouter);
 app.use('/api/agent', agentRouter);
 
-app.use(express.static(path.join(__dirname, '../client/dist')));
+// 先检查是否有 Docker 环境下的 public 目录，再检查本地开发的 dist
+const staticPath = path.join(__dirname, 'public');
+const fallbackPath = path.join(__dirname, '../client/dist');
+
+if (require('fs').existsSync(staticPath)) {
+  app.use(express.static(staticPath));
+} else {
+  app.use(express.static(fallbackPath));
+}
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+  const indexPath = require('fs').existsSync(staticPath) 
+    ? path.join(staticPath, 'index.html') 
+    : path.join(fallbackPath, 'index.html');
+  res.sendFile(indexPath);
 });
 
 app.listen(PORT, () => {
