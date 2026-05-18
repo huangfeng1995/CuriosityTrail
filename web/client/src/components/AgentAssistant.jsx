@@ -7,8 +7,10 @@ import {
   ClearOutlined,
   SettingOutlined,
   SyncOutlined,
-  HistoryOutlined
+  HistoryOutlined,
+  TranslationOutlined
 } from '@ant-design/icons';
+import TranslationModal from './TranslationModal';
 import axios from 'axios';
 
 const { Text, Title } = Typography;
@@ -20,6 +22,9 @@ function AgentAssistant({ isDark }) {
   const [loading, setLoading] = useState(false);
   const [ollamaStatus, setOllamaStatus] = useState(null);
   const [model, setModel] = useState('llama3.2:3b');
+  const [translationModalVisible, setTranslationModalVisible] = useState(false);
+  const [selectedText, setSelectedText] = useState('');
+  const [translationContext, setTranslationContext] = useState('');
   const messagesEndRef = useRef(null);
   const eventSourceRef = useRef(null);
 
@@ -145,6 +150,12 @@ function AgentAssistant({ isDark }) {
       e.preventDefault();
       sendMessage();
     }
+  };
+
+  const openTranslation = (text, context = '') => {
+    setSelectedText(text);
+    setTranslationContext(context);
+    setTranslationModalVisible(true);
   };
 
   return (
@@ -275,6 +286,18 @@ function AgentAssistant({ isDark }) {
                     lineHeight: 1.6
                   }}>
                     {msg.content}
+                    {msg.role === 'assistant' && msg.content && (
+                      <div style={{ marginTop: 8, textAlign: 'right' }}>
+                        <Button
+                          size="small"
+                          icon={<TranslationOutlined />}
+                          onClick={() => openTranslation(msg.content, 'AI 回复')}
+                          style={{ fontSize: 12 }}
+                        >
+                          翻译
+                        </Button>
+                      </div>
+                    )}
                   </div>
 
                   {msg.role === 'user' && (
@@ -411,6 +434,14 @@ function AgentAssistant({ isDark }) {
           </Text>
         </div>
       </div>
+
+      <TranslationModal
+        visible={translationModalVisible}
+        onCancel={() => setTranslationModalVisible(false)}
+        text={selectedText}
+        title="翻译 AI 回复"
+        isDark={isDark}
+      />
     </div>
   );
 }

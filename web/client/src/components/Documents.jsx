@@ -23,7 +23,9 @@ import {
   DeleteOutlined,
   FileTextOutlined,
   PlusOutlined,
+  TranslationOutlined,
 } from '@ant-design/icons';
+import DocumentTranslationModal from './DocumentTranslationModal';
 import dayjs from 'dayjs';
 import axios from 'axios';
 
@@ -42,6 +44,8 @@ function Documents({ searchText, isDark }) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadQueue, setUploadQueue] = useState([]);
+  const [translationModalVisible, setTranslationModalVisible] = useState(false);
+  const [selectedDocument, setSelectedDocument] = useState(null);
   const dropRef = useRef(null);
 
   useEffect(() => {
@@ -199,6 +203,12 @@ function Documents({ searchText, isDark }) {
 
   const openDocument = (doc) => {
     window.open(`/api/documents/${doc.id}/file`, '_blank');
+  };
+
+  const openTranslationModal = (doc, e) => {
+    e?.stopPropagation();
+    setSelectedDocument(doc);
+    setTranslationModalVisible(true);
   };
 
   return (
@@ -491,6 +501,17 @@ function Documents({ searchText, isDark }) {
                       </Button>
                       <Button
                         size="small"
+                        icon={<TranslationOutlined size={12} />}
+                        onClick={(e) => openTranslationModal(item, e)}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: 12,
+                        }}
+                      >
+                        翻译
+                      </Button>
+                      <Button
+                        size="small"
                         icon={<EditOutlined size={12} />}
                         onClick={() => openEditModal(item)}
                         style={{
@@ -555,6 +576,16 @@ function Documents({ searchText, isDark }) {
           </Form.Item>
         </Form>
       </Modal>
+
+      <DocumentTranslationModal
+        visible={translationModalVisible}
+        onCancel={() => {
+          setTranslationModalVisible(false);
+          setSelectedDocument(null);
+        }}
+        document={selectedDocument}
+        isDark={isDark}
+      />
     </div>
   );
 }
