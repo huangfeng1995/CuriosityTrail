@@ -153,13 +153,7 @@ function App() {
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <SearchBar 
-                  value={searchText} 
-                  onChange={setSearchText}
-                  isDark={isDark}
-                  mobile
-                />
-                <Button
+                  <Button
                   type="text"
                   icon={isDark ? <Sun size={18} /> : <Moon size={18} />}
                   onClick={() => setIsDark(!isDark)}
@@ -339,27 +333,29 @@ function App() {
                   gap: 16,
                 }}
               >
-                <SearchBar 
-                  value={searchText} 
-                  onChange={setSearchText}
-                  isDark={isDark}
-                />
                 {current === 'reports' && (
-                  <Button 
-                    type="primary" 
-                    size="large" 
-                    icon={<PlusOutlined size={18} />}
-                    onClick={() => {
-                      const createBtn = document.querySelector('[data-create-report]');
-                      if (createBtn) createBtn.click();
-                    }}
-                    style={{ 
-                      borderRadius: 8,
-                      fontWeight: 600,
-                    }}
-                  >
-                    新建报告
-                  </Button>
+                  <>
+                    <SearchBar 
+                      value={searchText} 
+                      onChange={setSearchText}
+                      isDark={isDark}
+                    />
+                    <Button 
+                      type="primary" 
+                      size="large" 
+                      icon={<PlusOutlined size={18} />}
+                      onClick={() => {
+                        const createBtn = document.querySelector('[data-create-report]');
+                        if (createBtn) createBtn.click();
+                      }}
+                      style={{ 
+                        borderRadius: 8,
+                        fontWeight: 600,
+                      }}
+                    >
+                      新建报告
+                    </Button>
+                  </>
                 )}
               </Header>
 
