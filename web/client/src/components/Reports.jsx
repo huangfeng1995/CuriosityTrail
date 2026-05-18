@@ -169,23 +169,7 @@ function Reports({ searchText, isDark }) {
         </Space>
       </div>
 
-      {searchText === undefined && (
-        <div style={{ marginBottom: 20 }}>
-          <Input
-            placeholder="搜索报告..."
-            prefix={<span style={{ color: isDark ? '#6b7280' : '#9ca3af', marginRight: 8 }}>🔍</span>}
-            value={localSearch}
-            onChange={(e) => setLocalSearch(e.target.value)}
-            allowClear
-            style={{
-              borderRadius: 10,
-              height: 42,
-              background: isDark ? '#1f2937' : '#ffffff',
-              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-            }}
-          />
-        </div>
-      )}
+
 
       {reports.length === 0 ? (
         <div style={{
