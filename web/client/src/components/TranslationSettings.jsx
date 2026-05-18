@@ -97,12 +97,7 @@ function TranslationSettings({ isDark }) {
   };
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto' }}>
-      <Title level={2} style={{ marginBottom: 24, color: isDark ? '#f9fafb' : '#111827' }}>
-        <TranslationOutlined style={{ marginRight: 12 }} />
-        翻译设置
-      </Title>
-
+    <div style={{ maxWidth: 800 }}>
       <Card
         style={{
           background: isDark ? '#1f2937' : '#ffffff',
