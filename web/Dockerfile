@@ -6,7 +6,7 @@ COPY server/package*.json ./server/
 RUN cd server && npm ci --omit=dev
 
 COPY server ./server
-COPY client/dist ./client/dist
+COPY client/dist ./server/public
 
 WORKDIR /app/server
 
