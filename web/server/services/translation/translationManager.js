@@ -1,11 +1,13 @@
 const MiniMaxTranslationService = require('./minimaxTranslation');
 const OllamaTranslationService = require('./ollamaTranslation');
+const LlamaCppTranslationService = require('./llamaCppTranslation');
 
 class TranslationManager {
   constructor() {
     this.services = {
       minimax: null,
       ollama: null,
+      llamaCpp: null,
     };
     this.currentService = 'ollama';
     this.settings = {
@@ -17,6 +19,10 @@ class TranslationManager {
       ollama: {
         baseUrl: 'http://localhost:11434',
         model: 'llama3.2:3b',
+      },
+      llamaCpp: {
+        modelPath: '/Users/openclaw/Downloads/qwen2_05b_int4.gguf',
+        temperature: 0.3,
       },
       defaultTargetLang: 'zh',
     };
@@ -42,6 +48,17 @@ class TranslationManager {
       this.services.ollama = new OllamaTranslationService(
         this.settings.ollama.baseUrl,
         this.settings.ollama.model
+      );
+    }
+
+    if (settings.llamaCpp) {
+      this.settings.llamaCpp = {
+        ...this.settings.llamaCpp,
+        ...settings.llamaCpp,
+      };
+      this.services.llamaCpp = new LlamaCppTranslationService(
+        this.settings.llamaCpp.modelPath,
+        this.settings.llamaCpp.temperature
       );
     }
 
@@ -149,6 +166,17 @@ class TranslationManager {
       );
     }
 
+    if (newSettings.llamaCpp) {
+      this.settings.llamaCpp = {
+        ...this.settings.llamaCpp,
+        ...newSettings.llamaCpp,
+      };
+      this.services.llamaCpp = new LlamaCppTranslationService(
+        this.settings.llamaCpp.modelPath,
+        this.settings.llamaCpp.temperature
+      );
+    }
+
     if (newSettings.defaultTargetLang) {
       this.settings.defaultTargetLang = newSettings.defaultTargetLang;
     }
@@ -176,6 +204,10 @@ translationManager.initialize({
   minimax: {
     apiKey: process.env.MINIMAX_API_KEY || '',
     groupId: process.env.MINIMAX_GROUP_ID || '',
+  },
+  llamaCpp: {
+    modelPath: process.env.LLAMA_CPP_MODEL_PATH || '/Users/openclaw/Downloads/qwen2_05b_int4.gguf',
+    temperature: parseFloat(process.env.LLAMA_CPP_TEMPERATURE) || 0.3,
   },
 });
 

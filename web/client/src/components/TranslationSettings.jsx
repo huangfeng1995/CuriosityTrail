@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Tabs, Form, Input, Select, Button, Switch, Space, Tag, message, Divider, Typography } from 'antd';
-import { TranslationOutlined, CloudOutlined, DesktopOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { Card, Tabs, Form, Input, Select, Button, Switch, Space, Tag, message, Divider, Typography, InputNumber } from 'antd';
+import { TranslationOutlined, CloudOutlined, DesktopOutlined, CheckCircleOutlined, CloseCircleOutlined, FileTextOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 const { Title, Text } = Typography;
@@ -14,6 +14,7 @@ function TranslationSettings({ isDark }) {
   const [serviceStatus, setServiceStatus] = useState({
     minimax: { available: false },
     ollama: { available: false },
+    llamaCpp: { available: false },
   });
 
   useEffect(() => {
@@ -30,6 +31,8 @@ function TranslationSettings({ isDark }) {
         minimaxGroupId: res.data.minimax?.groupId || '',
         ollamaBaseUrl: res.data.ollama?.baseUrl || 'http://localhost:11434',
         ollamaModel: res.data.ollama?.model || 'llama3.2:3b',
+        llamaCppModelPath: res.data.llamaCpp?.modelPath || '/Users/openclaw/Downloads/qwen2_05b_int4.gguf',
+        llamaCppTemperature: res.data.llamaCpp?.temperature || 0.3,
         defaultTargetLang: res.data.defaultTargetLang || 'zh',
       });
     } catch (error) {
@@ -63,6 +66,10 @@ function TranslationSettings({ isDark }) {
         ollama: {
           baseUrl: values.ollamaBaseUrl,
           model: values.ollamaModel,
+        },
+        llamaCpp: {
+          modelPath: values.llamaCppModelPath,
+          temperature: values.llamaCppTemperature,
         },
         defaultTargetLang: values.defaultTargetLang,
       });
@@ -216,6 +223,65 @@ function TranslationSettings({ isDark }) {
                 </Form>
               ),
             },
+            {
+              key: 'llamaCpp',
+              label: (
+                <span>
+                  <FileTextOutlined />
+                  LlamaCpp (GGUF)
+                </span>
+              ),
+              children: (
+                <Form
+                  form={form}
+                  layout="vertical"
+                  initialValues={{
+                    service: 'llamaCpp',
+                    llamaCppModelPath: '/Users/openclaw/Downloads/qwen2_05b_int4.gguf',
+                    llamaCppTemperature: 0.3,
+                  }}
+                >
+                  <Form.Item
+                    name="llamaCppModelPath"
+                    label="GGUF 模型路径"
+                    tooltip="本地 GGUF 模型文件的绝对路径"
+                  >
+                    <Input
+                      placeholder="/path/to/model.gguf"
+                      size="large"
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="llamaCppTemperature"
+                    label="温度参数"
+                    tooltip="控制模型输出的随机性，值越大越随机"
+                  >
+                    <InputNumber
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      style={{ width: '100%' }}
+                      size="large"
+                    />
+                  </Form.Item>
+
+                  <Divider />
+
+                  <Space>
+                    <Text strong>服务状态：</Text>
+                    {renderServiceStatus('llamaCpp', serviceStatus.llamaCpp)}
+                    <Button
+                      size="small"
+                      onClick={checkServicesStatus}
+                      loading={loading}
+                    >
+                      刷新状态
+                    </Button>
+                  </Space>
+                </Form>
+              ),
+            },
           ]}
         />
 
@@ -253,6 +319,7 @@ function TranslationSettings({ isDark }) {
             <Select size="large">
               <Option value="minimax">MiniMax API</Option>
               <Option value="ollama">Ollama 本地模型</Option>
+              <Option value="llamaCpp">LlamaCpp (GGUF)</Option>
             </Select>
           </Form.Item>
         </Form>
