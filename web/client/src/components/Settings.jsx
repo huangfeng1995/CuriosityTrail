@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Space, message, Upload, Typography, Row, Col, Statistic, Tabs } from 'antd';
-import { Database, FileText, FolderOpen, TrendingUp } from 'lucide-react';
-import { CloudDownloadOutlined, CloudUploadOutlined, TranslationOutlined } from '@ant-design/icons';
+import { Database, FileText, FolderOpen, TrendingUp, Settings as SettingsIcon, BrainCircuit } from 'lucide-react';
+import { CloudDownloadOutlined, CloudUploadOutlined, TranslationOutlined, RobotOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import { BarChart, PieChart } from 'recharts';
 import { Bar, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import TranslationSettings from './TranslationSettings';
+import AIConfig from './AIConfig';
 
 const { Title, Paragraph } = Typography;
 
@@ -430,14 +430,14 @@ function Settings({ isDark }) {
             )
           },
           {
-            key: 'translation',
+            key: 'ai',
             label: (
               <span>
-                <TranslationOutlined size={16} style={{ marginRight: 8 }} />
-                翻译设置
+                <RobotOutlined style={{ marginRight: 8 }} />
+                AI 助手配置
               </span>
             ),
-            children: <TranslationSettings isDark={isDark} />
+            children: <AIConfig isDark={isDark} />
           }
         ]}
       />
