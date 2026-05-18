@@ -329,13 +329,14 @@ function App() {
                   padding: '0 32px',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'space-between',
+                  justifyContent: 'flex-end',
                   background: isDark ? '#1f2937' : '#ffffff',
                   position: 'sticky',
                   top: 0,
                   zIndex: 10,
                   borderBottom: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
                   height: 64,
+                  gap: 16,
                 }}
               >
                 <SearchBar 

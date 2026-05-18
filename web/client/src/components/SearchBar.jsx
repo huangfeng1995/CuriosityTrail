@@ -45,7 +45,7 @@ function SearchBar({ value, onChange, isDark, mobile }) {
   };
 
   return (
-    <div style={{ position: 'relative', width: mobile ? 'auto' : 420 }}>
+    <div style={{ position: 'relative', width: mobile ? 'auto' : 360 }}>
       <Input
         ref={inputRef}
         placeholder="搜索报告或文献..."
@@ -68,10 +68,10 @@ function SearchBar({ value, onChange, isDark, mobile }) {
           />
         }
         style={{
-          borderRadius: 10,
-          height: 40,
-          padding: '0 16px',
-          background: isDark ? '#111827' : '#ffffff',
+          borderRadius: 8,
+          height: 38,
+          padding: '0 14px',
+          background: isDark ? '#111827' : '#f8f9fa',
           border: `1px solid ${isFocused ? (isDark ? '#60a5fa' : '#1e3a5f') : (isDark ? '#374151' : '#e5e7eb')}`,
           boxShadow: isFocused ? (isDark ? '0 0 0 3px rgba(96, 165, 250, 0.1)' : '0 0 0 3px rgba(30, 58, 95, 0.1)') : 'none',
           transition: 'all 0.2s ease',
