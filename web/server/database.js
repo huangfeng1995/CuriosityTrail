@@ -60,6 +60,30 @@ function initDatabase() {
       )
     `);
 
+    db.run(`
+      CREATE TABLE IF NOT EXISTS citations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_report_id INTEGER NOT NULL,
+        target_report_id INTEGER NOT NULL,
+        citation_type TEXT DEFAULT 'reference',
+        context TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (source_report_id) REFERENCES reports(id) ON DELETE CASCADE,
+        FOREIGN KEY (target_report_id) REFERENCES reports(id) ON DELETE CASCADE,
+        UNIQUE(source_report_id, target_report_id, citation_type)
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS keywords (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        report_id INTEGER NOT NULL,
+        keyword TEXT NOT NULL,
+        frequency INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
+        UNIQUE(report_id, keyword)
+    `);
+
     db.get('SELECT COUNT(*) as count FROM categories WHERE is_default = 1', (err, row) => {
       if (err) return;
       if (row.count === 0) {
