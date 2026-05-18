@@ -166,6 +166,7 @@ function Settings({ isDark }) {
               </span>
             ),
             children: (
+              <>
               <Row gutter={[20, 20]}>
         <Col xs={24} sm={12} lg={8}>
           <Card 
@@ -180,6 +181,42 @@ function Settings({ isDark }) {
               title="探索报告"
               value={stats.reports}
               prefix={<FileText size={20} style={{ color: isDark ? '#60a5fa' : '#1e3a5f' }} />}
+              titleStyle={{ color: isDark ? '#9ca3af' : '#6b7280', fontSize: 13 }}
+              valueStyle={{ color: isDark ? '#f9fafb' : '#111827', fontSize: 28, fontWeight: 700 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={8}>
+          <Card 
+            loading={loading}
+            style={{ 
+              background: isDark ? '#1f2937' : '#ffffff',
+              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+              borderRadius: 12,
+            }}
+          >
+            <Statistic
+              title="文献数量"
+              value={stats.documents}
+              prefix={<FolderOpen size={20} style={{ color: isDark ? '#f59e0b' : '#d97706' }} />}
+              titleStyle={{ color: isDark ? '#9ca3af' : '#6b7280', fontSize: 13 }}
+              valueStyle={{ color: isDark ? '#f9fafb' : '#111827', fontSize: 28, fontWeight: 700 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={24} lg={8}>
+          <Card 
+            loading={loading}
+            style={{ 
+              background: isDark ? '#1f2937' : '#ffffff',
+              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+              borderRadius: 12,
+            }}
+          >
+            <Statistic
+              title="分类数量"
+              value={stats.categories}
+              prefix={<Database size={20} style={{ color: isDark ? '#34d399' : '#10b981' }} />}
               titleStyle={{ color: isDark ? '#9ca3af' : '#6b7280', fontSize: 13 }}
               valueStyle={{ color: isDark ? '#f9fafb' : '#111827', fontSize: 28, fontWeight: 700 }}
             />
@@ -350,16 +387,16 @@ function Settings({ isDark }) {
         </Col>
       </Row>
 
-      <Card 
+      <Card
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <CloudDownloadOutlined size={16} style={{ color: isDark ? '#34d399' : '#10b981' }} />
+            <CloudDownloadOutlined style={{ color: isDark ? '#34d399' : '#10b981' }} />
             <span style={{ fontFamily: 'Noto Serif SC, serif', fontWeight: 600 }}>
               数据备份与恢复
             </span>
           </div>
         }
-        style={{ 
+        style={{
           background: isDark ? '#1f2937' : '#ffffff',
           border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
           borderRadius: 12,
@@ -371,7 +408,7 @@ function Settings({ isDark }) {
         <Space style={{ marginTop: 16 }}>
           <Button
             type="primary"
-            icon={<CloudDownloadOutlined size={16} />}
+            icon={<CloudDownloadOutlined />}
             onClick={handleBackup}
             loading={backupLoading}
             style={{ borderRadius: 8 }}
@@ -379,8 +416,8 @@ function Settings({ isDark }) {
             创建备份
           </Button>
           <Upload beforeUpload={handleRestore} showUploadList={false} accept=".zip">
-            <Button 
-              icon={<CloudUploadOutlined size={16} />} 
+            <Button
+              icon={<CloudUploadOutlined />}
               loading={restoreLoading}
               style={{ borderRadius: 8 }}
             >
@@ -389,6 +426,7 @@ function Settings({ isDark }) {
           </Upload>
         </Space>
       </Card>
+              </>
             )
           },
           {
