@@ -71,6 +71,7 @@ function initDatabase() {
         FOREIGN KEY (source_report_id) REFERENCES reports(id) ON DELETE CASCADE,
         FOREIGN KEY (target_report_id) REFERENCES reports(id) ON DELETE CASCADE,
         UNIQUE(source_report_id, target_report_id, citation_type)
+      )
     `);
 
     db.run(`
@@ -82,6 +83,7 @@ function initDatabase() {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
         UNIQUE(report_id, keyword)
+      )
     `);
 
     db.get('SELECT COUNT(*) as count FROM categories WHERE is_default = 1', (err, row) => {
