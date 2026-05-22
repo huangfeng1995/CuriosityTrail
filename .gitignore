@@ -25,6 +25,11 @@ data/
 documents/
 *.db
 
+# Environment variables - 敏感配置不要提交
+.env
+.env.local
+.env.*.local
+
 # macOS
 .DS_Store
 .AppleDouble

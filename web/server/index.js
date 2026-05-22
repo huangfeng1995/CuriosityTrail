@@ -1,3 +1,13 @@
+// 加载环境变量（如果有 .env 文件）
+try {
+  const dotenv = require('dotenv');
+  const path = require('path');
+  const envPath = path.join(__dirname, '..', '.env');
+  dotenv.config({ path: envPath });
+} catch (e) {
+  // 如果没有安装 dotenv 或者没有 .env 文件，没关系，继续运行
+}
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -18,6 +28,7 @@ const graphRouter = require('./routes/graph');
 const agentRouter = require('./routes/agent');
 const translateRouter = require('./routes/translate');
 const aiConfigRouter = require('./routes/aiConfig');
+const uploadRouter = require('./routes/upload');
 
 app.use('/api/categories', categoriesRouter);
 app.use('/api/reports', reportsRouter);
@@ -27,6 +38,11 @@ app.use('/api/graph', graphRouter);
 app.use('/api/agent', agentRouter);
 app.use('/api/translate', translateRouter);
 app.use('/api/ai-config', aiConfigRouter);
+app.use('/api/upload', uploadRouter);
+
+// 图片上传目录静态服务
+const uploadsPath = path.join(__dirname, 'uploads');
+app.use('/uploads', express.static(uploadsPath));
 
 // 先检查是否有 Docker 环境下的 public 目录，再检查本地开发的 dist
 const staticPath = path.join(__dirname, 'public');
