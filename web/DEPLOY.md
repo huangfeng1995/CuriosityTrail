@@ -42,15 +42,23 @@ DEEPSEEK_API_KEY='sk-xxxxxxxx'
 
 ## 二、首次部署
 
+> `fly.toml` 与 `Dockerfile` 都在**仓库根目录**，所有 `fly` 命令都在根目录执行。
+
 ### 1. 创建应用
 
-在**仓库根目录**执行（`fly.toml` 与 `Dockerfile` 都在根目录）：
-
 ```bash
-fly launch --no-deploy --copy-config --name curiosity-trail
+fly apps create curiosity-trail
 ```
 
-会提示选区域，选离你们近的（`hkg` 香港 / `nrt` 东京 / `sin` 新加坡）。
+> ⚠️ **不要用 `fly launch --copy-config`**：它会用模板覆盖掉仓库里已经写好的
+> `fly.toml`（区域、数据卷、强制 HTTPS 都会丢）。应用建好后直接编辑仓库里的
+> `fly.toml` 即可，它已经配好了 `hkg` 区域、`curiosity_trail_data` 卷和强制 HTTPS。
+
+建完后确认一下：
+
+```bash
+fly status
+```
 
 ### 2. 建持久化卷
 
@@ -60,13 +68,21 @@ SQLite 库和图片必须落在卷上，容器重建才不会丢：
 fly volumes create curiosity_trail_data --size 1 --region hkg
 ```
 
+卷名和 `fly.toml` 里 `[mounts]` 段的 `source` 必须一致（已经是 `curiosity_trail_data`）。
+
 ### 3. 注入 secret
 
 ```bash
 fly secrets set \
   APP_PASSWORD='你的密码' \
-  JWT_SECRET='你的随机密钥' \
+  JWT_SECRET="$(openssl rand -base64 32)" \
   DEEPSEEK_API_KEY='sk-你的key'
+```
+
+确认注入成功：
+
+```bash
+fly secrets list
 ```
 
 ### 4. 部署
@@ -90,6 +106,11 @@ fly open
 会打开 `https://curiosity-trail.fly.dev`。也可以用 `fly status` 看。
 
 **建议现在就去 [fly.io/apps](https://fly.io/apps) 绑定一个自己的域名**，比 `.fly.dev` 好记。
+
+### 6. 首次登录
+
+用 `APP_PASSWORD` 里设的密码登录。进去后先去「设置 → AI 供应商」点一次「测试连接」，
+确认 key 生效；再去「设置 → 备份」手动备份一次，确认卷上的东西都对。
 
 ---
 
@@ -214,3 +235,10 @@ docker run -d \
 **启动就退出**
 - `fly logs` 看报错。常见是卷没挂上导致 SQLite 打不开
 - 单实例保护会拒绝第二个进程：`Multiple instances` 之类。要么停掉另一个，要么设 `ALLOW_MULTI_INSTANCE=1`（不建议，SQLite 并发写会损坏数据）
+
+**构建失败（`fly deploy` 阶段）**
+- `sqlite3` 装不上：Dockerfile 的依赖层已装 python3/make/g++ 兜底，若仍失败说明是
+  架构不匹配（本地是 arm64 但镜像要 amd64）。在 Fly.io 控制台或
+  `fly platform setmips` 处确认架构
+- 前端构建失败：检查 `web/client/package-lock.json` 是否与 `package.json` 同步，
+  不一致时 `npm ci` 会直接报错。本地 `cd web/client && npm ci` 复现

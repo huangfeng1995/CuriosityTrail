@@ -23,12 +23,26 @@ const KEEP_COUNT = 7;
 let timer = null;
 
 /**
+ * 生成本地时间戳，形如 2026-10-21-03-00-00。
+ *
+ * 不用 toISOString()：那是 UTC，跟界面上显示的本地时间差 8 小时，
+ * 用户看文件名会以为备份时间不对。定宽格式还能让文件名按字典序 = 按时间序。
+ */
+function localStamp(date = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}` +
+    `-${p(date.getHours())}-${p(date.getMinutes())}-${p(date.getSeconds())}`
+  );
+}
+
+/**
  * 写一个备份 zip 到磁盘。
  * @param {string} [label] 文件名里的标记，默认按日期
  * @returns {Promise<{ok: boolean, file?: string, size?: number, reason?: string}>}
  */
 async function createBackup(label) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const stamp = localStamp();
   const name = label ? `curiosity-backup-${label}-${stamp}.zip` : `curiosity-backup-${stamp}.zip`;
   const target = path.join(BACKUP_DIR, name);
 

@@ -11,7 +11,9 @@
 const sqlite3 = require('sqlite3').verbose();
 const config = require('./config');
 
-const db = new sqlite3.Database(config.dbPath);
+// 连接句柄是模块级变量而不是 const 常量：恢复备份要换掉整个库文件，
+// 这时必须先关掉旧连接再开新的，否则旧连接会继续往被替换掉的文件上写。
+let db = new sqlite3.Database(config.dbPath);
 
 /**
  * Schema 版本。用 SQLite 的 user_version 记录，版本不匹配时重建全部表。
@@ -311,4 +313,27 @@ async function transaction(statements) {
 
 const ready = initDatabase();
 
-module.exports = { db, all, get, run, transaction, ready };
+/**
+ * 关闭数据库连接。
+ *
+ * 恢复备份时用：备份 zip 里的 curiosity.db 会整个替换掉当前的库文件。
+ * 连接开着的时候换文件，运行中的连接句柄仍指向旧 inode，继续读写会写进
+ * 没人看的文件，内存里的页缓存也可能把恢复出来的数据覆盖掉。
+ */
+function close() {
+  return new Promise((resolve, reject) => {
+    db.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+/**
+ * 重新打开库文件并跑一遍建表与迁移。
+ *
+ * 和 close() 配对使用：close() → 换文件 → reopen()。
+ */
+function reopen() {
+  db = new sqlite3.Database(config.dbPath);
+  return initDatabase();
+}
+
+module.exports = { db, all, get, run, transaction, ready, close, reopen };

@@ -22,7 +22,7 @@ const archiver = require('archiver');
 const AdmZip = require('adm-zip');
 const fileUpload = require('express-fileupload');
 const config = require('../config');
-const { all, get } = require('../database');
+const { all, get, close: closeDb, reopen: reopenDb } = require('../database');
 const docxExport = require('../services/docxExport');
 const backup = require('../services/backup');
 
@@ -270,7 +270,12 @@ router.post('/restore', fileUpload(), async (req, res) => {
 
     const dbSrc = path.join(extractDir, 'curiosity.db');
     if (fs.existsSync(dbSrc)) {
+      // 关连接 → 换文件 → 重开。
+      // 连接开着的时候替换库文件，运行中的连接会往旧 inode 上写，
+      // 恢复出来的数据等于白恢复。
+      await closeDb();
       fs.copyFileSync(dbSrc, path.join(config.dataDir, 'curiosity.db'));
+      await reopenDb();
     }
 
     for (const [sub, target] of [
