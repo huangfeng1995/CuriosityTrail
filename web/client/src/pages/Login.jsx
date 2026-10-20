@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Button, Input, Form, Checkbox, Alert, Typography } from 'antd';
-import { LockOutlined, UserOutlined } from '@ant-design/icons';
+import { LockOutlined } from '@ant-design/icons';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 
 const { Title, Text } = Typography;
@@ -12,6 +13,8 @@ const { Title, Text } = Typography;
  */
 export default function Login({ isDark = false }) {
   const { login } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -20,6 +23,8 @@ export default function Login({ isDark = false }) {
     setError('');
     try {
       await login(values.password, values.remember);
+      const from = location.state?.from;
+      navigate(from && from !== '/login' ? from : '/works', { replace: true });
     } catch (e) {
       const status = e.response?.status;
       if (status === 429) {

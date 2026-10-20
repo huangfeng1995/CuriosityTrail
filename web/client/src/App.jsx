@@ -1,33 +1,42 @@
-import React, { useState, useEffect } from 'react';
-import { Layout, theme, Button, Input, ConfigProvider, Switch, Typography, Spin } from 'antd';
-import { Sun, Moon, BookOpen, Settings as SettingsIcon, LogOut } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
 import {
-  FileTextOutlined,
-  PlusOutlined,
-  NodeIndexOutlined,
-  RobotOutlined,
-} from '@ant-design/icons';
-import Reports from './components/Reports';
-import Documents from './components/Documents';
-import Settings from './components/Settings';
-import SearchBar from './components/SearchBar';
-import KnowledgeGraph from './components/KnowledgeGraph';
-import AgentAssistant from './components/AgentAssistant';
-import Login from './pages/Login';
+  Layout,
+  theme,
+  Button,
+  ConfigProvider,
+  Typography,
+  Spin,
+  App as AntApp,
+} from 'antd';
+import {
+  Sun,
+  Moon,
+  Settings as SettingsIcon,
+  LogOut,
+  Library,
+  Feather,
+} from 'lucide-react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './store/auth';
+import { WorkspaceProvider } from './store/workspace';
+import Login from './pages/Login';
+import Works from './pages/Works';
+import Workspace from './pages/Workspace';
+import Materials from './pages/Materials';
+import SettingsPage from './pages/SettingsPage';
 
-const { Header, Sider, Content } = Layout;
+const { Header, Content } = Layout;
 const { Title } = Typography;
 
 const scholarlyLightTheme = {
   token: {
-    colorPrimary: '#1e3a5f',
-    colorPrimaryHover: '#2d4a6f',
-    colorPrimaryActive: '#152c46',
+    colorPrimary: '#3b6ea5',
+    colorPrimaryHover: '#4d80b7',
+    colorPrimaryActive: '#2d5888',
     colorBgBase: '#fefefe',
     colorBgContainer: '#ffffff',
     colorBgElevated: '#ffffff',
-    colorBgLayout: '#f8f9fa',
+    colorBgLayout: '#f7f8fa',
     colorText: '#111827',
     colorTextSecondary: '#6b7280',
     colorTextPlaceholder: '#9ca3af',
@@ -67,318 +76,174 @@ const scholarlyDarkTheme = {
   },
 };
 
+/**
+ * 未登录时把当前路径记下来，登录后跳回去。
+ */
+function RedirectToLogin() {
+  const location = useLocation();
+  return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+}
+
+/**
+ * 已登录后的应用外壳。
+ */
 function AppShell({ isDark, setIsDark }) {
   const { authenticated, checking, logout } = useAuth();
-  const [current, setCurrent] = useState('reports');
-  const [searchText, setSearchText] = useState('');
-  const [isMobile, setIsMobile] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 992);
-    };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
-
-  const menuItems = [
-    { key: 'reports', icon: <FileTextOutlined size={20} />, label: '探索报告' },
-    { key: 'agent', icon: <RobotOutlined size={20} />, label: 'AI 助手' },
-    { key: 'graph', icon: <NodeIndexOutlined size={20} />, label: '知识图谱' },
-    { key: 'documents', icon: <BookOpen size={20} />, label: '文献库' },
-    { key: 'settings', icon: <SettingsIcon size={20} />, label: '系统设置' },
+  const navItems = [
+    { key: '/works', icon: <Feather size={16} />, label: '作品' },
+    { key: '/materials', icon: <Library size={16} />, label: '素材库' },
+    { key: '/settings', icon: <SettingsIcon size={16} />, label: '设置' },
   ];
+
+  // 工作区自己占满整屏，不需要顶部导航
+  const isWorkspace = location.pathname.startsWith('/works/');
 
   if (checking) {
     return (
-      <div style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: isDark ? '#0f172a' : '#f8f9fa',
-      }}>
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: isDark ? '#0f172a' : '#f7f8fa',
+        }}
+      >
         <Spin size="large" />
       </div>
     );
   }
 
+  // 未登录时不显示应用外壳，登录页自带整屏布局
   if (!authenticated) {
-    return <Login isDark={isDark} />;
+    return (
+      <Routes>
+        <Route path="/login" element={<Login isDark={isDark} />} />
+        <Route path="*" element={<RedirectToLogin />} />
+      </Routes>
+    );
   }
 
   return (
-    <>
-      <Layout style={{ minHeight: '100vh', backgroundColor: isDark ? '#0f172a' : '#f8f9fa' }}>
-        {isMobile ? (
-          <>
-            <Header
-              style={{
-                padding: '0 16px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                background: isDark ? '#1f2937' : '#ffffff',
-                position: 'fixed',
-                top: 0,
-                left: 0,
-                right: 0,
-                zIndex: 100,
-                height: 64,
-                boxShadow: isDark ? '0 1px 3px rgba(0,0,0,0.4)' : '0 1px 3px rgba(0,0,0,0.08)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  background: isDark ? '#1e3a5f' : '#eef2ff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}>
-                  <span style={{ fontSize: 18 }}>🔬</span>
-                </div>
-                <div>
-                  <Title level={4} style={{ 
-                    margin: 0, 
-                    color: isDark ? '#f9fafb' : '#111827',
-                    fontSize: 18,
-                    fontWeight: 700,
-                    fontFamily: 'Noto Serif SC, serif',
-                  }}>
-                    Curiosity
-                  </Title>
-                  <div style={{ fontSize: 11, color: isDark ? '#6b7280' : '#9ca3af' }}>
-                    科学探索记录
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <Button
-                  type="text"
-                  icon={isDark ? <Sun size={18} /> : <Moon size={18} />}
-                  onClick={() => setIsDark(!isDark)}
-                  style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
-                />
-                  <Button
-                    type="text"
-                    icon={<LogOut size={18} />}
-                    onClick={logout}
-                    style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
-                  />
-              </div>
-            </Header>
+    <Layout style={{ minHeight: '100vh', background: isDark ? '#0f172a' : '#f7f8fa' }}>
+      <Header
+        style={{
+          padding: '0 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 16,
+          background: isDark ? '#1f2937' : '#ffffff',
+          borderBottom: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+          height: 56,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            cursor: 'pointer',
+            flex: 1,
+            minWidth: 0,
+          }}
+          onClick={() => navigate('/works')}
+        >
+          <span style={{ fontSize: 20 }}>✍️</span>
+          <Title
+            level={4}
+            style={{
+              margin: 0,
+              color: isDark ? '#f9fafb' : '#111827',
+              fontSize: 17,
+              fontWeight: 700,
+              fontFamily: 'Noto Serif SC, serif',
+            }}
+          >
+            Curiosity
+          </Title>
+        </div>
 
-            <Content
-              style={{
-                marginTop: 64,
-                marginBottom: 70,
-                padding: 16,
-                background: isDark ? '#0f172a' : '#f8f9fa',
-                minHeight: 'calc(100vh - 134px)',
-              }}
-            >
-              {current === 'reports' && <Reports searchText={searchText} isDark={isDark} />}
-              {current === 'agent' && <AgentAssistant isDark={isDark} />}
-              {current === 'graph' && <KnowledgeGraph isDark={isDark} />}
-              {current === 'documents' && <Documents searchText={searchText} isDark={isDark} />}
-              {current === 'settings' && <Settings isDark={isDark} />}
-            </Content>
-
-            <div
-              style={{
-                position: 'fixed',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                background: isDark ? '#1f2937' : '#ffffff',
-                borderTop: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-                display: 'flex',
-                justifyContent: 'space-around',
-                padding: '8px 0',
-                zIndex: 100,
-              }}
-            >
-              {menuItems.map((item) => (
-                <div
-                  key={item.key}
-                  onClick={() => setCurrent(item.key)}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    cursor: 'pointer',
-                    padding: '6px 16px',
-                    color: current === item.key ? (isDark ? '#60a5fa' : '#1e3a5f') : (isDark ? '#6b7280' : '#9ca3af'),
-                    transition: 'all 0.2s ease',
-                    transform: current === item.key ? 'scale(1.05)' : 'scale(1)',
-                  }}
-                >
-                  <div style={{ marginBottom: 4 }}>{item.icon}</div>
-                  <div style={{ fontSize: 11, fontWeight: current === item.key ? 600 : 400 }}>
-                    {item.label}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <>
-            <Sider
-              width={260}
-              style={{
-                position: 'fixed',
-                left: 0,
-                top: 0,
-                bottom: 0,
-                background: isDark ? '#1f2937' : '#ffffff',
-                borderRight: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-              }}
-            >
-              <div style={{ 
-                padding: '24px', 
-                borderBottom: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{
-                    width: 42,
-                    height: 42,
-                    borderRadius: 12,
-                    background: isDark ? '#1e3a5f' : '#eef2ff',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}>
-                    <span style={{ fontSize: 22 }}>🔬</span>
-                  </div>
-                  <div>
-                    <Title level={4} style={{ 
-                      margin: 0, 
-                      color: isDark ? '#f9fafb' : '#111827',
-                      fontSize: 22,
-                      fontWeight: 700,
-                      fontFamily: 'Noto Serif SC, serif',
-                    }}>
-                      Curiosity
-                    </Title>
-                    <div style={{ fontSize: 12, color: isDark ? '#6b7280' : '#9ca3af', marginTop: 4 }}>
-                      科学探索记录工具
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ padding: '12px' }}>
-                {menuItems.map((item) => (
-                  <div
-                    key={item.key}
-                    onClick={() => setCurrent(item.key)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      padding: '12px 16px',
-                      marginBottom: 4,
-                      borderRadius: 8,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                      background: current === item.key ? (isDark ? '#1e3a5f' : '#eef2ff') : 'transparent',
-                      color: current === item.key ? (isDark ? '#f9fafb' : '#1e3a5f') : (isDark ? '#d1d5db' : '#4b5563'),
-                      fontWeight: current === item.key ? 600 : 400,
-                    }}
-                  >
-                    <span style={{ marginRight: 12 }}>{item.icon}</span>
-                    <span style={{ fontSize: 14 }}>{item.label}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div style={{
-                position: 'absolute',
-                bottom: 24,
-                left: 0,
-                right: 0,
-                padding: '0 24px',
-              }}>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '12px 16px',
-                  background: isDark ? '#111827' : '#f8f9fa',
-                  borderRadius: 8,
-                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {isDark ? <Moon size={16} /> : <Sun size={16} />}
-                    <span style={{
-                      color: isDark ? '#9ca3af' : '#6b7280',
-                      fontSize: 13,
-                    }}>
-                      {isDark ? '深色模式' : '浅色模式'}
-                    </span>
-                  </div>
-                  <Switch
-                    checked={isDark}
-                    onChange={setIsDark}
-                    size="small"
-                  />
-                </div>
-              </div>
-            </Sider>
-
-            <Layout style={{ marginLeft: 260 }}>
-              <Header
+        {!isWorkspace && (
+          <div style={{ display: 'flex', gap: 4 }}>
+            {navItems.map((item) => (
+              <Button
+                key={item.key}
+                type="text"
+                size="small"
+                icon={item.icon}
+                onClick={() => navigate(item.key)}
                 style={{
-                  padding: '0 32px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'flex-end',
-                  background: isDark ? '#1f2937' : '#ffffff',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 10,
-                  borderBottom: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-                  height: 64,
-                  gap: 16,
+                  color:
+                    location.pathname === item.key
+                      ? isDark
+                        ? '#60a5fa'
+                        : '#3b6ea5'
+                      : isDark
+                        ? '#9ca3af'
+                        : '#6b7280',
                 }}
               >
-                {current === 'reports' && (
-                  <SearchBar
-                    value={searchText}
-                    onChange={setSearchText}
-                    isDark={isDark}
-                  />
-                )}
-                <Button
-                  type="text"
-                  icon={<LogOut size={18} />}
-                  onClick={logout}
-                  style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
-                />
-              </Header>
-
-              <Content
-                style={{
-                  margin: 0,
-                  padding: '32px',
-                  background: isDark ? '#0f172a' : '#f8f9fa',
-                  minHeight: 'calc(100vh - 64px)',
-                }}
-              >
-                {current === 'reports' && <Reports searchText={searchText} isDark={isDark} />}
-                {current === 'agent' && <AgentAssistant isDark={isDark} />}
-                {current === 'graph' && <KnowledgeGraph isDark={isDark} />}
-                {current === 'documents' && <Documents searchText={searchText} isDark={isDark} />}
-                {current === 'settings' && <Settings isDark={isDark} />}
-              </Content>
-            </Layout>
-          </>
+                {item.label}
+              </Button>
+            ))}
+          </div>
         )}
-      </Layout>
-    </>
+
+        <Button
+          type="text"
+          icon={isDark ? <Sun size={16} /> : <Moon size={16} />}
+          onClick={() => setIsDark(!isDark)}
+          style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
+        />
+        <Button
+          type="text"
+          icon={<LogOut size={16} />}
+          onClick={logout}
+          style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
+        />
+      </Header>
+
+      <Content style={{ height: 'calc(100vh - 56px)', overflow: 'auto' }}>
+        <Routes>
+          <Route
+            path="/works"
+            element={
+              <div style={{ padding: '28px 24px' }}>
+                <Works />
+              </div>
+            }
+          />
+          <Route
+            path="/works/:workId"
+            element={
+              <WorkspaceProvider>
+                <Workspace />
+              </WorkspaceProvider>
+            }
+          />
+          <Route
+            path="/materials"
+            element={
+              <div style={{ padding: '28px 24px' }}>
+                <Materials />
+              </div>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <div style={{ padding: '28px 24px' }}>
+                <SettingsPage />
+              </div>
+            }
+          />
+          <Route path="*" element={<Navigate to="/works" replace />} />
+        </Routes>
+      </Content>
+    </Layout>
   );
 }
 
@@ -386,10 +251,8 @@ function App() {
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme) {
-      setIsDark(savedTheme === 'dark');
-    }
+    const saved = localStorage.getItem('theme');
+    if (saved) setIsDark(saved === 'dark');
   }, []);
 
   useEffect(() => {
@@ -403,9 +266,13 @@ function App() {
         ...(isDark ? scholarlyDarkTheme : scholarlyLightTheme),
       }}
     >
-      <AuthProvider>
-        <AppShell isDark={isDark} setIsDark={setIsDark} />
-      </AuthProvider>
+      <AntApp>
+        <BrowserRouter>
+          <AuthProvider>
+            <AppShell isDark={isDark} setIsDark={setIsDark} />
+          </AuthProvider>
+        </BrowserRouter>
+      </AntApp>
     </ConfigProvider>
   );
 }

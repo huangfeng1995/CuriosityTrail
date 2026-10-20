@@ -45,14 +45,15 @@ app.use(fileUpload());
 // 路由
 // ---------------------------------------------------------------------------
 const authRouter = require('./routes/auth');
-const categoriesRouter = require('./routes/categories');
-const reportsRouter = require('./routes/reports');
-const documentsRouter = require('./routes/documents');
+const worksRouter = require('./routes/works');
+const chaptersRouter = require('./routes/chapters');
+const charactersRouter = require('./routes/characters');
+const settingsRouter = require('./routes/settings');
+const materialsRouter = require('./routes/materials');
+const inspirationsRouter = require('./routes/inspirations');
+const aiRouter = require('./routes/ai');
+const configRouter = require('./routes/config');
 const exportRouter = require('./routes/export');
-const graphRouter = require('./routes/graph');
-const agentRouter = require('./routes/agent');
-const translateRouter = require('./routes/translate');
-const aiConfigRouter = require('./routes/aiConfig');
 const uploadRouter = require('./routes/upload');
 
 // 公开路由：健康检查与登录（登录自带限流）
@@ -64,14 +65,15 @@ app.use('/api/auth', authRouter);
 // 其余 API 一律要求登录
 app.use('/api', apiLimiter, requireAuth);
 
-app.use('/api/categories', categoriesRouter);
-app.use('/api/reports', reportsRouter);
-app.use('/api/documents', documentsRouter);
+app.use('/api/works', worksRouter);
+app.use('/api/chapters', chaptersRouter);
+app.use('/api/characters', charactersRouter);
+app.use('/api/settings', settingsRouter);
+app.use('/api/materials', materialsRouter);
+app.use('/api/inspirations', inspirationsRouter);
+app.use('/api/ai', aiLimiter, aiRouter);
+app.use('/api/config', aiLimiter, configRouter);
 app.use('/api/export', exportRouter);
-app.use('/api/graph', graphRouter);
-app.use('/api/agent', aiLimiter, agentRouter);
-app.use('/api/translate', aiLimiter, translateRouter);
-app.use('/api/ai-config', aiLimiter, aiConfigRouter);
 app.use('/api/upload', uploadRouter);
 
 // 图片目录同样纳入鉴权
