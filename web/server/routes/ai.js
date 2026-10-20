@@ -18,6 +18,7 @@ const aiConfig = require('../services/aiConfig');
 const { resolveProvider, checkAllProviders } = require('../services/providers');
 const { assembleContext } = require('../services/context');
 const roles = require('../services/roles');
+const localSearch = require('../services/search/local');
 
 const router = express.Router();
 
@@ -76,6 +77,8 @@ function normalizeAction(payload) {
           title: String(c.title || ''),
           snippet: String(c.snippet || ''),
           url: String(c.url || ''),
+          // 站内素材的 id：前端靠它跳回素材详情
+          materialId: c.materialId ? String(c.materialId) : '',
         }))
     : [];
 
@@ -109,6 +112,86 @@ async function ensureConversation(conversationId, workId, title) {
 }
 
 // ---------------------------------------------------------------------------
+// 站内素材检索
+// ---------------------------------------------------------------------------
+
+/**
+ * 作者明确表达"找/查/搜"意图的信号词。
+ * 资料员角色不需要信号——它的本职就是检索。
+ */
+const SEARCH_INTENT = [
+  '找找', '查找', '搜', '搜索', '查一下', '查查', '有没有', '有吗',
+  '素材', '资料', '参考', '出处', '来源', '原文', '典故', '引用',
+];
+
+/**
+ * 判断这次提问是否需要检索素材库。
+ */
+function needsRetrieval(roleKey, message) {
+  if (roleKey === 'researcher') return true;
+  return SEARCH_INTENT.some((word) => message.includes(word));
+}
+
+/**
+ * 检索素材库并归一化成上下文装配器认识的片段格式。
+ *
+ * 站内检索是纯关键词匹配，召回的是"候选"——真正相关的片段由模型二次筛选，
+ * 所以这里放宽召回、限制条数，把判断权交给模型。
+ *
+ * @returns {Promise<Array<{title, snippet, source, sourceUrl, materialId}>>}
+ */
+async function runRetrieval(roleKey, message, existing) {
+  if (!needsRetrieval(roleKey, message)) return existing;
+
+  let results = await localSearch.searchLoose(message, { limit: 4 });
+
+  // "素材库里有什么能用的"这类问法没有具体检索目标，关键词必然零命中。
+  // 这时候给模型最近更新的几条，让它自己去判断哪条用得上。
+  if (!results.length && localSearch.isGenericQuery(message)) {
+    results = await localSearch.recent(4);
+  }
+
+  if (!results.length) return existing;
+
+  const fragments = results.map((r) => ({
+    title: r.title,
+    snippet: r.snippet,
+    source: r.source,
+    sourceUrl: r.sourceUrl,
+    materialId: r.id,
+  }));
+
+  // 调用方已经带了片段（用户手动指定的），以手动的为准
+  return existing.length ? existing : fragments;
+}
+
+/**
+ * 把检索到的素材补进引用列表。
+ *
+ * 模型自己写的 citations 只覆盖它"用到了"的部分，但作者需要知道
+ * "系统查到了哪些、查到了什么"。这里把检索到的素材一并附上，
+ * 保证每条素材都带可点开的来源。
+ */
+function mergeCitations(modelCitations, fragments) {
+  const list = Array.isArray(modelCitations) ? [...modelCitations] : [];
+  const seen = new Set(list.map((c) => c.materialId || c.url || c.title));
+
+  for (const fragment of fragments) {
+    if (!fragment?.materialId) continue;
+    if (seen.has(fragment.materialId)) continue;
+    seen.add(fragment.materialId);
+    list.push({
+      source: fragment.source || '素材库',
+      title: fragment.title,
+      snippet: fragment.snippet,
+      url: fragment.sourceUrl || '',
+      materialId: fragment.materialId,
+    });
+  }
+  return list;
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/ai/chat —— 侧边栏对话，SSE
 // ---------------------------------------------------------------------------
 router.post('/chat', async (req, res) => {
@@ -119,9 +202,9 @@ router.post('/chat', async (req, res) => {
     roleKey = 'writer',
     conversationId,
     scope = 'chapter',
-    retrieval = [],
     blocks,
   } = req.body || {};
+  let retrieval = Array.isArray(req.body?.retrieval) ? req.body.retrieval : [];
 
   if (!message || !String(message).trim()) {
     return res.status(400).json({ error: '消息内容不能为空' });
@@ -138,6 +221,13 @@ router.post('/chat', async (req, res) => {
   };
 
   try {
+    // 站内素材检索：资料员角色总会搜；其他角色在作者明确要"找/查"时也搜。
+    // 检索结果既进上下文，也作为引用的兜底来源。
+    const searched = await runRetrieval(roleKey, String(message), retrieval);
+    if (searched.length) {
+      retrieval = searched;
+    }
+
     const { messages, meta } = await assembleContext({
       workId,
       chapterId,
@@ -202,6 +292,9 @@ router.post('/chat', async (req, res) => {
       payload.action = 'comment';
       payload.content = rawText.trim();
     }
+
+    // 检索到的素材补进引用：作者要看到"查到了什么、从哪来的"
+    payload.citations = mergeCitations(payload.citations, retrieval);
 
     // 保存助手消息
     const messageId = crypto.randomUUID();

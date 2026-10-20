@@ -1,6 +1,13 @@
-import React, { useEffect, useRef, useCallback } from 'react';
-import { Typography } from 'antd';
-import { DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
+import { Typography, Upload, Button, Dropdown, message } from 'antd';
+import {
+  DeleteOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
+  PictureOutlined,
+  SwapOutlined,
+} from '@ant-design/icons';
+import { BLOCK_TYPES, BLOCK_TYPE_MAP } from './blocks';
 
 const { Text } = Typography;
 
@@ -41,8 +48,10 @@ export default function Block({
   onSelect,
   onDelete,
   onMove,
+  onConvert,
 }) {
   const textRef = useAutoHeight(block.content);
+  const [uploading, setUploading] = useState(false);
 
   const handleSelect = (e) => {
     const el = e.target;
@@ -55,6 +64,30 @@ export default function Block({
       end,
       text: el.value.slice(start, end),
     });
+  };
+
+  /**
+   * 插图上传。图片落在服务器 data/uploads 下，块里只存相对 URL。
+   */
+  const uploadImage = async (file) => {
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const res = await fetch('/api/upload/image', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '上传失败');
+      onChange({ url: data.url, fileName: data.filename });
+      message.success('插图已插入');
+    } catch (e) {
+      message.error(e.message || '上传失败');
+    } finally {
+      setUploading(false);
+    }
   };
 
   const renderBody = () => {
@@ -149,24 +182,73 @@ export default function Block({
       case 'image':
         return (
           <div>
-            {block.url && (
-              <img
-                src={block.url}
-                alt={block.content || block.fileName || '插图'}
-                style={{
-                  maxWidth: '100%',
-                  borderRadius: 8,
-                  marginBottom: 8,
-                  display: 'block',
+            {block.url ? (
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <img
+                  src={block.url}
+                  alt={block.content || block.fileName || '插图'}
+                  style={{
+                    maxWidth: '100%',
+                    borderRadius: 8,
+                    marginBottom: 8,
+                    display: 'block',
+                  }}
+                />
+                <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                  <Upload
+                    accept="image/*"
+                    showUploadList={false}
+                    withCredentials
+                    customRequest={async ({ file, onSuccess, onError }) => {
+                      try {
+                        await uploadImage(file);
+                        onSuccess?.();
+                      } catch (e) {
+                        onError?.(e);
+                      }
+                    }}
+                  >
+                    <Button size="small" icon={<SwapOutlined />} loading={uploading}>
+                      换图
+                    </Button>
+                  </Upload>
+                  <Button
+                    size="small"
+                    icon={<DeleteOutlined />}
+                    onClick={() => onChange({ url: '', fileName: '' })}
+                  >
+                    移除
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Upload.Dragger
+                accept="image/*"
+                showUploadList={false}
+                withCredentials
+                disabled={uploading}
+                customRequest={async ({ file, onSuccess, onError }) => {
+                  try {
+                    await uploadImage(file);
+                    onSuccess?.();
+                  } catch (e) {
+                    onError?.(e);
+                  }
                 }}
-              />
+                style={{ padding: '16px 0', marginBottom: 8, background: 'transparent' }}
+              >
+                <PictureOutlined style={{ fontSize: 22, opacity: 0.45 }} />
+                <div style={{ fontSize: 13, opacity: 0.7, marginTop: 6 }}>
+                  点击或拖拽图片到此处插入插图
+                </div>
+              </Upload.Dragger>
             )}
             <textarea
               ref={textRef}
               value={block.content}
               onChange={(e) => onChange({ content: e.target.value })}
               onFocus={onFocus}
-              placeholder="图注，或用工具栏上传插图…"
+              placeholder="图注…"
               style={{
                 width: '100%',
                 border: 'none',
@@ -263,12 +345,28 @@ export default function Block({
           right: -76,
           display: 'flex',
           gap: 2,
+          alignItems: 'center',
           opacity: 0.35,
           transition: 'opacity 0.15s ease',
         }}
         onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
         onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.35)}
       >
+        <Dropdown
+          trigger={['click']}
+          menu={{
+            items: BLOCK_TYPES.map((t) => ({
+              key: t.type,
+              label: t.label,
+              disabled: t.type === block.type,
+              onClick: () => onConvert?.(block.id, t.type),
+            })),
+          }}
+        >
+          <button title="转为其他块类型" style={{ ...iconButtonStyle(false), width: 30, fontSize: 11 }}>
+            {BLOCK_TYPE_MAP.get(block.type)?.label || '?'}
+          </button>
+        </Dropdown>
         <button
           title="上移"
           disabled={index === 0}

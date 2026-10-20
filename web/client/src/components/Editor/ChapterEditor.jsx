@@ -23,6 +23,7 @@ export default function ChapterEditor() {
     updateBlock,
     insertBlock,
     removeBlock,
+    convertBlock,
     moveBlock,
     dispatch,
   } = useWorkspace();
@@ -91,6 +92,15 @@ export default function ChapterEditor() {
       moveBlock(id, offset);
     },
     [pushUndo, moveBlock]
+  );
+
+  const handleConvert = useCallback(
+    (id, type) => {
+      pushUndo();
+      convertBlock(id, type);
+      setSaveHint('已转换');
+    },
+    [pushUndo, convertBlock]
   );
 
   const handleAdd = useCallback(
@@ -295,6 +305,7 @@ export default function ChapterEditor() {
               onSelect={(sel) => dispatch({ type: 'selection/set', selection: sel })}
               onDelete={() => handleDelete(block.id)}
               onMove={(offset) => handleMove(block.id, offset)}
+              onConvert={(id, type) => handleConvert(id, type)}
             />
           ))}
 

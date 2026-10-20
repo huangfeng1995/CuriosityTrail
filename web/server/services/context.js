@@ -27,6 +27,8 @@ const OUTLINE_LIMIT = 4000;
 const CONTINUITY_LIMIT = 500;
 /** 单章正文全文注入的字符上限 */
 const CONTENT_LIMIT = 12000;
+/** 灵感速记最多注入多少条 */
+const INSPIRATION_LIMIT = 10;
 
 /**
  * 解析章节的 blocks JSON。
@@ -228,6 +230,7 @@ async function assembleContext(params = {}) {
     chapter: null,
     characters: [],
     settings: [],
+    inspirations: 0,
     retrievalCount: retrieval.length,
   };
 
@@ -310,6 +313,27 @@ async function assembleContext(params = {}) {
       systemParts.push(
         `## 世界观设定\n${selected.map(formatSetting).join('\n\n')}`
       );
+    }
+  }
+
+  // ---- 5.5 灵感层 ----
+  // 作者随手记下的念头，是最"私人"的素材：不会被通用检索命中，
+  // 但恰恰是灵感师该先看的。仅注入未消费的。
+  if (workId) {
+    const inspirations = await all(
+      `SELECT * FROM inspirations
+       WHERE consumed = 0
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [INSPIRATION_LIMIT]
+    );
+    meta.inspirations = inspirations.length;
+
+    if (inspirations.length) {
+      const lines = inspirations.map(
+        (i, idx) => `[灵${idx + 1}] ${i.text}${i.tags ? `（${i.tags}）` : ''}`
+      );
+      systemParts.push(`## 作者的灵感速记\n${lines.join('\n')}`);
     }
   }
 

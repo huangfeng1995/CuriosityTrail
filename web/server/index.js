@@ -11,11 +11,12 @@ const config = require('./config');
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const fileUpload = require('express-fileupload');
 
 const { requireAuth } = require('./middleware/auth');
 const { aiLimiter, apiLimiter } = require('./middleware/rateLimit');
 const { checkSingleInstance } = require('./middleware/singleInstance');
+const { ready } = require('./database');
+const localSearch = require('./services/search/local');
 
 // ---------------------------------------------------------------------------
 // 单实例校验：多实例并发写 SQLite 会损坏数据库，稿子全丢
@@ -39,7 +40,6 @@ if (config.enableCors) {
 }
 
 app.use(express.json({ limit: '10mb' }));
-app.use(fileUpload());
 
 // ---------------------------------------------------------------------------
 // 路由
@@ -111,3 +111,12 @@ app.listen(PORT, () => {
     );
   }
 });
+
+// 素材全文索引：启动时全量重建一次，保证索引与业务表一致。
+// 索引重建是应用层行为（bigram 化），所以放这里而不是触发器。
+ready
+  .then(() => localSearch.rebuildIndex())
+  .then((count) => {
+    if (count) console.log(`   素材索引: 已重建 ${count} 条`);
+  })
+  .catch((err) => console.error('素材索引重建失败：', err.message));

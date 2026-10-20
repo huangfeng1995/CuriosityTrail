@@ -52,6 +52,43 @@ export function blockText(block) {
 }
 
 /**
+ * 转换块类型。
+ *
+ * 正文内容一律保留；只有类型专属字段按新类型补齐或清掉——
+ * 比如对白转正文要把"说话人"并进正文，否则那句"陈默："会凭空消失。
+ */
+export function convertBlock(block, type) {
+  if (!block || block.type === type) return block;
+
+  let content = block.content || '';
+  let speaker = block.speaker;
+  let url = block.url;
+  let fileName = block.fileName;
+
+  if (block.type === 'dialogue' && type !== 'dialogue' && speaker) {
+    content = `${speaker}：${content}`;
+    speaker = undefined;
+  }
+
+  if (type === 'dialogue' && !speaker) {
+    speaker = '';
+  }
+  if (type === 'image' && !url) {
+    url = '';
+    fileName = '';
+  }
+  if (type !== 'image') {
+    url = undefined;
+    fileName = undefined;
+  }
+  if (type === 'scene_break') {
+    content = '';
+  }
+
+  return { ...block, type, content, speaker, url, fileName };
+}
+
+/**
  * 章节的纯文本，用于展示字数。
  */
 export function chapterText(blocks) {

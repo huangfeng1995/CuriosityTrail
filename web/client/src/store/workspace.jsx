@@ -8,6 +8,7 @@ import React, {
   useMemo,
 } from 'react';
 import api from '../api/client';
+import { convertBlock as convertBlockData } from '../components/Editor/blocks';
 
 /**
  * 工作区全局状态。
@@ -73,6 +74,13 @@ function reducer(state, action) {
 
     case 'blocks/remove': {
       const blocks = state.blocks.filter((b) => b.id !== action.id);
+      return { ...state, blocks };
+    }
+
+    case 'blocks/convert': {
+      const blocks = state.blocks.map((b) =>
+        b.id === action.id ? action.block : b
+      );
       return { ...state, blocks };
     }
 
@@ -208,6 +216,13 @@ export function WorkspaceProvider({ children }) {
     dispatch({ type: 'blocks/remove', id });
   }, []);
 
+  const convertBlock = useCallback((id, type) => {
+    const target = stateRef.current.blocks.find((b) => b.id === id);
+    if (!target) return;
+    dirtyRef.current = true;
+    dispatch({ type: 'blocks/convert', id, block: convertBlockData(target, type) });
+  }, []);
+
   const moveBlock = useCallback((id, offset) => {
     dirtyRef.current = true;
     dispatch({ type: 'blocks/move', id, offset });
@@ -259,6 +274,7 @@ export function WorkspaceProvider({ children }) {
       updateBlock,
       insertBlock,
       removeBlock,
+      convertBlock,
       moveBlock,
       loadWork,
       loadChapter,
@@ -269,6 +285,7 @@ export function WorkspaceProvider({ children }) {
       updateBlock,
       insertBlock,
       removeBlock,
+      convertBlock,
       moveBlock,
       loadWork,
       loadChapter,

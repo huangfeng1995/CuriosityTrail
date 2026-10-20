@@ -41,6 +41,7 @@ const ALL_TABLES = [
   'characters',
   'settings',
   'materials',
+  'materials_fts',
   'inspirations',
   'conversations',
   'messages',
@@ -120,6 +121,22 @@ CREATE TABLE IF NOT EXISTS materials (
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
+
+-- 素材全文索引。存的是 bigram 化后的文本（见 services/search/local.js），
+-- 所以用普通 FTS5 表而非 external content 表——external content 模式下
+-- 索引内容必须与 materials 原文一致，bigram 化后就不再一致了。
+-- rowid 对齐 materials.rid，业务 id 另存一列供回查。
+CREATE VIRTUAL TABLE IF NOT EXISTS materials_fts USING fts5(
+  title, body, tags,
+  material_id UNINDEXED,
+  tokenize='unicode61'
+);
+
+-- 素材删除时清掉索引残留。
+-- 写入/更新不在这里做触发器：bigram 转换只能由应用层完成（设计文档 §3.3 方案 B）。
+CREATE TRIGGER IF NOT EXISTS materials_ad AFTER DELETE ON materials BEGIN
+  DELETE FROM materials_fts WHERE rowid = old.rid;
+END;
 
 -- 灵感速记
 CREATE TABLE IF NOT EXISTS inspirations (

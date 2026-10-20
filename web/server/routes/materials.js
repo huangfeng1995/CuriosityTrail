@@ -20,6 +20,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const config = require('../config');
 const { all, get, run } = require('../database');
+const localSearch = require('../services/search/local');
 
 const router = express.Router();
 const now = () => new Date().toISOString();
@@ -66,6 +67,30 @@ router.get('/', async (req, res) => {
   }
 });
 
+/**
+ * 全文检索素材。走 FTS5 + bigram 索引，带命中片段。
+ *
+ * 两层策略：先精确（多词元 AND），命中不了再退回宽松（宽召回 + 打分）。
+ * 作者既会搜"雨夜 巷子"这种关键词组合，也会整句问"有没有适合写雨夜追逐的环境描写"，
+ * 只用 AND 的话后者必然零命中。
+ */
+router.get('/search', async (req, res) => {
+  const { q, limit } = req.query;
+  if (!q || !String(q).trim()) {
+    return res.json([]);
+  }
+  const max = Math.min(Number(limit) || 10, 30);
+  try {
+    let results = await localSearch.search(String(q), { limit: max });
+    if (!results.length) {
+      results = await localSearch.searchLoose(String(q), { limit: max });
+    }
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   const { title, body, source, sourceUrl, tags } = req.body || {};
   if (!title || !String(title).trim()) {
@@ -90,7 +115,9 @@ router.post('/', async (req, res) => {
         ts,
       ]
     );
-    res.json(await get('SELECT * FROM materials WHERE id = ?', [id]));
+    const created = await get('SELECT * FROM materials WHERE id = ?', [id]);
+    await localSearch.indexMaterial(created);
+    res.json(created);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -117,6 +144,10 @@ router.post('/upload', upload.array('files'), async (req, res) => {
         [id, title, body, ext === '.pdf' ? 'PDF' : '文件', file.path, body.length, ts, ts]
       );
       results.push(await get('SELECT * FROM materials WHERE id = ?', [id]));
+    }
+    // 上传的文件同样要进索引，否则检索不到
+    for (const material of results) {
+      await localSearch.indexMaterial(material);
     }
     res.json(results);
   } catch (err) {
@@ -168,7 +199,9 @@ router.put('/:id', async (req, res) => {
         req.params.id,
       ]
     );
-    res.json(await get('SELECT * FROM materials WHERE id = ?', [req.params.id]));
+    const updated = await get('SELECT * FROM materials WHERE id = ?', [req.params.id]);
+    await localSearch.indexMaterial(updated);
+    res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

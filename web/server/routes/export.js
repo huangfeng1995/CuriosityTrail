@@ -15,6 +15,7 @@ const path = require('path');
 const fs = require('fs');
 const archiver = require('archiver');
 const AdmZip = require('adm-zip');
+const fileUpload = require('express-fileupload');
 const config = require('../config');
 const { all, get } = require('../database');
 
@@ -37,12 +38,16 @@ function blocksToParagraphs(chapter) {
     return (chapter.content || '').split(/\n{2,}/).filter(Boolean);
   }
   return blocks
-    .filter((b) => b && b.content)
+    .filter((b) => b && (b.content || b.type === 'image' || b.type === 'scene_break'))
     .map((b) => {
       if (b.type === 'scene_break') return '---';
       if (b.type === 'dialogue') return b.speaker ? `「${b.content}」——${b.speaker}` : `「${b.content}」`;
       if (b.type === 'setting_ref') return `〔设定：${b.content}〕`;
-      if (b.type === 'image') return b.fileName ? `〔插图：${b.content || b.fileName}〕` : `〔插图：${b.content}〕`;
+      if (b.type === 'image') {
+        const caption = b.content || b.fileName || '插图';
+        // 导出的是相对路径，随备份 zip 一起带走
+        return b.url ? `![${caption}](${b.url})` : `〔插图：${caption}〕`;
+      }
       return b.content;
     });
 }
@@ -160,7 +165,11 @@ router.get('/backup', async (req, res) => {
   archive.finalize();
 });
 
-router.post('/restore', async (req, res) => {
+// 备份恢复要读整个 zip 进内存（req.files.backup.data）。
+// express-fileupload 会消费 multipart 流，与 multer 冲突，
+// 所以它只挂在这一个路由上，不能做全局中间件——
+// 否则图片上传（upload.js）和素材导入（materials.js）的 multer 会拿到空流。
+router.post('/restore', fileUpload(), async (req, res) => {
   if (!req.files || !req.files.backup) {
     return res.status(400).json({ error: '请选择备份文件' });
   }

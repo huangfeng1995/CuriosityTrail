@@ -7,6 +7,8 @@ import AssistantSidebar from '../components/Assistant/Sidebar';
 import WorkTree from '../components/Sidebar/WorkTree';
 import CharacterPanel from '../components/Sidebar/CharacterPanel';
 import SettingPanel from '../components/Sidebar/SettingPanel';
+import WorkInfoPanel from '../components/Sidebar/WorkInfoPanel';
+import InspirationPanel from '../components/Sidebar/InspirationPanel';
 
 /**
  * 三栏工作区。
@@ -63,6 +65,21 @@ export default function Workspace() {
             key: 'settings',
             label: '设定',
             children: <SettingPanel workId={work?.id} />,
+          },
+          {
+            key: 'work',
+            label: '作品',
+            children: (
+              <WorkInfoPanel
+                work={work}
+                onSaved={() => loadWork(work.id)}
+              />
+            ),
+          },
+          {
+            key: 'inspirations',
+            label: '灵感',
+            children: <InspirationPanel />,
           },
         ]}
       />
