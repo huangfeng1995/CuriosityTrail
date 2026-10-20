@@ -1,86 +1,66 @@
 const MiniMaxTranslationService = require('./minimaxTranslation');
 const OllamaTranslationService = require('./ollamaTranslation');
 const LlamaCppTranslationService = require('./llamaCppTranslation');
+const aiConfig = require('../aiConfig');
 
 class TranslationManager {
   constructor() {
     this.services = {
       minimax: null,
       ollama: null,
-      llamaCpp: null,
+      llamacpp: null,
     };
-    this.currentService = 'ollama';
-    this.settings = {
-      service: 'ollama',
-      minimax: {
-        apiKey: '',
-        groupId: '',
-      },
-      ollama: {
-        baseUrl: 'http://localhost:11434',
-        model: 'llama3.2:3b',
-      },
-      llamaCpp: {
-        modelPath: '/Users/openclaw/Downloads/qwen2_05b_int4.gguf',
-        temperature: 0.3,
-      },
-      defaultTargetLang: 'zh',
-    };
-  }
-
-  initialize(settings = {}) {
-    if (settings.minimax) {
-      this.settings.minimax = {
-        ...this.settings.minimax,
-        ...settings.minimax,
-      };
-      this.services.minimax = new MiniMaxTranslationService(
-        this.settings.minimax.apiKey,
-        this.settings.minimax.groupId
-      );
-    }
-
-    if (settings.ollama) {
-      this.settings.ollama = {
-        ...this.settings.ollama,
-        ...settings.ollama,
-      };
-      this.services.ollama = new OllamaTranslationService(
-        this.settings.ollama.baseUrl,
-        this.settings.ollama.model
-      );
-    }
-
-    if (settings.llamaCpp) {
-      this.settings.llamaCpp = {
-        ...this.settings.llamaCpp,
-        ...settings.llamaCpp,
-      };
-      this.services.llamaCpp = new LlamaCppTranslationService(
-        this.settings.llamaCpp.modelPath,
-        this.settings.llamaCpp.temperature
-      );
-    }
-
-    if (settings.service) {
-      this.settings.service = settings.service;
-      this.currentService = settings.service;
-    }
-
-    if (settings.defaultTargetLang) {
-      this.settings.defaultTargetLang = settings.defaultTargetLang;
-    }
   }
 
   getCurrentService() {
-    const serviceName = this.currentService;
-    const service = this.services[serviceName];
-
+    const config = aiConfig.getConfig();
+    const serviceName = config.translationService;
+    
+    // 如果翻译服务没有设置，默认使用聊天服务
+    const effectiveService = serviceName || config.chatService;
+    
+    // 确保服务已初始化
+    this.ensureServiceInitialized(effectiveService);
+    
+    const service = this.services[effectiveService];
+    
     if (!service) {
-      throw new Error(`翻译服务 ${serviceName} 未初始化`);
+      throw new Error(`翻译服务 ${effectiveService} 未初始化`);
     }
-
+    
     return service;
+  }
+
+  ensureServiceInitialized(serviceName) {
+    const config = aiConfig.getConfig();
+
+    try {
+      if (serviceName === 'minimax' && !this.services.minimax) {
+        if (config.minimax.apiKey && config.minimax.groupId) {
+          this.services.minimax = new MiniMaxTranslationService(
+            config.minimax.apiKey,
+            config.minimax.groupId
+          );
+        }
+      } else if (serviceName === 'ollama' && !this.services.ollama) {
+        if (config.ollama.baseUrl) {
+          this.services.ollama = new OllamaTranslationService(
+            config.ollama.baseUrl,
+            config.ollama.model
+          );
+        }
+      } else if (serviceName === 'llamacpp' && !this.services.llamacpp) {
+        if (config.llamacpp.modelPath) {
+          // 先不立即初始化，避免 ESM 模块问题
+          this.services.llamacpp = new LlamaCppTranslationService(
+            config.llamacpp.modelPath,
+            config.llamacpp.temperature
+          );
+        }
+      }
+    } catch (error) {
+      console.error(`初始化翻译服务 ${serviceName} 失败:`, error);
+    }
   }
 
   async translate(text, targetLang, sourceLang = 'auto') {
@@ -105,110 +85,83 @@ class TranslationManager {
   }
 
   async checkAllServicesStatus() {
+    const config = aiConfig.getConfig();
     const status = {
-      current: this.currentService,
+      current: config.translationService || config.chatService,
       services: {},
     };
 
-    for (const [name, service] of Object.entries(this.services)) {
-      if (service) {
-        try {
-          status.services[name] = await service.checkStatus();
-        } catch (error) {
-          status.services[name] = {
-            available: false,
-            error: error.message,
-          };
+    // 检查 MiniMax - 不实际初始化
+    if (config.minimax.apiKey && config.minimax.groupId) {
+      try {
+        status.services.minimax = {
+          available: true,
+          message: 'MiniMax API 已配置',
+        };
+      } catch (error) {
+        status.services.minimax = { available: false, error: '未配置 API Key' };
+      }
+    } else {
+      status.services.minimax = { available: false, error: '未配置 API Key' };
+    }
+
+    // 检查 Ollama
+    if (config.ollama.baseUrl) {
+      try {
+        this.ensureServiceInitialized('ollama');
+        if (this.services.ollama) {
+          status.services.ollama = await this.services.ollama.checkStatus();
+        } else {
+          status.services.ollama = { available: false, error: '未配置 Ollama' };
         }
-      } else {
-        status.services[name] = {
+      } catch (error) {
+        status.services.ollama = {
           available: false,
-          error: '服务未初始化',
+          error: error.message,
         };
       }
+    } else {
+      status.services.ollama = { available: false, error: '未配置 Ollama' };
+    }
+
+    // 检查 LlamaCpp - 只检查文件存在性而不初始化
+    if (config.llamacpp.modelPath) {
+      try {
+        const fs = require('fs');
+        const modelExists = fs.existsSync(config.llamacpp.modelPath);
+        status.services.llamacpp = {
+          available: modelExists,
+          message: modelExists ? `模型文件就绪: ${config.llamacpp.modelPath}` : '模型文件不存在',
+          modelPath: config.llamacpp.modelPath
+        };
+      } catch (error) {
+        status.services.llamacpp = {
+          available: false,
+          error: `检查状态失败: ${error.message}`,
+        };
+      }
+    } else {
+      status.services.llamacpp = { available: false, error: '未配置本地模型路径' };
     }
 
     return status;
   }
 
-  setService(serviceName) {
-    if (!this.services[serviceName]) {
-      throw new Error(`翻译服务 ${serviceName} 不存在`);
-    }
-    this.currentService = serviceName;
-    this.settings.service = serviceName;
-  }
-
-  updateSettings(newSettings) {
-    if (newSettings.service && newSettings.service !== this.currentService) {
-      this.setService(newSettings.service);
-    }
-
-    if (newSettings.minimax) {
-      this.settings.minimax = {
-        ...this.settings.minimax,
-        ...newSettings.minimax,
-      };
-      this.services.minimax = new MiniMaxTranslationService(
-        this.settings.minimax.apiKey,
-        this.settings.minimax.groupId
-      );
-    }
-
-    if (newSettings.ollama) {
-      this.settings.ollama = {
-        ...this.settings.ollama,
-        ...newSettings.ollama,
-      };
-      this.services.ollama = new OllamaTranslationService(
-        this.settings.ollama.baseUrl,
-        this.settings.ollama.model
-      );
-    }
-
-    if (newSettings.llamaCpp) {
-      this.settings.llamaCpp = {
-        ...this.settings.llamaCpp,
-        ...newSettings.llamaCpp,
-      };
-      this.services.llamaCpp = new LlamaCppTranslationService(
-        this.settings.llamaCpp.modelPath,
-        this.settings.llamaCpp.temperature
-      );
-    }
-
-    if (newSettings.defaultTargetLang) {
-      this.settings.defaultTargetLang = newSettings.defaultTargetLang;
-    }
-  }
-
   getSettings() {
+    const config = aiConfig.getConfig();
     return {
-      ...this.settings,
+      service: config.translationService || config.chatService,
       minimax: {
-        ...this.settings.minimax,
-        apiKey: this.settings.minimax.apiKey ? '******' + this.settings.minimax.apiKey.slice(-4) : '',
+        apiKey: config.minimax.apiKey ? '******' + config.minimax.apiKey.slice(-4) : '',
+        groupId: config.minimax.groupId ? '******' + config.minimax.groupId.slice(-4) : '',
       },
+      ollama: config.ollama,
+      llamaCpp: config.llamacpp,
+      defaultTargetLang: config.translation.defaultTargetLang,
     };
   }
 }
 
 const translationManager = new TranslationManager();
-
-translationManager.initialize({
-  service: 'ollama',
-  ollama: {
-    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-    model: process.env.OLLAMA_MODEL || 'llama3.2:3b',
-  },
-  minimax: {
-    apiKey: process.env.MINIMAX_API_KEY || '',
-    groupId: process.env.MINIMAX_GROUP_ID || '',
-  },
-  llamaCpp: {
-    modelPath: process.env.LLAMA_CPP_MODEL_PATH || '/Users/openclaw/Downloads/qwen2_05b_int4.gguf',
-    temperature: parseFloat(process.env.LLAMA_CPP_TEMPERATURE) || 0.3,
-  },
-});
 
 module.exports = translationManager;

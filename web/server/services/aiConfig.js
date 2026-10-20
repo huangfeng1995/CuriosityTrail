@@ -4,26 +4,25 @@ const fs = require('fs');
 class AIConfigManager {
   constructor() {
     this.configPath = path.join(__dirname, '../data/ai-config.json');
-    this.config = this.loadConfig();
     this.defaultConfig = {
       version: '1.0',
-      chatService: 'llamacpp', // 默认使用本地模型
-      translationService: 'llamacpp',
+      chatService: 'ollama',
+      translationService: 'ollama',
       minimax: {
-        apiKey: '',
-        groupId: '',
-        baseUrl: 'https://api.minimax.chat/v1'
+        apiKey: process.env.MINIMAX_API_KEY || '',
+        groupId: process.env.MINIMAX_GROUP_ID || '',
+        baseUrl: process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat/v1'
       },
       ollama: {
-        baseUrl: 'http://localhost:11434',
-        model: 'llama3.2:3b',
-        temperature: 0.7
+        baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+        model: process.env.OLLAMA_MODEL || 'qwen2.5:7b',
+        temperature: parseFloat(process.env.OLLAMA_TEMPERATURE) || 0.7
       },
       llamacpp: {
-        modelPath: '/Users/openclaw/Downloads/qwen2_05b_int4.gguf',
-        temperature: 0.3,
-        ctxSize: 4096,
-        gpuLayers: -1
+        modelPath: process.env.LLAMACPP_MODEL_PATH || '/Users/openclaw/Downloads/qwen2_05b_int4.gguf',
+        temperature: parseFloat(process.env.LLAMACPP_TEMPERATURE) || 0.3,
+        ctxSize: parseInt(process.env.LLAMACPP_CTX_SIZE) || 4096,
+        gpuLayers: parseInt(process.env.LLAMACPP_GPU_LAYERS) || -1
       },
       translation: {
         defaultTargetLang: 'zh',
@@ -36,13 +35,39 @@ class AIConfigManager {
         temperature: 0.7
       }
     };
+    this.config = this.loadConfig();
   }
 
   loadConfig() {
     try {
       if (fs.existsSync(this.configPath)) {
         const data = fs.readFileSync(this.configPath, 'utf8');
-        return JSON.parse(data);
+        const savedConfig = JSON.parse(data);
+        // 合并已保存配置和默认配置，确保所有字段都存在
+        return {
+          ...this.defaultConfig,
+          ...savedConfig,
+          minimax: {
+            ...this.defaultConfig.minimax,
+            ...savedConfig.minimax
+          },
+          ollama: {
+            ...this.defaultConfig.ollama,
+            ...savedConfig.ollama
+          },
+          llamacpp: {
+            ...this.defaultConfig.llamacpp,
+            ...savedConfig.llamacpp
+          },
+          translation: {
+            ...this.defaultConfig.translation,
+            ...savedConfig.translation
+          },
+          chat: {
+            ...this.defaultConfig.chat,
+            ...savedConfig.chat
+          }
+        };
       }
     } catch (error) {
       console.error('Error loading AI config:', error);

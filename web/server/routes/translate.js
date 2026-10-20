@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const translationManager = require('../services/translation/translationManager');
+const aiConfig = require('../services/aiConfig');
 const db = require('../database');
 
 // 获取翻译设置
@@ -13,29 +14,7 @@ router.get('/settings', (req, res) => {
   }
 });
 
-// 保存翻译设置
-router.post('/settings', (req, res) => {
-  try {
-    const { service, minimax, ollama, defaultTargetLang } = req.body;
-
-    translationManager.updateSettings({
-      service,
-      minimax,
-      ollama,
-      defaultTargetLang,
-    });
-
-    db.run(`
-      INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)
-    `, ['translation_settings', JSON.stringify(translationManager.settings)]);
-
-    res.json({ message: '设置保存成功', settings: translationManager.getSettings() });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 获取翻译服务状态
+// 获取翻译服务状态（由AI配置路由提供）
 router.get('/status', async (req, res) => {
   try {
     const status = await translationManager.checkAllServicesStatus();
@@ -54,23 +33,29 @@ router.post('/text', async (req, res) => {
       return res.status(400).json({ error: '翻译文本不能为空' });
     }
 
-    if (!targetLang) {
+    // 如果没有指定目标语言，使用默认配置
+    const config = aiConfig.getConfig();
+    const effectiveTargetLang = targetLang || config.translation.defaultTargetLang;
+
+    if (!effectiveTargetLang) {
       return res.status(400).json({ error: '目标语言不能为空' });
     }
 
-    const translatedText = await translationManager.translate(text, targetLang, sourceLang);
+    const translatedText = await translationManager.translate(text, effectiveTargetLang, sourceLang);
 
+    // 记录翻译历史
+    const dbConfig = aiConfig.getConfig();
     db.run(`
       INSERT INTO translation_history (source_text, translated_text, source_lang, target_lang, service)
       VALUES (?, ?, ?, ?, ?)
-    `, [text, translatedText, sourceLang, targetLang, translationManager.currentService]);
+    `, [text, translatedText, sourceLang, effectiveTargetLang, dbConfig.chatService || dbConfig.translationService]);
 
     res.json({
       original: text,
       translated: translatedText,
       sourceLang,
-      targetLang,
-      service: translationManager.currentService,
+      targetLang: effectiveTargetLang,
+      service: dbConfig.chatService || dbConfig.translationService,
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -86,7 +71,10 @@ router.post('/document', async (req, res) => {
       return res.status(400).json({ error: '文档ID不能为空' });
     }
 
-    if (!targetLang) {
+    const config = aiConfig.getConfig();
+    const effectiveTargetLang = targetLang || config.translation.defaultTargetLang;
+
+    if (!effectiveTargetLang) {
       return res.status(400).json({ error: '目标语言不能为空' });
     }
 
@@ -103,7 +91,7 @@ router.post('/document', async (req, res) => {
 
     const translatedText = await translationManager.translateDocument(
       Buffer.from(doc.content || '', 'utf-8'),
-      targetLang,
+      effectiveTargetLang,
       sourceLang
     );
 
@@ -112,40 +100,8 @@ router.post('/document', async (req, res) => {
       originalContent: doc.content,
       translatedContent: translatedText,
       sourceLang,
-      targetLang,
-      service: translationManager.currentService,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// OCR + 翻译
-router.post('/ocr', async (req, res) => {
-  try {
-    const { imageData, targetLang, sourceLang = 'auto' } = req.body;
-
-    if (!imageData) {
-      return res.status(400).json({ error: '图片数据不能为空' });
-    }
-
-    if (!targetLang) {
-      return res.status(400).json({ error: '目标语言不能为空' });
-    }
-
-    const imageBuffer = Buffer.from(imageData, 'base64');
-    const translatedText = await translationManager.ocrAndTranslate(
-      imageBuffer,
-      targetLang,
-      sourceLang
-    );
-
-    res.json({
-      originalImage: '[图片数据]',
-      translated: translatedText,
-      sourceLang,
-      targetLang,
-      service: translationManager.currentService,
+      targetLang: effectiveTargetLang,
+      service: config.chatService || config.translationService,
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -1,447 +1,366 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Button, Input, Space, Spin, Typography, Select, message, Badge, Tooltip } from 'antd';
 import { 
-  SendOutlined, 
-  RobotOutlined, 
-  UserOutlined, 
-  ClearOutlined,
-  SettingOutlined,
-  SyncOutlined,
-  HistoryOutlined,
-  TranslationOutlined
+  Card, Button, Input, Space, Spin, Typography, Select, message, Badge, Tooltip, 
+  Modal, Form, InputNumber, Alert
+} from 'antd';
+import { 
+  SendOutlined, RobotOutlined, UserOutlined, ClearOutlined,
+  SettingOutlined, SyncOutlined
 } from '@ant-design/icons';
-import TranslationModal from './TranslationModal';
 import axios from 'axios';
 
-const { Text, Title } = Typography;
 const { TextArea } = Input;
+const { Title, Text } = Typography;
+const { Option } = Select;
 
 function AgentAssistant({ isDark }) {
   const [messages, setMessages] = useState([]);
-  const [inputValue, setInputValue] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [ollamaStatus, setOllamaStatus] = useState(null);
-  const [model, setModel] = useState('llama3.2:3b');
-  const [translationModalVisible, setTranslationModalVisible] = useState(false);
-  const [selectedText, setSelectedText] = useState('');
-  const [translationContext, setTranslationContext] = useState('');
+  const [inputText, setInputText] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [config, setConfig] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [configModalVisible, setConfigModalVisible] = useState(false);
+  const [form] = Form.useForm();
   const messagesEndRef = useRef(null);
-  const eventSourceRef = useRef(null);
 
   useEffect(() => {
-    checkOllamaStatus();
-    loadHistory();
+    fetchConfig();
+    fetchStatus();
   }, []);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  const checkOllamaStatus = async () => {
-    try {
-      const res = await axios.get('/api/agent/status');
-      setOllamaStatus(res.data);
-      if (res.data.models && res.data.models.length > 0) {
-        setModel(res.data.models[0].name);
-      }
-    } catch (error) {
-      setOllamaStatus({ success: false, error: '无法连接 Ollama' });
-    }
-  };
-
-  const loadHistory = () => {
-    const saved = localStorage.getItem('agent_messages');
-    if (saved) {
-      setMessages(JSON.parse(saved));
-    }
-  };
-
-  const saveHistory = (newMessages) => {
-    localStorage.setItem('agent_messages', JSON.stringify(newMessages));
-  };
-
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const sendMessage = async () => {
-    if (!inputValue.trim() || loading) return;
-
-    const userMessage = {
-      role: 'user',
-      content: inputValue,
-      timestamp: new Date().toISOString()
-    };
-
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
-    saveHistory(newMessages);
-    setInputValue('');
-    setLoading(true);
-
-    // 创建 SSE 连接
-    const eventSource = new EventSource(`/api/agent/chat?message=${encodeURIComponent(inputValue)}`);
-    eventSourceRef.current = eventSource;
-
-    let fullResponse = '';
-    
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.error) {
-          message.error(data.error);
-          setLoading(false);
-          eventSource.close();
-          return;
-        }
-
-        if (data.token) {
-          fullResponse += data.token;
-          setMessages(prev => {
-            const updated = [...prev];
-            const lastMsg = updated[updated.length - 1];
-            if (lastMsg?.role === 'user') {
-              updated.push({
-                role: 'assistant',
-                content: fullResponse,
-                timestamp: new Date().toISOString()
-              });
-            } else {
-              updated[updated.length - 1] = {
-                ...lastMsg,
-                content: fullResponse
-              };
-            }
-            return updated;
-          });
-        }
-
-        if (data.done) {
-          setLoading(false);
-          saveHistory([...newMessages, {
-            role: 'assistant',
-            content: fullResponse,
-            timestamp: new Date().toISOString()
-          }]);
-          eventSource.close();
-        }
-      } catch (error) {
-        console.error('SSE parse error:', error);
-      }
-    };
-
-    eventSource.onerror = (error) => {
-      console.error('SSE error:', error);
-      setLoading(false);
-      message.error('连接失败，请检查 Ollama 是否运行');
-      eventSource.close();
-    };
-  };
-
-  const clearMessages = () => {
-    setMessages([]);
-    localStorage.removeItem('agent_messages');
-    message.success('对话已清除');
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
+  const fetchConfig = async () => {
+    try {
+      const res = await axios.get('/api/ai-config/config');
+      const cfg = res.data;
+      setConfig(cfg);
+      
+      form.setFieldsValue({
+        ...cfg,
+        minimax: cfg.minimax || {},
+        translation: cfg.translation || {},
+        chat: cfg.chat || {}
+      });
+    } catch (err) {
+      console.error('获取配置失败:', err);
     }
   };
 
-  const openTranslation = (text, context = '') => {
-    setSelectedText(text);
-    setTranslationContext(context);
-    setTranslationModalVisible(true);
+  const fetchStatus = async () => {
+    try {
+      const res = await axios.get('/api/ai-config/status');
+      setStatus(res.data);
+    } catch (err) {
+      console.error('获取状态失败:', err);
+    }
+  };
+
+  const handleSaveConfig = async (values) => {
+    try {
+      const finalConfig = { ...values };
+      finalConfig.chatService = 'minimax';
+      finalConfig.translationService = 'minimax';
+
+      await axios.post('/api/ai-config/config', finalConfig);
+      setConfig(finalConfig);
+      message.success('配置已保存');
+      setConfigModalVisible(false);
+      fetchStatus();
+    } catch (err) {
+      console.error('保存配置失败:', err);
+      message.error('保存配置失败');
+    }
+  };
+
+  const handleSend = async () => {
+    if (!inputText.trim()) return;
+
+    const userMessage = { role: 'user', content: inputText };
+    setMessages(prev => [...prev, userMessage]);
+    setInputText('');
+    setIsLoading(true);
+
+    try {
+      const res = await axios.post('/api/agent/chat', {
+        messages: [...messages, userMessage]
+      });
+
+      const assistantMessage = {
+        role: 'assistant',
+        content: res.data.message
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (err) {
+      console.error('发送消息失败:', err);
+      message.error('发送消息失败');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleClear = () => {
+    setMessages([]);
+    message.info('对话已清空');
   };
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
         alignItems: 'center',
-        marginBottom: 16,
-        flexWrap: 'wrap',
-        gap: 12
+        padding: '0 0 16px 0',
+        borderBottom: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+        marginBottom: 16
       }}>
-        <div>
-          <Title level={2} style={{
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Title level={3} style={{ 
             margin: 0,
-            fontSize: 26,
+            fontSize: 20,
             fontWeight: 700,
             color: isDark ? '#f9fafb' : '#111827',
-            fontFamily: 'Inter, system-ui, sans-serif',
+            fontFamily: 'Noto Serif SC, serif',
           }}>
-            <Space>
-              <RobotOutlined />
-              AI 研究助手
-            </Space>
+            AI 研究助手
           </Title>
-          <div style={{
-            fontSize: 14,
-            color: isDark ? '#6b7280' : '#9ca3af',
-            marginTop: 4,
-          }}>
-            基于本地 Ollama 模型，提供智能研究和写作支持
-          </div>
+          {config && status && (
+            <Badge
+              status={status.services[config.chatService]?.available ? 'success' : 'error'}
+              text={
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {status.services[config.chatService]?.available ? '服务就绪' : '请配置服务'}
+                </Text>
+              }
+            />
+          )}
         </div>
-
         <Space>
-          <Badge status={ollamaStatus?.success ? 'success' : 'error'} />
-          <Text style={{ color: isDark ? '#9ca3af' : '#6b7280' }}>
-            {ollamaStatus?.success ? 'Ollama 已连接' : 'Ollama 未连接'}
-          </Text>
-          <Tooltip title="检查连接">
-            <Button 
-              icon={<SyncOutlined spin={loading} />} 
-              onClick={checkOllamaStatus}
-              disabled={loading}
-            />
+          <Tooltip title="清空对话">
+            <Button icon={<ClearOutlined />} onClick={handleClear} />
           </Tooltip>
-          <Tooltip title="清除对话">
-            <Button 
-              icon={<ClearOutlined />} 
-              onClick={clearMessages}
-              disabled={loading}
-            />
+          <Tooltip title="刷新状态">
+            <Button icon={<SyncOutlined />} onClick={fetchStatus} />
           </Tooltip>
         </Space>
       </div>
 
-      <div style={{
-        flex: 1,
+      <div style={{ 
+        flex: 1, 
         overflowY: 'auto',
-        padding: 20,
-        background: isDark ? 'rgba(15, 23, 42, 0.3)' : 'rgba(248, 249, 250, 0.5)',
-        borderRadius: 12,
-        border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`,
         marginBottom: 16,
-        maxHeight: 'calc(100vh - 350px)',
-        minHeight: 400
+        paddingRight: 8
       }}>
         {messages.length === 0 ? (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
+          <div style={{ 
+            display: 'flex', 
+            flexDirection: 'column', 
+            alignItems: 'center', 
             justifyContent: 'center',
             height: '100%',
-            color: isDark ? '#6b7280' : '#9ca3af'
+            color: isDark ? '#9ca3af' : '#6b7280'
           }}>
-            <RobotOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-            <Title level={4} style={{ color: isDark ? '#9ca3af' : '#6b7280' }}>
-              欢迎使用 AI 研究助手
-            </Title>
-            <Text style={{ color: isDark ? '#6b7280' : '#9ca3af', textAlign: 'center', maxWidth: 500 }}>
-              我可以帮助你进行科学研究、报告撰写、文献分析和知识探索。
-              <br />
-              请确保 Ollama 已在本地运行（默认地址：localhost:11434）
+            <RobotOutlined style={{ fontSize: 64, marginBottom: 16, opacity: 0.5 }} />
+            <Text type="secondary" style={{ fontSize: 16, textAlign: 'center', maxWidth: 400 }}>
+              你好！我是 AI 研究助手，帮你进行文献分析、报告撰写和知识探索。
+              <br /><br />
+              直接开始提问吧！
             </Text>
           </div>
         ) : (
-          <>
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
             {messages.map((msg, index) => (
               <div
                 key={index}
                 style={{
                   display: 'flex',
-                  justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                  marginBottom: 16
+                  justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start'
                 }}
               >
-                <div style={{
-                  maxWidth: '70%',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 12
-                }}>
-                  {msg.role === 'assistant' && (
-                    <div style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: '50%',
-                      background: isDark ? 'rgba(96, 165, 250, 0.2)' : 'rgba(30, 58, 95, 0.1)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
-                    }}>
-                      <RobotOutlined style={{ color: isDark ? '#60a5fa' : '#1e3a5f' }} />
-                    </div>
-                  )}
-                  
-                  <div style={{
-                    padding: '12px 16px',
-                    borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                <Card
+                  size="small"
+                  style={{
+                    maxWidth: '70%',
                     background: msg.role === 'user' 
-                      ? (isDark ? '#1e3a5f' : '#1e3a5f')
-                      : (isDark ? 'rgba(31, 41, 55, 0.8)' : 'rgba(255, 255, 255, 0.9)'),
-                    color: msg.role === 'user' ? '#fff' : (isDark ? '#f9fafb' : '#111827'),
-                    boxShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)',
-                    whiteSpace: 'pre-wrap',
-                    lineHeight: 1.6
-                  }}>
-                    {msg.content}
-                    {msg.role === 'assistant' && msg.content && (
-                      <div style={{ marginTop: 8, textAlign: 'right' }}>
-                        <Button
-                          size="small"
-                          icon={<TranslationOutlined />}
-                          onClick={() => openTranslation(msg.content, 'AI 回复')}
-                          style={{ fontSize: 12 }}
-                        >
-                          翻译
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-
-                  {msg.role === 'user' && (
-                    <div style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: '50%',
-                      background: isDark ? 'rgba(96, 165, 250, 0.2)' : 'rgba(96, 165, 250, 0.1)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
+                      ? (isDark ? '#1e3a5f' : '#e6f7ff')
+                      : (isDark ? '#1f2937' : '#ffffff'),
+                    border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                    borderRadius: 12
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <div style={{ 
+                      fontSize: 24, 
+                      color: msg.role === 'user' 
+                        ? (isDark ? '#60a5fa' : '#1890ff')
+                        : (isDark ? '#34d399' : '#52c41a')
                     }}>
-                      <UserOutlined style={{ color: isDark ? '#60a5fa' : '#1e3a5f' }} />
+                      {msg.role === 'user' ? <UserOutlined /> : <RobotOutlined />}
                     </div>
-                  )}
-                </div>
+                    <div>
+                      <Text style={{ 
+                        color: isDark ? '#f9fafb' : '#111827',
+                        whiteSpace: 'pre-wrap'
+                      }}>
+                        {msg.content}
+                      </Text>
+                    </div>
+                  </div>
+                </Card>
               </div>
             ))}
-            
-            {loading && messages[messages.length - 1]?.role === 'user' && (
-              <div style={{
-                display: 'flex',
-                justifyContent: 'flex-start',
-                marginBottom: 16
-              }}>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 12
+            {isLoading && (
+              <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                <Card size="small" style={{ 
+                  background: isDark ? '#1f2937' : '#ffffff',
+                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                  borderRadius: 12
                 }}>
-                  <div style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: '50%',
-                    background: isDark ? 'rgba(96, 165, 250, 0.2)' : 'rgba(30, 58, 95, 0.1)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}>
-                    <RobotOutlined style={{ color: isDark ? '#60a5fa' : '#1e3a5f' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <RobotOutlined style={{ fontSize: 24, color: isDark ? '#34d399' : '#52c41a' }} />
+                    <Spin />
                   </div>
-                  <div style={{
-                    padding: '12px 16px',
-                    borderRadius: '16px 16px 16px 4px',
-                    background: isDark ? 'rgba(31, 41, 55, 0.8)' : 'rgba(255, 255, 255, 0.9)',
-                    boxShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)'
-                  }}>
-                    <Spin size="small" />
-                    <Text style={{ marginLeft: 8, color: isDark ? '#9ca3af' : '#6b7280' }}>
-                      思考中...
-                    </Text>
-                  </div>
-                </div>
+                </Card>
               </div>
             )}
-            
-            <div ref={messagesEndRef} />
-          </>
-        )}
-      </div>
-
-      <div style={{
-        padding: 16,
-        background: isDark ? 'rgba(31, 41, 55, 0.6)' : 'rgba(255, 255, 255, 0.8)',
-        backdropFilter: 'blur(10px)',
-        WebkitBackdropFilter: 'blur(10px)',
-        borderRadius: 12,
-        border: `1px solid ${isDark ? 'rgba(55, 65, 81, 0.5)' : 'rgba(229, 231, 235, 0.5)'}`
-      }}>
-        <div style={{
-          display: 'flex',
-          gap: 12,
-          alignItems: 'flex-end'
-        }}>
-          <TextArea
-            placeholder="输入你的问题或任务... (Shift+Enter 换行，Enter 发送)"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyPress={handleKeyPress}
-            autoSize={{ minRows: 2, maxRows: 6 }}
-            style={{
-              flex: 1,
-              borderRadius: 8,
-              background: isDark ? '#111827' : '#fff',
-              borderColor: isDark ? '#374151' : '#e5e7eb'
-            }}
-            disabled={loading}
-          />
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            size="large"
-            onClick={sendMessage}
-            loading={loading}
-            style={{
-              borderRadius: 8,
-              height: 68,
-              boxShadow: isDark ? '0 4px 12px rgba(96, 165, 250, 0.3)' : '0 4px 12px rgba(30, 58, 95, 0.2)'
-            }}
-          >
-            发送
-          </Button>
-        </div>
-
-        <div style={{
-          marginTop: 12,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 8
-        }}>
-          <Space wrap>
-            <Text style={{ fontSize: 12, color: isDark ? '#6b7280' : '#9ca3af' }}>
-              模型：
-            </Text>
-            <Select
-              value={model}
-              onChange={setModel}
-              style={{ width: 160 }}
-              size="small"
-              disabled={loading}
-            >
-              <Select.Option value="llama3.2:3b">Llama 3.2 (3B)</Select.Option>
-              <Select.Option value="llama3.2:1b">Llama 3.2 (1B)</Select.Option>
-              <Select.Option value="qwen2.5:7b">Qwen 2.5 (7B)</Select.Option>
-              <Select.Option value="mistral:7b">Mistral (7B)</Select.Option>
-            </Select>
           </Space>
-          
-          <Text style={{ fontSize: 12, color: isDark ? '#6b7280' : '#9ca3af' }}>
-            💡 快捷提示：支持科学研究、报告生成、文献分析、关键词提取等任务
-          </Text>
-        </div>
+        )}
+        <div ref={messagesEndRef} />
       </div>
 
-      <TranslationModal
-        visible={translationModalVisible}
-        onCancel={() => setTranslationModalVisible(false)}
-        text={selectedText}
-        title="翻译 AI 回复"
-        isDark={isDark}
-      />
+      <Space.Compact style={{ width: '100%' }}>
+        <TextArea
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          onPressEnter={(e) => {
+            if (!e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+          placeholder="输入你的问题... (Shift + Enter 换行)"
+          autoSize={{ minRows: 1, maxRows: 4 }}
+          disabled={isLoading}
+          style={{
+            background: isDark ? '#1f2937' : '#ffffff',
+            borderColor: isDark ? '#374151' : '#d9d9d9',
+            color: isDark ? '#f9fafb' : '#111827'
+          }}
+        />
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          onClick={handleSend}
+          loading={isLoading}
+          disabled={!inputText.trim()}
+        >
+          发送
+        </Button>
+      </Space.Compact>
+
+      {/* 配置弹窗 - 简化版 */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <SettingOutlined />
+            <span>AI 助手配置</span>
+          </div>
+        }
+        open={configModalVisible}
+        onCancel={() => setConfigModalVisible(false)}
+        onOk={() => form.submit()}
+        width={600}
+        okText="保存配置"
+        cancelText="取消"
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={handleSaveConfig}
+          initialValues={config}
+        >
+          <Alert
+            message="配置说明"
+            description="在此填入你的 AI 服务 API Key。配置将保存在服务器端，不会泄露到客户端。"
+            type="info"
+            showIcon
+            style={{ marginBottom: 24 }}
+          />
+
+          <Card
+            size="small"
+            title="API 配置"
+            style={{ marginBottom: 16 }}
+          >
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <Form.Item
+                name={['minimax', 'apiKey']}
+                label="MiniMax API Key"
+                rules={[{ required: true, message: '请输入 API Key' }]}
+              >
+                <Input.Password placeholder="输入 MiniMax API Key" />
+              </Form.Item>
+              <Form.Item
+                name={['minimax', 'groupId']}
+                label="MiniMax Group ID"
+                rules={[{ required: true, message: '请输入 Group ID' }]}
+              >
+                <Input placeholder="输入 MiniMax Group ID" />
+              </Form.Item>
+              <Form.Item
+                name={['minimax', 'baseUrl']}
+                label="API 地址（可选）"
+              >
+                <Input placeholder="默认: https://api.minimax.chat/v1" />
+              </Form.Item>
+            </Space>
+          </Card>
+
+          <Card size="small" title="翻译设置" style={{ marginBottom: 16 }}>
+            <Form.Item
+              name={['translation', 'defaultTargetLang']}
+              label="默认翻译目标语言"
+            >
+              <Select style={{ width: '100%' }}>
+                <Option value="zh">中文</Option>
+                <Option value="en">English</Option>
+                <Option value="ja">日本語</Option>
+                <Option value="ko">한국어</Option>
+                <Option value="fr">Français</Option>
+                <Option value="de">Deutsch</Option>
+                <Option value="es">Español</Option>
+              </Select>
+            </Form.Item>
+          </Card>
+
+          <Card size="small" title="聊天设置">
+            <Form.Item
+              name={['chat', 'systemPrompt']}
+              label="系统提示词"
+            >
+              <TextArea rows={3} placeholder="AI 助手的行为设定" />
+            </Form.Item>
+            <Form.Item
+              name={['chat', 'temperature']}
+              label="Temperature"
+            >
+              <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item
+              name={['chat', 'maxTokens']}
+              label="最大 Token 数"
+            >
+              <InputNumber min={128} max={8192} step={128} style={{ width: '100%' }} />
+            </Form.Item>
+          </Card>
+        </Form>
+      </Modal>
     </div>
   );
 }

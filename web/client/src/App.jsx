@@ -172,6 +172,8 @@ function App() {
               }}
             >
               {current === 'reports' && <Reports searchText={searchText} isDark={isDark} />}
+              {current === 'agent' && <AgentAssistant isDark={isDark} />}
+              {current === 'graph' && <KnowledgeGraph isDark={isDark} />}
               {current === 'documents' && <Documents searchText={searchText} isDark={isDark} />}
               {current === 'settings' && <Settings isDark={isDark} />}
             </Content>
@@ -334,28 +336,11 @@ function App() {
                 }}
               >
                 {current === 'reports' && (
-                  <>
-                    <SearchBar 
-                      value={searchText} 
-                      onChange={setSearchText}
-                      isDark={isDark}
-                    />
-                    <Button 
-                      type="primary" 
-                      size="large" 
-                      icon={<PlusOutlined size={18} />}
-                      onClick={() => {
-                        const createBtn = document.querySelector('[data-create-report]');
-                        if (createBtn) createBtn.click();
-                      }}
-                      style={{ 
-                        borderRadius: 8,
-                        fontWeight: 600,
-                      }}
-                    >
-                      新建报告
-                    </Button>
-                  </>
+                  <SearchBar 
+                    value={searchText} 
+                    onChange={setSearchText}
+                    isDark={isDark}
+                  />
                 )}
               </Header>
 

@@ -1,0 +1,78 @@
+{
+  "_hint": "页内切分示例：开启 inline 的规则必须把 scope 设为 page，否则关键字只会在页首区域查找，无法定位到页面中部。",
+  "version": 2,
+  "use_outline": false,
+  "outline_levels": [1, 2],
+  "rules": [
+    {
+      "name": "费用签审单",
+      "type": "keyword",
+      "pattern": "费用签审单",
+      "scope": "page",
+      "inline": true,
+      "name_from": "rule"
+    },
+    {
+      "name": "费用结算明细",
+      "type": "keyword",
+      "pattern": "费用结算明细",
+      "scope": "page",
+      "inline": true,
+      "name_from": "rule"
+    },
+    {
+      "name": "工作确认单",
+      "type": "keyword",
+      "pattern": "工作确认单",
+      "scope": "page",
+      "inline": true,
+      "name_from": "rule"
+    },
+    {
+      "name": "完工报告",
+      "type": "keyword",
+      "pattern": "完工报告",
+      "scope": "page",
+      "inline": true,
+      "name_from": "rule"
+    },
+    {
+      "name": "服务通知单",
+      "type": "keyword",
+      "pattern": "服务通知单",
+      "scope": "page",
+      "inline": true,
+      "name_from": "rule"
+    },
+    {
+      "name": "人员考勤",
+      "type": "keyword",
+      "pattern": "人员考勤",
+      "scope": "page",
+      "inline": true,
+      "name_from": "rule"
+    },
+    {
+      "name": "验收申请",
+      "type": "keyword",
+      "pattern": "验收申请",
+      "scope": "page",
+      "inline": true,
+      "name_from": "rule"
+    }
+  ],
+  "options": {
+    "case_sensitive": false,
+    "strip_whitespace": true,
+    "exclude": "(续\\s*\\d*|第\\s*\\d+\\s*页|（续）|\\(续)",
+    "orphan_pages": "prepend",
+    "orphan_name": "前言",
+    "inline_split": true,
+    "head_ratio": 0.15,
+    "min_tail": 30,
+    "inline_padding": 2,
+    "merge_blank_runs": true,
+    "filename": "{index:02d}_{name}.pdf",
+    "name_max_len": 60
+  }
+}

@@ -1,4 +1,4 @@
-const ollama = require('../services/ollama');
+const chatManager = require('../services/chat/chatManager');
 const PROMPTS = require('../services/prompts');
 const { v4: uuidv4 } = require('uuid');
 
@@ -70,19 +70,16 @@ class AgentOrchestrator {
   }
 
   async understandIntent(message) {
-    const result = await ollama.chat({
-      messages: [
-        {
-          role: 'system',
-          content: PROMPTS.intentUnderstanding
-        },
-        {
-          role: 'user',
-          content: message
-        }
-      ],
-      temperature: 0.3
-    });
+    const result = await chatManager.chat([
+      {
+        role: 'system',
+        content: PROMPTS.intentUnderstanding
+      },
+      {
+        role: 'user',
+        content: message
+      }
+    ], { temperature: 0.3 });
 
     if (!result.success) {
       return {
@@ -178,14 +175,13 @@ ${toolsContext}
 
 请基于工具结果给出完整的回答。`;
 
-    const result = await ollama.generate({
-      prompt: finalPrompt,
-      system: PROMPTS.assistant,
+    const result = await chatManager.generate(finalPrompt, {
+      systemPrompt: PROMPTS.assistant,
       temperature: 0.7
     });
 
     return {
-      content: result.success ? result.response : '抱歉，工具执行过程中出现问题。',
+      content: result.success ? (result.response || result.message?.content) : '抱歉，工具执行过程中出现问题。',
       toolResults
     };
   }
@@ -196,14 +192,8 @@ ${toolsContext}
       content: m.content
     }));
 
-    const result = await ollama.chat({
-      messages: [
-        {
-          role: 'system',
-          content: PROMPTS.assistant
-        },
-        ...messages
-      ],
+    const result = await chatManager.chat(messages, {
+      systemPrompt: PROMPTS.assistant,
       temperature: 0.7
     });
 
@@ -232,16 +222,10 @@ ${toolsContext}
       timestamp: new Date()
     });
 
-    const messages = conversation.messages.map(m => ({
-      role: m.role,
-      content: m.content
-    }));
-
     const fullResponse = [];
 
-    for await (const chunk of ollama.streamGenerate({
-      prompt: message,
-      system: PROMPTS.assistant,
+    for await (const chunk of chatManager.streamGenerate(message, {
+      systemPrompt: PROMPTS.assistant,
       temperature: 0.7
     })) {
       if (chunk.error) {

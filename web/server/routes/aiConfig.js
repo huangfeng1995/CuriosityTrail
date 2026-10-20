@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const aiConfig = require('../services/aiConfig');
+const chatManager = require('../services/chat/chatManager');
+const translationManager = require('../services/translation/translationManager');
 
 // 获取当前配置
 router.get('/config', (req, res) => {
@@ -11,8 +13,8 @@ router.get('/config', (req, res) => {
       ...config,
       minimax: {
         ...config.minimax,
-        apiKey: config.minimax.apiKey ? '***' + config.minimax.apiKey.slice(-4) : '',
-        groupId: config.minimax.groupId ? '***' + config.minimax.groupId.slice(-4) : ''
+        apiKey: (config.minimax && config.minimax.apiKey) ? '***' + config.minimax.apiKey.slice(-4) : '',
+        groupId: (config.minimax && config.minimax.groupId) ? '***' + config.minimax.groupId.slice(-4) : ''
       }
     };
     res.json(safeConfig);
@@ -48,57 +50,24 @@ router.post('/config', (req, res) => {
 router.get('/status', async (req, res) => {
   try {
     const config = aiConfig.getConfig();
-    const status = {
-      minimax: {
-        available: !!(config.minimax.apiKey && config.minimax.groupId),
-        config: {
-          baseUrl: config.minimax.baseUrl,
-          hasApiKey: !!config.minimax.apiKey,
-          hasGroupId: !!config.minimax.groupId
-        }
-      },
-      ollama: {
-        available: false,
-        error: '',
-        models: []
-      },
-      llamacpp: {
-        available: false,
-        error: '',
-        modelPath: config.llamacpp.modelPath
-      }
-    };
+    const [chatStatus, translationStatus] = await Promise.all([
+      chatManager.checkAllServicesStatus(),
+      translationManager.checkAllServicesStatus()
+    ]);
 
-    // 检查 Ollama
-    try {
-      const ollama = require('../services/ollama');
-      const ollamaStatus = await ollama.checkConnection();
-      status.ollama = {
-        available: ollamaStatus.success,
-        error: ollamaStatus.success ? '' : ollamaStatus.error,
-        models: ollamaStatus.models || []
+    // 合并状态信息
+    const services = {};
+    for (const [serviceName, status] of Object.entries(chatStatus.services)) {
+      services[serviceName] = {
+        ...status,
+        translationAvailable: translationStatus.services[serviceName]?.available || false
       };
-    } catch (error) {
-      status.ollama.error = error.message;
-    }
-
-    // 检查 LlamaCpp 模型文件
-    try {
-      const fs = require('fs');
-      const modelExists = fs.existsSync(config.llamacpp.modelPath);
-      status.llamacpp = {
-        available: modelExists,
-        error: modelExists ? '' : '模型文件不存在',
-        modelPath: config.llamacpp.modelPath
-      };
-    } catch (error) {
-      status.llamacpp.error = error.message;
     }
 
     res.json({
       currentChatService: config.chatService,
-      currentTranslationService: config.translationService,
-      services: status
+      currentTranslationService: config.translationService || config.chatService,
+      services
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -115,9 +84,8 @@ router.post('/reset', (req, res) => {
       fs.unlinkSync(configPath);
     }
     // 重新加载默认配置
-    const config = require('../services/aiConfig');
-    config.config = config.loadConfig();
-    res.json({ success: true, config: config.getConfig() });
+    aiConfig.config = aiConfig.loadConfig();
+    res.json({ success: true, config: aiConfig.getConfig() });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

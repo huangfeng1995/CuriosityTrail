@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Space, message, Upload, Typography, Row, Col, Statistic, Tabs } from 'antd';
-import { Database, FileText, FolderOpen, TrendingUp, Settings as SettingsIcon, BrainCircuit } from 'lucide-react';
-import { CloudDownloadOutlined, CloudUploadOutlined, TranslationOutlined, RobotOutlined } from '@ant-design/icons';
+import { Card, Button, Space, message, Upload, Typography, Row, Col, Statistic } from 'antd';
+import { Database, FileText, FolderOpen, TrendingUp } from 'lucide-react';
+import { CloudDownloadOutlined, CloudUploadOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import { BarChart, PieChart } from 'recharts';
 import { Bar, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import AIConfig from './AIConfig';
 
 const { Title, Paragraph } = Typography;
 
@@ -154,20 +153,7 @@ function Settings({ isDark }) {
         </Title>
       </div>
 
-      <Tabs
-        defaultActiveKey="overview"
-        items={[
-          {
-            key: 'overview',
-            label: (
-              <span>
-                <TrendingUp size={16} style={{ marginRight: 8 }} />
-                数据概览
-              </span>
-            ),
-            children: (
-              <>
-              <Row gutter={[20, 20]}>
+      <Row gutter={[20, 20]}>
         <Col xs={24} sm={12} lg={8}>
           <Card 
             loading={loading}
@@ -181,42 +167,6 @@ function Settings({ isDark }) {
               title="探索报告"
               value={stats.reports}
               prefix={<FileText size={20} style={{ color: isDark ? '#60a5fa' : '#1e3a5f' }} />}
-              titleStyle={{ color: isDark ? '#9ca3af' : '#6b7280', fontSize: 13 }}
-              valueStyle={{ color: isDark ? '#f9fafb' : '#111827', fontSize: 28, fontWeight: 700 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={8}>
-          <Card 
-            loading={loading}
-            style={{ 
-              background: isDark ? '#1f2937' : '#ffffff',
-              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-              borderRadius: 12,
-            }}
-          >
-            <Statistic
-              title="文献数量"
-              value={stats.documents}
-              prefix={<FolderOpen size={20} style={{ color: isDark ? '#f59e0b' : '#d97706' }} />}
-              titleStyle={{ color: isDark ? '#9ca3af' : '#6b7280', fontSize: 13 }}
-              valueStyle={{ color: isDark ? '#f9fafb' : '#111827', fontSize: 28, fontWeight: 700 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={24} lg={8}>
-          <Card 
-            loading={loading}
-            style={{ 
-              background: isDark ? '#1f2937' : '#ffffff',
-              border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-              borderRadius: 12,
-            }}
-          >
-            <Statistic
-              title="分类数量"
-              value={stats.categories}
-              prefix={<Database size={20} style={{ color: isDark ? '#34d399' : '#10b981' }} />}
               titleStyle={{ color: isDark ? '#9ca3af' : '#6b7280', fontSize: 13 }}
               valueStyle={{ color: isDark ? '#f9fafb' : '#111827', fontSize: 28, fontWeight: 700 }}
             />
@@ -426,21 +376,6 @@ function Settings({ isDark }) {
           </Upload>
         </Space>
       </Card>
-              </>
-            )
-          },
-          {
-            key: 'ai',
-            label: (
-              <span>
-                <RobotOutlined style={{ marginRight: 8 }} />
-                AI 助手配置
-              </span>
-            ),
-            children: <AIConfig isDark={isDark} />
-          }
-        ]}
-      />
     </Space>
   );
 }
