@@ -1,7 +1,7 @@
 # AI 辅助小说创作平台 — 设计文档
 
 - 日期：2026-05-25
-- 状态：待评审
+- 状态：已确认，待实施
 - 作者：Trae（brainstorming 流程产出）
 
 ---
@@ -48,7 +48,11 @@
 | AI 交互形态 | 行内（微观改写）+ 侧边栏（宏观协作）双通道，分工明确 |
 | 大模型 | DeepSeek，API key 由用户稍后提供，放服务器环境变量 |
 | 联网搜索 | DeepSeek Search API（`/v1/tools/search`）与 Fetch API（`/v1/tools/fetch`） |
-| 旧功能处置 | 不需要即砍，由本设计统一裁定 |
+| 翻译功能 | **删除** |
+| 知识图谱 | **删除** |
+| 旧报告数据 | **删除**，不迁移 |
+| 深度思考档模型 | `deepseek-v4-pro`（低/高/最高三档思考强度） |
+| 日常默认模型 | `deepseek-flash` |
 
 ### 1.4 非目标
 
@@ -60,6 +64,8 @@
 - 不做向量数据库（依赖外部 embedding 服务；改用 FTS5 + DeepSeek 搜索，见 §6）
 - 不做移动端原生 App
 - 不保留论文/学术写作场景（旧的两套报告模板整体废弃）
+- 不做翻译功能
+- 不做知识图谱可视化
 
 ---
 
@@ -118,15 +124,15 @@
 
 角色是提示词预设 + 参数预设的组合，用户可切换，也可编辑其提示词。
 
-| 角色 | 职责 | 典型动作 | 输出倾向 |
-|---|---|---|---|
-| 作家 | 生成新内容 | 起稿、续写场景、扩写描写 | 文学性，重视画面与节奏 |
-| 编辑 | 修改已有内容 | 改写、润色、删冗余、调节奏 | 克制，解释改了什么、为什么 |
-| 审稿人 | 挑问题 | 找逻辑漏洞、找设定冲突、找重复表达 | 直率，列条目，不客气 |
-| 灵感师 | 提供点子 | 情节走向、人物动机、冲突设计、反转 | 发散，给多个方向而非单一答案 |
-| 资料员 | 找信息 | 搜站内素材、搜网络、汇总并标注来源 | 只讲有来源的，无来源明说 |
+| 角色 | 职责 | 典型动作 | 输出倾向 | 默认模型 |
+|---|---|---|---|---|
+| 作家 | 生成新内容 | 起稿、续写场景、扩写描写 | 文学性，重视画面与节奏 | `deepseek-flash` |
+| 编辑 | 修改已有内容 | 改写、润色、删冗余、调节奏 | 克制，解释改了什么、为什么 | `deepseek-flash` |
+| 审稿人 | 挑问题 | 找逻辑漏洞、找设定冲突、找重复表达 | 直率，列条目，不客气 | `deepseek-v4-pro` + high 思考 |
+| 灵感师 | 提供点子 | 情节走向、人物动机、冲突设计、反转 | 发散，给多个方向而非单一答案 | `deepseek-v4-pro` + high 思考 |
+| 资料员 | 找信息 | 搜站内素材、搜网络、汇总并标注来源 | 只讲有来源的，无来源明说 | `deepseek-flash` |
 
-角色定义存放在 `services/roles/`，每个角色包含：系统提示词、默认温度、默认动作集、输出格式约束。用户在设置页可覆盖默认提示词，覆盖后存库，不改代码。
+角色定义存放在 `services/roles/`，每个角色包含：系统提示词、默认温度、默认模型、默认思考强度、默认动作集、输出格式约束。用户在设置页可覆盖默认提示词，覆盖后存库，不改代码。
 
 ### 2.4 结构化输出契约
 
@@ -160,7 +166,7 @@ DeepSeek 支持 JSON Output（`response_format: {"type": "json_object"}`），�
 
 ### 3.1 表结构
 
-全新 schema，与旧 `reports` / `documents` / `citations` / `keywords` 无关。旧表在迁移中重命名保留 90 天后删除。
+全新 schema。旧表（`reports` / `documents` / `categories` / `citations` / `keywords` / `translation_history` / `agent_memory`）**直接删除，不迁移**——已确认旧数据无保留价值。
 
 ```sql
 -- 作品
@@ -245,24 +251,6 @@ CREATE VIRTUAL TABLE materials_fts USING fts5(
   tokenize='unicode61'
 );
 
--- FTS5 同步触发器（INSERT / UPDATE / DELETE 三路）
-CREATE TRIGGER materials_ai AFTER INSERT ON materials BEGIN
-  INSERT INTO materials_fts(rowid, title, body, tags)
-  VALUES (new.rid, new.title, new.body, new.tags);
-END;
-
-CREATE TRIGGER materials_ad AFTER DELETE ON materials BEGIN
-  INSERT INTO materials_fts(materials_fts, rowid, title, body, tags)
-  VALUES ('delete', old.rid, old.title, old.body, old.tags);
-END;
-
-CREATE TRIGGER materials_au AFTER UPDATE ON materials BEGIN
-  INSERT INTO materials_fts(materials_fts, rowid, title, body, tags)
-  VALUES ('delete', old.rid, old.title, old.body, old.tags);
-  INSERT INTO materials_fts(rowid, title, body, tags)
-  VALUES (new.rid, new.title, new.body, new.tags);
-END;
-
 -- 灵感速记
 CREATE TABLE inspirations (
   id           TEXT PRIMARY KEY,
@@ -331,15 +319,18 @@ CREATE TABLE prompt_overrides (
 
 这个方案零额外依赖，对中文短片段检索足够。
 
-**注意 bigram 预处理与 FTS5 触发器的配合**：触发器直接写 `materials_fts`，而 bigram 转换需要应用层完成。因此触发器方案仅适用于"原文直接入索引"的情况；启用 bigram 时改为在应用层（materials 写入后显式重建对应行索引）维护索引，`materials_ai` / `materials_au` 触发器不启用，仅保留 `materials_ad` 负责删除清理。P2 实现时二选一，落地前用真实中文样本验证召回率。
+**bigram 与 FTS5 触发器的配合**：触发器直接写 `materials_fts`，而 bigram 转换需要应用层完成。两者不能同时生效，实现时二选一：
 
-### 3.4 旧数据迁移
+- 方案 A（触发器）：索引存原文，中文检索退化——**不满足需求**
+- 方案 B（应用层，推荐）：materials 写入/更新后，由应用层显式重建该行的 bigram 索引；删除时用 `materials_ad` 触发器清理残留
 
-现有 `reports` 表内容不多，迁移策略：
+采用方案 B。`materials_ai` / `materials_au` 触发器不启用，只保留 `materials_ad`。P2 落地时用真实中文样本验证召回率。
 
-1. 旧表重命名为 `reports_legacy`，不删
-2. 首次启动时检测 `works` 为空且 `reports_legacy` 非空 → 自动创建一部作品"未命名作品"，把每条 report 变成一个章节，`content` 按空行切分成 paragraph 块
-3. 旧 `documents` 表重命名为 `documents_legacy`；其中的 PDF 复制进素材库并解析（若 `pdf-parse` 可用），否则保留文件引用但 body 为空
+### 3.4 旧数据处理
+
+旧表直接 `DROP`，不迁移。首次启动时 `initDatabase()` 检测到旧表存在即删除，建新表。
+
+注意：旧 `documents` 表的 PDF 文件保留在磁盘（不删文件），但失去索引关联。用户如需素材，在新版素材库重新上传即可。
 
 ---
 
@@ -360,7 +351,7 @@ web/server/
 │   ├── inspirations.js      灵感速记 CRUD（新增）
 │   ├── ai.js                AI 调用：对话、角色、行内操作、流式（新增）
 │   ├── prompts.js           提示词覆盖读写（新增）
-│   └── settings-config.js   系统配置读写（新增）
+│   └── config.js            系统配置读写（新增）
 ├── services/
 │   ├── providers/           AI 供应商抽象（新增）
 │   │   ├── index.js         工厂 + 路由
@@ -380,9 +371,14 @@ web/server/
 │   ├── context.js           上下文装配器（新增，核心）
 │   ├── provider.js          统一 provider 门面（改造自 chatManager.js）
 │   └── aiConfig.js          配置管理（改造，含 DeepSeek 段）
-└── agent/
-    └── ...                  整个删除
+└── middleware/
+    ├── auth.js              X-Access-Token 校验（新增）
+    └── rateLimit.js         AI 调用限流（新增）
 ```
+
+**整个删除**：`agent/` 目录（`orchestrator.js` / `memory/` / `tools/`）、`routes/translate.js`、`routes/graph.js`、`routes/categories.js`、`routes/agent.js`、`routes/aiConfig.js`、`services/chat/`、`services/translation/`、`services/ollama.js`、`services/llamaCpp.js`、`services/prompts.js`。
+
+**保留但重写**：`routes/reports.js` → `routes/works.js`；`routes/documents.js` → `routes/materials.js`；`routes/export.js` 保留并扩展（新增 Markdown 导出）；`routes/upload.js` 保留（图片上传）。
 
 ### 4.2 Provider 抽象
 
@@ -391,7 +387,7 @@ web/server/
 ```js
 // services/providers/index.js
 class Provider {
-  async chat({ messages, temperature, maxTokens, jsonOutput, onToken })
+  async chat({ messages, temperature, maxTokens, jsonOutput, thinking, reasoningEffort, onToken })
     // 返回完整文本；onToken 存在时逐块回调（流式）
   async checkStatus()       // 返回 { ok, detail }
 }
@@ -407,7 +403,7 @@ class Provider {
 
 DeepSeek 特有的 `thinking` / `reasoning_effort` 参数作为 provider 专属选项透传，不污染通用接口。
 
-**关键点**：现有 `services/chat/` 目录（`chatService.js` / `chatManager.js` / `ollamaChat.js` / `minimaxChat.js` / `llamaCppChat.js`）与 `services/ollama.js` / `services/llamaCpp.js` 全部删除，合并进 `services/providers/`。`services/translation/` 随翻译功能一起删除。
+**关键点**：现有 `services/chat/`（`chatService.js` / `chatManager.js` / `ollamaChat.js` / `minimaxChat.js` / `llamaCppChat.js`）与 `services/ollama.js` / `services/llamaCpp.js` 全部删除，合并进 `services/providers/`。`services/translation/` 随翻译功能一起删除。
 
 ### 4.3 上下文装配器
 
@@ -454,14 +450,22 @@ data: {"type":"done","messageId":"..."}
 
 ### 4.5 DeepSeek 接入细节
 
-已核实 DeepSeek 官方协议：
+**模型**（依 2026-09-10 官方更新日志）：
+
+| 模型名 | 实际版本 | 上下文 | 最大输出 | 视觉 | 思考档位 |
+|---|---|---|---|---|---|
+| `deepseek-flash` | DeepSeek-V4.1-Flash-1017 | 1M | 384K | 支持 | low/high/max |
+| `deepseek-v4-pro` | DeepSeek-V4-Pro-0813 | 1M | 384K | 不支持 | low/high/max |
+
+已停用，不要使用：`deepseek-chat`、`deepseek-reasoner`（2026-07-24 停用）、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`（已退役，兼容期内路由到 V4.1-Flash）。
+
+1M 上下文对长篇小说写作非常够用。
 
 **对话** — `POST https://api.deepseek.com/chat/completions`
-- 模型：`deepseek-flash`（快、便宜）或 `deepseek-v4-pro`（强推理）
-- 上下文 1M，最大输出 384K —— 长篇小说写作非常够用
+- OpenAI 兼容格式，也支持 Anthropic 格式（`https://api.deepseek.com/anthropic`）与 Responses API
 - 支持 `response_format: {"type":"json_object"}` JSON Output
-- 支持 tool calls、Vision（flash 支持）
-- `thinking: {"type":"enabled"}` + `reasoning_effort: "high"` 控制思考深度
+- 支持 tool calls
+- 思考控制：`thinking: {"type": "enabled"}` + `reasoning_effort: "low" | "high" | "max"`
 
 **搜索** — `POST https://api.deepseek.com/v1/tools/search`
 - 必填 `query`（1–128 字符）
@@ -473,12 +477,13 @@ data: {"type":"done","messageId":"..."}
 - 必填 `url`（最长 8192 字符）
 - 返回 `{title, content}`，`content` 是 Markdown 正文
 
-**约束**：
-- 三个端点共用同一 Bearer Key，5 QPS 账号级限流（search 与 fetch 独立计算）
+**鉴权与限流**：
+- 三个端点**共用同一把 Bearer Key**（DeepSeek 账号体系内统一），只需一个环境变量 `DEEPSEEK_API_KEY`
+- 5 QPS 账号级限流，search 与 fetch 独立计算
 - 计费 \$0.75 / 千次成功请求（HTTP 200 且有结果），空结果与失败不计费
 - 2026-11-01 00:00（北京时间）起正式计费
 - Fetch 对同一域名有独立限流，需做域名级节流（≤1 QPS）
-- 403 = 安全策略拒绝，不重试；429 / 5xx 才重试（指数退避）
+- 403 = 安全策略拒绝，不重试；429 / 5xx 才重试（指数退避，最多 3 次）
 - 建议用 `rerank_score >= 1.5` 过滤低质结果
 
 Key 配置：`DEEPSEEK_API_KEY` 环境变量，key 到位后填入 `web/.env`。未配置时设置页显示"未配置"，平台自动降级到 Ollama provider。
@@ -528,11 +533,11 @@ web/client/src/
 │   │   ├── ActionCard.jsx     结构化输出卡片（comment 类）
 │   │   └── CitationBadge.jsx  来源角标
 │   └── Settings/
-│       ├── ConfigPage.jsx     provider / 模型 / 温度 / 限流
+│       ├── ConfigPage.jsx     provider / 模型 / 温度 / 思考强度 / 限流
 │       └── PromptPage.jsx     提示词编辑
 ```
 
-**删除**：`KnowledgeGraph.jsx`、`TranslationModal.jsx`、`DocumentTranslationModal.jsx`、`TranslationSettings.jsx`、`AIConfig.jsx`、`SearchBar.jsx`、`Documents.jsx`、`Settings.jsx`、`Reports.jsx`、`AgentAssistant.jsx`（全部由上表取代）。
+**整个删除**：`KnowledgeGraph.jsx`、`TranslationModal.jsx`、`DocumentTranslationModal.jsx`、`TranslationSettings.jsx`、`AIConfig.jsx`、`SearchBar.jsx`、`Documents.jsx`、`Settings.jsx`、`Reports.jsx`、`AgentAssistant.jsx`。
 
 **状态管理**：项目当前无状态库，跨组件通信靠 props 提升。新增 `store/workspace.js` 用 React Context + useReducer 实现（不引入 redux/zustand，避免额外依赖）。需要共享的是：当前作品 ID、当前章节 ID、当前选区、侧边栏折叠状态、对话历史。
 
@@ -589,7 +594,7 @@ web/client/src/
 - 检索接口：`services/search/local.js` 导出 `search(query, {limit})`，返回 `{id, title, snippet, source, tags}`。命中结果通过 `materials.id` 关联业务记录（`materials_fts` 内部以 `rid` 为 rowid，两者不等价，转换在 service 层完成）
 - AI 调用方式：作为工具暴露给模型（tool call），或由上下文装配器在需要时自动检索
 
-由于不引入向量库，站内检索是纯关键词匹配。**缓解措施**：检索到的片段作为"候选"交给 DeepSeek 做语义筛选（rerank），DeepSeek 的 `deepseek-v4-pro` 承担这个角色。
+由于不引入向量库，站内检索是纯关键词匹配。**缓解措施**：检索到的片段作为"候选"交给 DeepSeek 做语义筛选（rerank），`deepseek-v4-pro` 承担这个角色。
 
 ### 6.2 联网搜索（DeepSeek Search/Fetch）
 
@@ -620,13 +625,14 @@ web/client/src/
 
 **目标**：让已有功能真正可用，不新增用户可见功能。
 
-- `database.js` 新 schema 落地，旧表重命名保留
+- `database.js` 新 schema 落地，旧表直接删除
+- 删除 `agent/` 目录、`routes/translate.js`、`routes/graph.js`、`routes/categories.js`、`routes/agent.js`、`routes/aiConfig.js`、`services/chat/`、`services/translation/`
 - `services/providers/` 抽象层，DeepSeek + Ollama 两个实现（DeepSeek key 未配时用 Ollama）
 - `services/roles/` 五个角色定义
 - `services/context.js` 上下文装配器
 - 修 `routes/ai.js`：统一 `{message, workId, chapterId, role, scope}` 契约，SSE 流式
 - 前端 axios 实例 + `X-Access-Token` 中间件 + 限流
-- 数据迁移脚本
+- 死代码清理（`AIConfig.jsx`、`TranslationSettings.jsx` 等）
 
 **验收**：能在作品里创建章节，用侧边栏和 DeepSeek 聊天，AI 回复带上下文（知道人物名和当前章节）。
 
@@ -643,7 +649,7 @@ web/client/src/
 ### P2 — 检索
 
 - `pdf-parse` 引入，PDF 上传后自动解析入库
-- 素材库 CRUD + FTS5 索引 + bigram 预处理（§3.3 的两种索引维护方式落地前二选一并验证）
+- 素材库 CRUD + FTS5 索引 + bigram 预处理（应用层维护索引，§3.3 方案 B）
 - 资料员角色：站内检索 + DeepSeek Search/Fetch + 引用溯源
 - 灵感速记本 + 灵感师角色消费灵感产出情节建议
 
@@ -655,7 +661,7 @@ web/client/src/
 - 编辑器撤销/重做
 - 导出修复：DOCX 改用 `docx` 库正确处理格式（现在手写 OOXML 会丢掉全部富格式），新增 Markdown 导出
 - 自动保存（防抖 2s）与版本快照
-- 角色温度、思考深度等参数调节
+- 角色模型与思考强度调节
 - README 与部署文档更新
 
 **验收**：写完一章能导出格式正确的 DOCX；刷新页面不丢内容。
@@ -671,8 +677,11 @@ web/client/src/
 | `express-rate-limit` | server | AI 调用限流 |
 | `react-router-dom` | client | 路由 |
 | `node-llama-cpp` | server | **移除**（声明了但从未 import，实际用 spawn 调 CLI） |
+| `multer` | server | 保留，素材 PDF 上传复用 |
+| `adm-zip` | server | 保留，备份/恢复复用 |
+| `archiver` | server | 保留，备份复用 |
 
-不引入：向量库、中文分词库、状态管理库、Tailwind、UI 框架、embedding 服务。
+不引入：向量库、中文分词库、状态管理库、Tailwind、UI 框架、embedding 服务、翻译相关库。
 
 ---
 
@@ -681,17 +690,19 @@ web/client/src/
 | 风险 | 影响 | 应对 |
 |---|---|---|
 | 长篇上下文超出装配能力 | 长章节 AI 可能写崩 | DeepSeek 1M 上下文余量充足；装配器对超长内容做分段截断并在提示词中说明截断范围 |
-| 纯关键词检索召回不佳 | 站内素材搜不到想要的 | 检索结果交 DeepSeek 语义 rerank；用户可手动补充上下文 |
+| 纯关键词检索召回不佳 | 站内素材搜不到想要的 | 检索结果交 `deepseek-v4-pro` 语义 rerank；用户可手动补充上下文 |
 | API key 泄露 | 额度被盗刷 | key 只在服务器环境变量；访问令牌拦截；调用限流 |
-| 块数据迁移丢失旧报告 | 历史内容丢失 | 旧表重命名保留 90 天，不删除 |
+| 删掉旧数据后无法回退 | 历史报告丢失 | 已确认旧数据无保留价值；且旧报告可从 git 历史找回（提交 `44be5b0` 及之前） |
 | 范围过大导致做不完 | 平台半成品 | 四期切分，每期独立可用；P0/P1 完成即可满足"AI 辅助写作"核心诉求 |
 | SQLite 单机限制 | 未来多用户会受限 | 当前单人场景无碍；真要多用户时再迁移，schema 已按作品维度组织 |
 
 ---
 
-## 10. 待用户确认
+## 10. 决策记录（已确认）
 
-1. **砍掉翻译功能与知识图谱**——确认无误。这两块当前都是坏的，且写小说用不上。
-2. **旧报告数据迁移**——是否需要保留？保留则自动转成一部"未命名作品"下的章节。
-3. **DeepSeek API key 与 Search/Fetch 是否同一账号**——官方说明三者共用同一 Bearer Key，只需一个 `DEEPSEEK_API_KEY`。若用户拿到的搜索 key 是独立的，需增加第二个环境变量。
-4. **模型默认选择**——默认 `deepseek-flash`（快、便宜、适合日常改写），`deepseek-v4-pro` 作为"深度思考"档位供审稿和大纲生成使用。设置页可切换。
+| # | 问题 | 决定 |
+|---|---|---|
+| 1 | 翻译功能与知识图谱是否砍掉 | **砍掉**。两者当前均为坏功能，且写小说用不上 |
+| 2 | 旧报告数据是否迁移 | **不迁移，直接删除**。需要时从 git 历史找回 |
+| 3 | DeepSeek 对话与搜索是否需要两把 key | **一把**。三个端点（Chat / Search / Fetch）共用同一 Bearer Key，环境变量 `DEEPSEEK_API_KEY` |
+| 4 | 模型选择 | 按官方最新文档：日常 `deepseek-flash`，深度思考 `deepseek-v4-pro`（思考强度 low/high/max） |
