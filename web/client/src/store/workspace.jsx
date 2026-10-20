@@ -14,12 +14,17 @@ import { convertBlock as convertBlockData } from '../components/Editor/blocks';
  * 工作区全局状态。
  *
  * 跨组件共享的东西：当前作品、章节列表、当前章节与它的块、文本选区、
- * 当前 AI 角色、会话 id、对话消息流。
+ * 当前 AI 角色、会话 id、对话消息流、撤销/重做栈、保存状态。
  *
  * 块是编辑器的权威数据；每次改动打 dirty 标记，由本文件统一防抖落库，
  * 避免每个块组件各写各的保存逻辑。
  */
 const WorkspaceContext = createContext(null);
+
+// 撤销栈上限。超出就把最早的丢掉。
+const MAX_UNDO = 50;
+// 连续输入合并窗口：在这个时间内的连续输入算同一次撤销单元。
+const EDIT_BURST_MS = 700;
 
 const initialState = {
   work: null,
@@ -34,6 +39,11 @@ const initialState = {
   streaming: '',
   notice: '',
   error: '',
+  // 撤销/重做：past 存历史快照，future 存被撤销掉的快照
+  past: [],
+  future: [],
+  // 保存状态：idle（无改动）/ saving（防抖等待或请求中）/ saved / error
+  saveStatus: 'idle',
 };
 
 function reducer(state, action) {
@@ -53,6 +63,10 @@ function reducer(state, action) {
         messages: [],
         streaming: '',
         error: '',
+        // 撤销栈按章隔离：上一章的快照对这一章没有意义
+        past: [],
+        future: [],
+        saveStatus: 'idle',
       };
     }
 
@@ -131,6 +145,32 @@ function reducer(state, action) {
     case 'notice/set':
       return { ...state, notice: action.notice, error: action.error || '' };
 
+    case 'history/push': {
+      // 记一个撤销点。action.snapshot 是改动前的 blocks。
+      const past = [...state.past, action.snapshot].slice(-MAX_UNDO);
+      return { ...state, past, future: [], saveStatus: 'dirty' };
+    }
+
+    case 'history/undo': {
+      if (!state.past.length) return state;
+      // 快照栈顶就是"上一步"的状态；当前状态压进 future 供重做
+      const restored = state.past[state.past.length - 1];
+      const past = state.past.slice(0, -1);
+      const future = [...state.future, state.blocks].slice(-MAX_UNDO);
+      return { ...state, blocks: restored, past, future, saveStatus: 'dirty' };
+    }
+
+    case 'history/redo': {
+      if (!state.future.length) return state;
+      const restored = state.future[state.future.length - 1];
+      const future = state.future.slice(0, -1);
+      const past = [...state.past, state.blocks].slice(-MAX_UNDO);
+      return { ...state, blocks: restored, past, future, saveStatus: 'dirty' };
+    }
+
+    case 'save/status':
+      return { ...state, saveStatus: action.status };
+
     default:
       return state;
   }
@@ -162,14 +202,17 @@ export function WorkspaceProvider({ children }) {
     timerRef.current = setTimeout(async () => {
       const { chapter, blocks } = stateRef.current;
       if (!chapter) return;
+      dispatch({ type: 'save/status', status: 'saving' });
       try {
         await api.put(`/chapters/${chapter.id}`, { blocks });
         dirtyRef.current = false;
+        dispatch({ type: 'save/status', status: 'saved' });
       } catch (e) {
         dispatch({
           type: 'notice/set',
           error: '自动保存失败：' + (e.response?.data?.error || e.message),
         });
+        dispatch({ type: 'save/status', status: 'error' });
       }
     }, 800);
 
@@ -196,36 +239,95 @@ export function WorkspaceProvider({ children }) {
     return () => window.removeEventListener('beforeunload', flush);
   }, []);
 
-  const setBlocks = useCallback((blocks) => {
-    dirtyRef.current = true;
-    dispatch({ type: 'blocks/set', blocks });
+  // 上一次输入的归组信息：同一块 + 仍在 burst 窗口内 → 合并成一次撤销单元
+  const lastEditRef = useRef(null);
+
+  /**
+   * 记一个撤销点。
+   *
+   * snapshot 是「改动前」的 blocks。连续输入要合并成一次撤销单元：
+   * 如果上一次输入还在 burst 窗口内且是同一个块，就不再记新点，
+   * 否则连打一句话会产生几十个撤销步。
+   */
+  const pushHistory = useCallback((snapshot, { groupKey } = {}) => {
+    const now = Date.now();
+    const last = lastEditRef.current;
+    if (groupKey && last && last.key === groupKey && now - last.at < EDIT_BURST_MS) {
+      last.at = now;
+      return;
+    }
+    lastEditRef.current = groupKey ? { key: groupKey, at: now } : null;
+    dispatch({ type: 'history/push', snapshot });
   }, []);
 
-  const updateBlock = useCallback((id, patch) => {
+  const setBlocks = useCallback(
+    (blocks) => {
+      dirtyRef.current = true;
+      dispatch({ type: 'blocks/set', blocks });
+    },
+    []
+  );
+
+  const updateBlock = useCallback(
+    (id, patch) => {
+      dirtyRef.current = true;
+      // 同一个块在 burst 窗口内的连续输入合并成一次撤销
+      pushHistory(stateRef.current.blocks, { groupKey: `text:${id}` });
+      dispatch({ type: 'blocks/replace', id, patch });
+    },
+    [pushHistory]
+  );
+
+  const insertBlock = useCallback(
+    (index, block) => {
+      dirtyRef.current = true;
+      pushHistory(stateRef.current.blocks);
+      dispatch({ type: 'blocks/insert', index, block });
+    },
+    [pushHistory]
+  );
+
+  const removeBlock = useCallback(
+    (id) => {
+      dirtyRef.current = true;
+      pushHistory(stateRef.current.blocks);
+      dispatch({ type: 'blocks/remove', id });
+    },
+    [pushHistory]
+  );
+
+  const convertBlock = useCallback(
+    (id, type) => {
+      const target = stateRef.current.blocks.find((b) => b.id === id);
+      if (!target) return;
+      dirtyRef.current = true;
+      pushHistory(stateRef.current.blocks);
+      dispatch({ type: 'blocks/convert', id, block: convertBlockData(target, type) });
+    },
+    [pushHistory]
+  );
+
+  const moveBlock = useCallback(
+    (id, offset) => {
+      dirtyRef.current = true;
+      pushHistory(stateRef.current.blocks);
+      dispatch({ type: 'blocks/move', id, offset });
+    },
+    [pushHistory]
+  );
+
+  const undo = useCallback(() => {
+    const { past } = stateRef.current;
+    if (!past.length) return;
     dirtyRef.current = true;
-    dispatch({ type: 'blocks/replace', id, patch });
+    dispatch({ type: 'history/undo' });
   }, []);
 
-  const insertBlock = useCallback((index, block) => {
+  const redo = useCallback(() => {
+    const { future } = stateRef.current;
+    if (!future.length) return;
     dirtyRef.current = true;
-    dispatch({ type: 'blocks/insert', index, block });
-  }, []);
-
-  const removeBlock = useCallback((id) => {
-    dirtyRef.current = true;
-    dispatch({ type: 'blocks/remove', id });
-  }, []);
-
-  const convertBlock = useCallback((id, type) => {
-    const target = stateRef.current.blocks.find((b) => b.id === id);
-    if (!target) return;
-    dirtyRef.current = true;
-    dispatch({ type: 'blocks/convert', id, block: convertBlockData(target, type) });
-  }, []);
-
-  const moveBlock = useCallback((id, offset) => {
-    dirtyRef.current = true;
-    dispatch({ type: 'blocks/move', id, offset });
+    dispatch({ type: 'history/redo' });
   }, []);
 
   const loadWork = useCallback(async (workId) => {
@@ -256,6 +358,7 @@ export function WorkspaceProvider({ children }) {
         blocks: parseBlocks(chapter.blocks),
       });
       dirtyRef.current = false;
+      lastEditRef.current = null;
       return chapter;
     } catch (e) {
       dispatch({
@@ -276,6 +379,8 @@ export function WorkspaceProvider({ children }) {
       removeBlock,
       convertBlock,
       moveBlock,
+      undo,
+      redo,
       loadWork,
       loadChapter,
     }),
@@ -287,6 +392,8 @@ export function WorkspaceProvider({ children }) {
       removeBlock,
       convertBlock,
       moveBlock,
+      undo,
+      redo,
       loadWork,
       loadChapter,
     ]

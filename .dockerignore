@@ -1,0 +1,29 @@
+# 构建上下文只保留 Dockerfile 真正需要的东西。
+#
+# 关键两条：
+# 1. node_modules 必须排除 —— 否则本地 macOS 上编好的 sqlite3 原生模块
+#    会覆盖镜像里 npm ci 装好的 Linux 版本，容器启动直接崩。
+# 2. data/ 必须排除 —— 里面有 SQLite 库、上传素材和 .app-password 密码文件，
+#    既不能进镜像，也不该发给远端构建器。
+
+node_modules
+**/node_modules
+
+data
+web/server/data
+web/server/public
+web/client/dist
+
+.git
+.gitignore
+.claude
+.vscode
+.idea
+pdf_workbench
+
+.env
+.env.*
+*.log
+*.db
+*.zip
+.DS_Store

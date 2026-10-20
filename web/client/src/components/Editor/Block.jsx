@@ -8,6 +8,7 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { BLOCK_TYPES, BLOCK_TYPE_MAP } from './blocks';
+import { useIsMobile } from '../../hooks/useMediaQuery';
 
 const { Text } = Typography;
 
@@ -52,6 +53,7 @@ export default function Block({
 }) {
   const textRef = useAutoHeight(block.content);
   const [uploading, setUploading] = useState(false);
+  const isMobile = useIsMobile();
 
   const handleSelect = (e) => {
     const el = e.target;
@@ -324,6 +326,45 @@ export default function Block({
     }
   };
 
+  const actions = (
+    <>
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: BLOCK_TYPES.map((t) => ({
+            key: t.type,
+            label: t.label,
+            disabled: t.type === block.type,
+            onClick: () => onConvert?.(block.id, t.type),
+          })),
+        }}
+      >
+        <button title="转为其他块类型" style={{ ...iconButtonStyle(false), width: 30, fontSize: 11 }}>
+          {BLOCK_TYPE_MAP.get(block.type)?.label || '?'}
+        </button>
+      </Dropdown>
+      <button
+        title="上移"
+        disabled={index === 0}
+        onClick={() => onMove(-1)}
+        style={iconButtonStyle(index === 0)}
+      >
+        <ArrowUpOutlined style={{ fontSize: 12 }} />
+      </button>
+      <button
+        title="下移"
+        disabled={index === total - 1}
+        onClick={() => onMove(1)}
+        style={iconButtonStyle(index === total - 1)}
+      >
+        <ArrowDownOutlined style={{ fontSize: 12 }} />
+      </button>
+      <button title="删除" onClick={onDelete} style={iconButtonStyle(false)}>
+        <DeleteOutlined style={{ fontSize: 12 }} />
+      </button>
+    </>
+  );
+
   return (
     <div
       data-block-id={block.id}
@@ -337,56 +378,39 @@ export default function Block({
     >
       {renderBody()}
 
-      {/* 悬停时出现的管理按钮 */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 2,
-          right: -76,
-          display: 'flex',
-          gap: 2,
-          alignItems: 'center',
-          opacity: 0.35,
-          transition: 'opacity 0.15s ease',
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
-        onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.35)}
-      >
-        <Dropdown
-          trigger={['click']}
-          menu={{
-            items: BLOCK_TYPES.map((t) => ({
-              key: t.type,
-              label: t.label,
-              disabled: t.type === block.type,
-              onClick: () => onConvert?.(block.id, t.type),
-            })),
+      {/* 宽屏：悬停时在块右侧浮出管理按钮。窄屏浮出会超出视口，
+          改成块下方常驻一行。 */}
+      {isMobile ? (
+        <div
+          style={{
+            display: 'flex',
+            gap: 2,
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            paddingTop: 4,
+            opacity: 0.6,
           }}
         >
-          <button title="转为其他块类型" style={{ ...iconButtonStyle(false), width: 30, fontSize: 11 }}>
-            {BLOCK_TYPE_MAP.get(block.type)?.label || '?'}
-          </button>
-        </Dropdown>
-        <button
-          title="上移"
-          disabled={index === 0}
-          onClick={() => onMove(-1)}
-          style={iconButtonStyle(index === 0)}
+          {actions}
+        </div>
+      ) : (
+        <div
+          style={{
+            position: 'absolute',
+            top: 2,
+            right: -76,
+            display: 'flex',
+            gap: 2,
+            alignItems: 'center',
+            opacity: 0.35,
+            transition: 'opacity 0.15s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.35)}
         >
-          <ArrowUpOutlined style={{ fontSize: 12 }} />
-        </button>
-        <button
-          title="下移"
-          disabled={index === total - 1}
-          onClick={() => onMove(1)}
-          style={iconButtonStyle(index === total - 1)}
-        >
-          <ArrowDownOutlined style={{ fontSize: 12 }} />
-        </button>
-        <button title="删除" onClick={onDelete} style={iconButtonStyle(false)}>
-          <DeleteOutlined style={{ fontSize: 12 }} />
-        </button>
-      </div>
+          {actions}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Empty, Input, message, Spin, Modal } from 'antd';
-import { PlusOutlined, BookOutlined, DownloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, BookOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
+import ExportButton from '../components/ExportButton';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 /**
  * 作品列表页。
  */
 export default function Works() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [works, setWorks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -56,6 +59,8 @@ export default function Works() {
         style={{
           display: 'flex',
           alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 12,
           marginBottom: 24,
         }}
       >
@@ -77,7 +82,9 @@ export default function Works() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+            gridTemplateColumns: isMobile
+              ? '1fr'
+              : 'repeat(auto-fill, minmax(260px, 1fr))',
             gap: 16,
           }}
         >
@@ -121,15 +128,9 @@ export default function Works() {
                 {work.chapter_count} 章
                 {work.genre ? ` · ${work.genre}` : ''}
                 <span style={{ flex: 1 }} />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<DownloadOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    window.open(`/api/export/work/${work.id}/markdown`, '_blank');
-                  }}
-                />
+                <span onClick={(e) => e.stopPropagation()}>
+                  <ExportButton scope="work" id={work.id} size="small" />
+                </span>
               </div>
             </Card>
           ))}

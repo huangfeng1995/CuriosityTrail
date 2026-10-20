@@ -5,9 +5,14 @@
  *
  *   GET  /api/export/work/:id/txt        导出整部作品为纯文本
  *   GET  /api/export/work/:id/markdown   导出整部作品为 Markdown
+ *   GET  /api/export/work/:id/docx       导出整部作品为 DOCX
  *   GET  /api/export/chapter/:id/markdown  导出单章为 Markdown
+ *   GET  /api/export/chapter/:id/txt      导出单章为纯文本
+ *   GET  /api/export/chapter/:id/docx     导出单章为 DOCX
  *   GET  /api/export/backup              下载全量备份 zip
  *   POST /api/export/restore             从备份 zip 恢复
+ *   GET  /api/export/backups             列出定时备份
+ *   POST /api/export/backups             立即生成一份备份
  */
 
 const express = require('express');
@@ -18,6 +23,8 @@ const AdmZip = require('adm-zip');
 const fileUpload = require('express-fileupload');
 const config = require('../config');
 const { all, get } = require('../database');
+const docxExport = require('../services/docxExport');
+const backup = require('../services/backup');
 
 const router = express.Router();
 
@@ -138,6 +145,63 @@ router.get('/chapter/:id/markdown', async (req, res) => {
   }
 });
 
+router.get('/chapter/:id/txt', async (req, res) => {
+  try {
+    const chapter = await get('SELECT * FROM chapters WHERE id = ?', [req.params.id]);
+    if (!chapter) return res.status(404).json({ error: '章节不存在' });
+
+    const body = blocksToParagraphs(chapter).join('\n\n');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(chapter.title)}.txt"`
+    );
+    res.send(`${chapter.title}\n\n${body}\n`);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/work/:id/docx', async (req, res) => {
+  try {
+    const data = await loadWorkChapters(req.params.id);
+    if (!data) return res.status(404).json({ error: '作品不存在' });
+
+    const buffer = await docxExport.buildWorkDocx(data.work, data.chapters);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(data.work.title)}.docx"`
+    );
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/chapter/:id/docx', async (req, res) => {
+  try {
+    const chapter = await get('SELECT * FROM chapters WHERE id = ?', [req.params.id]);
+    if (!chapter) return res.status(404).json({ error: '章节不存在' });
+
+    const buffer = await docxExport.buildChapterDocx(chapter);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(chapter.title)}.docx"`
+    );
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/backup', async (req, res) => {
   const dataDir = config.dataDir;
   const timestamp = new Date().toISOString().slice(0, 10);
@@ -163,6 +227,28 @@ router.get('/backup', async (req, res) => {
   }
 
   archive.finalize();
+});
+
+/**
+ * 列出磁盘上的定时备份。
+ */
+router.get('/backups', (req, res) => {
+  res.json(backup.listBackups());
+});
+
+/**
+ * 立刻生成一份备份。用于"我现在就要一份"和验证定时备份是否在跑。
+ */
+router.post('/backups', async (req, res) => {
+  const result = await backup.createBackup('manual');
+  if (!result.ok) {
+    return res.status(500).json({ error: result.reason });
+  }
+  res.json({
+    ok: true,
+    name: path.basename(result.file),
+    size: result.size,
+  });
 });
 
 // 备份恢复要读整个 zip 进内存（req.files.backup.data）。

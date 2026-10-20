@@ -17,6 +17,7 @@ const { aiLimiter, apiLimiter } = require('./middleware/rateLimit');
 const { checkSingleInstance } = require('./middleware/singleInstance');
 const { ready } = require('./database');
 const localSearch = require('./services/search/local');
+const backup = require('./services/backup');
 
 // ---------------------------------------------------------------------------
 // 单实例校验：多实例并发写 SQLite 会损坏数据库，稿子全丢
@@ -122,3 +123,10 @@ ready
     if (count) console.log(`   素材索引: 已重建 ${count} 条`);
   })
   .catch((err) => console.error('素材索引重建失败：', err.message));
+
+// 定时备份。BACKUP_HOUR 指定每天几点（0-23），默认凌晨 3 点；
+// 设成 -1 可以关掉。
+const backupHour = process.env.BACKUP_HOUR === undefined ? 3 : Number(process.env.BACKUP_HOUR);
+if (Number.isInteger(backupHour) && backupHour >= 0 && backupHour <= 23) {
+  backup.startScheduledBackup(backupHour);
+}

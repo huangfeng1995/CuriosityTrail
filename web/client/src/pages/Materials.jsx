@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 const { Text } = Typography;
 
@@ -31,6 +32,7 @@ const { Text } = Typography;
  * 命中片段会带高亮位置，作者一眼能看出为什么这条被检索到。
  */
 export default function Materials() {
+  const isMobile = useIsMobile();
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
@@ -150,6 +152,7 @@ export default function Materials() {
         style={{
           display: 'flex',
           alignItems: 'center',
+          flexWrap: 'wrap',
           gap: 12,
           marginBottom: 20,
         }}
@@ -161,7 +164,7 @@ export default function Materials() {
           onSearch={doSearch}
           allowClear
           enterButton={<SearchOutlined />}
-          style={{ maxWidth: 340 }}
+          style={{ maxWidth: 340, flex: isMobile ? '1 1 100%' : undefined }}
         />
         {hits && (
           <Text type="secondary" style={{ fontSize: 12 }}>

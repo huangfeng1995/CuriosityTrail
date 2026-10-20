@@ -27,7 +27,6 @@ export default function AssistantSidebar({ onOpenSettings }) {
     streaming,
     notice,
     dispatch,
-    setBlocks,
     updateBlock,
     insertBlock,
   } = useWorkspace();

@@ -175,6 +175,8 @@ CREATE TABLE IF NOT EXISTS prompt_overrides (
   id             TEXT PRIMARY KEY,
   system_prompt  TEXT NOT NULL,
   temperature    REAL,
+  model          TEXT,
+  thinking       INTEGER,
   updated_at     TEXT NOT NULL
 );
 `;
@@ -227,6 +229,8 @@ function initDatabase() {
               return;
             }
             ensureColumn('materials', 'page_count', 'INTEGER DEFAULT 0')
+              .then(() => ensureColumn('prompt_overrides', 'model', 'TEXT'))
+              .then(() => ensureColumn('prompt_overrides', 'thinking', 'INTEGER'))
               .then(() => resolve())
               .catch(reject);
           });

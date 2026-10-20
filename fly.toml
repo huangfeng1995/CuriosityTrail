@@ -1,19 +1,34 @@
-# fly.toml - Fly.io 配置文件
+# Fly.io 配置文件
 # 参考：https://fly.io/docs/reference/configuration/
+#
+# 构建上下文为仓库根目录，使用根目录的多阶段 Dockerfile：
+# 先构建前端（web/client），再把它拷进后端镜像的 web/server/public。
 
 app = "curiosity-trail"
 primary_region = "hkg"
 
 [build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  DATA_DIR = "/app/data"
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false  # 不自动停止，保持24小时在线
+  # 单人使用，保持机器常驻，避免冷启动拖慢写作
+  auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
   processes = ["app"]
 
+# 数据持久化：SQLite 库、素材文件、AI 配置都挂在这块卷上
 [mounts]
   source = "curiosity_trail_data"
   destination = "/app/data"
+
+# 下面的 secrets 通过 `fly secrets set` 注入，不要写进本文件：
+#   fly secrets set APP_PASSWORD=... JWT_SECRET=... DEEPSEEK_API_KEY=...
+# 详见 web/DEPLOY.md

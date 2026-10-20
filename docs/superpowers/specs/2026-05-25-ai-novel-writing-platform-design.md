@@ -290,10 +290,14 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_conv ON messages(conversation_id, created_at);
 
 -- 提示词覆盖（用户编辑过的角色提示词）
+-- model / thinking 为 NULL 表示"跟随全局设置"；temperature 为 NULL
+-- 表示"跟随全局供应商温度"（而不是角色的默认温度）。
 CREATE TABLE prompt_overrides (
   id           TEXT PRIMARY KEY,      -- 角色 key，如 'writer'
   system_prompt TEXT NOT NULL,
   temperature  REAL,
+  model        TEXT,                  -- 空 = 跟随全局模型
+  thinking     INTEGER,               -- NULL = 跟随全局，0/1 = 显式关/开
   updated_at   TEXT NOT NULL
 );
 ```
@@ -344,27 +348,30 @@ CREATE TABLE prompt_overrides (
 
 ## 4. 后端架构
 
-### 4.1 目录结构（目标）
+### 4.1 目录结构（实际落地）
 
 ```
 web/server/
-├── index.js                 启动入口，路由挂载
-├── database.js              schema 初始化 + all/get/run 封装
+├── index.js                 启动入口：路由挂载、静态资源、定时备份
+├── database.js              schema 初始化 + 增量迁移 + all/get/run 封装
 ├── config.js                环境变量与配置读取（新增）
 ├── routes/
 │   ├── works.js             作品/章节 CRUD（新增）
+│   ├── chapters.js          章节详情/更新/删除（新增）
 │   ├── characters.js        人物卡 CRUD（新增）
 │   ├── settings.js          世界观设定 CRUD（新增）
 │   ├── materials.js         素材库 CRUD + 上传 + 检索（新增）
 │   ├── inspirations.js      灵感速记 CRUD（新增）
-│   ├── ai.js                AI 调用：对话、角色、行内操作、流式（新增）
-│   ├── prompts.js           提示词覆盖读写（新增）
+│   ├── ai.js                AI 调用：对话、行内操作、角色、提示词覆盖、流式（新增）
 │   ├── auth.js              登录 / 登出 / 会话校验（新增）
-│   ├── search.js            联网搜索 / 抓取网页（作者手动触发，新增）
+│   ├── search.js            联网搜索 / 抓取网页（新增）
+│   ├── export.js            导出 TXT/Markdown/DOCX + 备份/恢复（改造）
+│   ├── upload.js            图片上传（保留）
 │   └── config.js            系统配置读写（新增）
 ├── services/
 │   ├── providers/           AI 供应商抽象（新增）
-│   │   ├── index.js         工厂 + 路由
+│   │   ├── index.js         工厂 + 路由 + 降级
+│   │   ├── base.js          Provider 基类 + SSE 读取 + 重试
 │   │   ├── deepseek.js      DeepSeek 对话 provider
 │   │   ├── ollama.js        本地 Ollama provider
 │   │   └── openaiCompat.js  通用 OpenAI 兼容 provider
@@ -372,24 +379,29 @@ web/server/
 │   │   ├── deepseekSearch.js  DeepSeek Search/Fetch（新增）
 │   │   └── local.js           站内 FTS5 检索（新增）
 │   ├── roles/               五个 AI 角色定义（改造自 prompts.js）
-│   │   ├── index.js         角色注册表 + 加载覆盖
+│   │   ├── index.js         角色注册表 + 加载覆盖 + 参数合并
 │   │   ├── writer.js
 │   │   ├── editor.js
 │   │   ├── critic.js
-│   │   ├── inspirer.js
+│   │   ├── inspiler.js
 │   │   └── researcher.js
 │   ├── context.js           上下文装配器（新增，核心）
-│   ├── documentText.js      PDF / TXT 正文提取（新增）
-│   ├── provider.js          统一 provider 门面（改造自 chatManager.js）
+│   ├── documentText.js      PDF / TXT / MD 正文提取（新增）
+│   ├── docxExport.js        DOCX 导出（新增）
+│   ├── backup.js            备份与定时备份（新增）
+│   ├── auth.js              密码校验 + JWT 签发（新增）
 │   └── aiConfig.js          配置管理（改造，含 DeepSeek 段）
-├── middleware/
-│   ├── auth.js              JWT 会话校验（新增）
-│   └── rateLimit.js         登录 / AI / 全局限流（新增）
+└── middleware/
+    ├── auth.js              JWT 会话校验（新增）
+    ├── rateLimit.js         登录 / AI / 全局限流（新增）
+    └── singleInstance.js    单实例保护（新增）
 ```
+
+**提示词覆盖没有单独的路由文件**：读写合并在 `routes/ai.js` 的 `/prompts/:roleKey`（GET/POST/DELETE），因为它和角色列表是同一块数据。
 
 **整个删除**：`agent/` 目录（`orchestrator.js` / `memory/` / `tools/`）、`routes/translate.js`、`routes/graph.js`、`routes/categories.js`、`routes/agent.js`、`routes/aiConfig.js`、`services/chat/`、`services/translation/`、`services/ollama.js`、`services/llamaCpp.js`、`services/prompts.js`。
 
-**保留但重写**：`routes/reports.js` → `routes/works.js`；`routes/documents.js` → `routes/materials.js`；`routes/export.js` 保留并扩展（新增 Markdown 导出）；`routes/upload.js` 保留（图片上传）。
+**保留但重写**：`routes/reports.js` → `routes/works.js`；`routes/documents.js` → `routes/materials.js`；`routes/export.js` 保留并扩展（新增 Markdown/DOCX 导出、备份列表与定时备份）；`routes/upload.js` 保留（图片上传）。
 
 ### 4.2 Provider 抽象
 
@@ -622,45 +634,49 @@ fly secrets set DEEPSEEK_API_KEY=... APP_PASSWORD=... APP_PASSWORD_SALT=... JWT_
 
 ## 5. 前端架构
 
-### 5.1 目录结构（目标）
+### 5.1 目录结构（实际落地）
 
 ```
 web/client/src/
 ├── main.jsx
-├── App.jsx                 应用壳 + 三栏布局
+├── App.jsx                 应用壳 + 顶栏导航 + 路由
 ├── api/
-│   └── client.js           axios 实例，统一注入 Cookie 凭据（新增）
+│   ├── client.js           axios 实例，统一注入 Cookie 凭据（新增）
+│   └── sse.js              SSE 流式读取（新增）
 ├── store/
-│   ├── workspace.js        当前作品/章节/选中项的全局状态（新增）
-│   └── auth.js            登录态管理（新增）
+│   ├── workspace.jsx       块数据 + 撤销栈 + 保存状态 + 选区（新增）
+│   └── auth.jsx            登录态管理（新增）
+├── hooks/
+│   └── useMediaQuery.js    断点判断（新增）
 ├── pages/
 │   ├── Login.jsx           登录页（新增）
+│   ├── Works.jsx           作品列表页（新增）
 │   ├── Workspace.jsx       三栏工作区（新增）
 │   ├── Materials.jsx       素材库页（新增）
-│   └── SettingsPage.jsx    设置页（新增）
+│   └── SettingsPage.jsx    设置页：AI 供应商 / 角色提示词 / 备份（新增）
 ├── components/
 │   ├── Sidebar/
-│   │   ├── TreePanel.jsx       左栏导航树
 │   │   ├── WorkTree.jsx       作品章节树
-│   │   ├── CharacterList.jsx   人物卡列表 + 编辑抽屉
-│   │   ├── SettingList.jsx    设定列表 + 编辑抽屉
-│   │   ├── MaterialList.jsx   素材库
-│   │   └── InspirationList.jsx 灵感速记
+│   │   ├── CharacterPanel.jsx 人物卡列表 + 编辑抽屉
+│   │   ├── SettingPanel.jsx   设定列表 + 编辑抽屉
+│   │   ├── WorkInfoPanel.jsx  作品信息（题材/简介/大纲）
+│   │   └── InspirationPanel.jsx 灵感速记
 │   ├── Editor/
 │   │   ├── ChapterEditor.jsx  块编辑器主组件（改造 ReportEditor.jsx）
 │   │   ├── Block.jsx          单个块的渲染与编辑
 │   │   ├── BlockToolbar.jsx   选中文字浮出的行内工具条
-│   │   └── BlockPalette.jsx   底部添加块的按钮组
+│   │   ├── BlockPalette.jsx   底部添加块的按钮组
+│   │   └── blocks.js          块类型定义与工具函数
 │   ├── Assistant/
 │   │   ├── Sidebar.jsx        AI 侧边栏容器
 │   │   ├── RoleTabs.jsx       五个角色切换
 │   │   ├── MessageList.jsx    消息流
 │   │   ├── ActionCard.jsx     结构化输出卡片（comment 类）
 │   │   └── CitationBadge.jsx  来源角标
-│   └── Settings/
-│       ├── ConfigPage.jsx     provider / 模型 / 温度 / 思考强度 / 限流
-│       └── PromptPage.jsx     提示词编辑
+│   └── ExportButton.jsx    导出格式下拉（Word / Markdown / 纯文本）
 ```
+
+**设置页没有拆成 `components/Settings/`**：三个标签页（AI 供应商、角色提示词、备份）逻辑上都只服务于设置页，拆成独立目录反而要跨目录传状态，所以留在 `pages/SettingsPage.jsx` 内部组件里。
 
 **整个删除**：`KnowledgeGraph.jsx`、`TranslationModal.jsx`、`DocumentTranslationModal.jsx`、`TranslationSettings.jsx`、`AIConfig.jsx`、`SearchBar.jsx`、`Documents.jsx`、`Settings.jsx`、`Reports.jsx`、`AgentAssistant.jsx`。
 
@@ -811,16 +827,19 @@ web/client/src/
 
 ### P3 — 打磨与部署
 
-- 行内工具条补全剩余动作（换语气/续写/找茬/口语化）
-- 编辑器撤销/重做
-- 导出修复：DOCX 改用 `docx` 库正确处理格式（现在手写 OOXML 会丢掉全部富格式），新增 Markdown 导出
-- 自动保存（防抖 2s）与版本快照
-- 角色模型与思考强度调节
-- **公网部署**：修正 `web/server/Dockerfile` 的非法 `COPY ../client/dist`（根目录 `Dockerfile` 已是正确的多阶段版本，删掉重复的那个）；Fly.io secrets 配置说明；备份定时触发入口
-- **移动端适配**：三栏在窄屏降级为抽屉（§4.6.6）
-- README 与 DEPLOY.md 更新（部署步骤、备份恢复、密钥轮换）
+| # | 条目 | 状态 |
+|---|---|---|
+| 1 | 行内工具条补全剩余动作（换语气/续写/找茬/口语化） | ✅ 已完成 |
+| 2 | 编辑器撤销/重做 | ✅ 已完成（reducer 内 past/future 快照栈，`MAX_UNDO=50`，输入合并窗口 700ms，按章隔离，Ctrl/Cmd+Z / Shift+Z） |
+| 3 | 导出修复：DOCX 改用 `docx` 库，新增 Markdown 导出 | ✅ 已完成（work/chapter × txt/markdown/docx 六条端点，前端统一格式选择） |
+| 4 | 自动保存（防抖 2s）与版本快照 | ✅ 已完成（自动保存 ✅；版本快照由备份系统承担，见第 7 项） |
+| 5 | 角色模型与思考强度调节 | ✅ 已完成（`prompt_overrides` 增 `model` / `thinking` 列，模型、温度、思考强度三态语义） |
+| 6 | **公网部署**：删掉非法 `web/server/Dockerfile`；Fly.io secrets 说明；备份定时触发入口 | ⚠️ 代码与配置已完成（`fly.toml` 指向根目录多阶段 Dockerfile、`[env]`/`[mounts]` 齐全、`BACKUP_HOUR` 定时注册已实测）；**实际 `fly deploy` 尚未执行**，待用户提供平台 secret |
+| 7 | 备份定时触发 + 设置页备份 UI | ✅ 已完成（`setTimeout` 计算下一个整点，滚动保留 7 份；设置页可手动备份/下载/恢复） |
+| 8 | **移动端适配**：窄屏降级（§4.6.6） | ✅ 已完成（新增 `useMediaQuery` hook；作品列表/素材库/设置页/块操作按钮/章节头均已适配，375×812 实测无溢出） |
+| 9 | README 与 DEPLOY.md 更新（部署步骤、备份恢复、密钥轮换） | ✅ 已完成（新建根 README，重写 web/README.md 与 web/DEPLOY.md） |
 
-**验收**：写完一章能导出格式正确的 DOCX；刷新页面不丢内容；公司浏览器可通过 HTTPS 域名访问并正常写作。
+**验收**：写完一章能导出格式正确的 DOCX ✅；刷新页面不丢内容 ✅；公司浏览器可通过 HTTPS 域名访问并正常写作 ⏳（待 Fly.io 实际部署）。
 
 ---
 
@@ -831,15 +850,17 @@ web/client/src/
 | `dotenv` | server | **必须补装**。当前 `require('dotenv')` 静默失败，`.env` 从未被加载 |
 | `jsonwebtoken` | server | 签发会话 token，无状态登录态 |
 | `express-rate-limit` | server | 登录爆破 / AI 额度 / 全局滥用限流 |
-| `pdf-parse` | server | PDF 解析入库 |
-| `docx` | server | 正确的 DOCX 导出 |
+| `pdf-parse` | server | PDF 解析入库（实际安装 v1.1.4；用自定义 `pagerender` 逐页渲染并在页首插 `[[PAGE n]]` 标记） |
+| `docx` | server | 正确的 DOCX 导出（v9.13.0，CJS 入口 `dist/index.cjs`） |
 | `react-router-dom` | client | 路由 + 登录守卫 |
-| `node-llama-cpp` | server | **移除**（声明了但从未 import，实际用 spawn 调 CLI） |
+| `node-llama-cpp` | server | **移除**。两个原因：① 声明了但从未 import，实际靠 spawn 调 CLI；② 其 postinstall 会拉取大型原生二进制，在 Fly.io 镜像构建里既拖慢构建又让镜像体积失控。翻译功能已整体砍掉，不需要它 |
+| `axios` | server | **移除**。后端改用 Node 18+ 内置 `fetch` 调 DeepSeek / Search / Fetch 三个端点，无须 HTTP 客户端依赖（前端仍保留 axios） |
+| `uuid` | server | **移除**。项目内 id 全部是 SQLite 自增整数或自写的短哈希字符串，用不到 UUID |
 | `multer` | server | 保留，素材 PDF 上传复用 |
 | `adm-zip` | server | 保留，备份/恢复复用 |
 | `archiver` | server | 保留，备份复用 |
 
-不引入：向量库、中文分词库、状态管理库、Tailwind、UI 框架、embedding 服务、翻译相关库、bcrypt（用 Node 内置 `crypto.scrypt`）。
+不引入：向量库、中文分词库、状态管理库、Tailwind、UI 框架、embedding 服务、翻译相关库、bcrypt（用 Node 内置 `crypto.scrypt`）、定时任务库（备份定时用 `setTimeout` 计算下一个整点触发，不引 node-cron）。
 
 ---
 

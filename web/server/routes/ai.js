@@ -365,6 +365,13 @@ router.post('/chat', async (req, res) => {
     const result = await provider.chatStream({
       messages: chatMessages,
       temperature: role?.temperature,
+      // 角色可以单独指定模型与思考开关；没指定就跟随全局配置。
+      // 角色模型只在 DeepSeek 下生效——别的 provider 用的是自己的模型名，
+      // 硬套 DeepSeek 的模型名会直接报"模型不存在"。
+      model: role?.model && name === 'deepseek' ? role.model : undefined,
+      thinking: role?.thinking === null || role?.thinking === undefined
+        ? undefined
+        : (role.thinking ? 'enabled' : 'disabled'),
       jsonOutput: true,
       onToken: (token) => {
         fullText += token;
@@ -484,6 +491,10 @@ router.post('/inline', async (req, res) => {
         { role: 'user', content: String(selection) },
       ],
       temperature: role?.temperature,
+      model: role?.model && name === 'deepseek' ? role.model : undefined,
+      thinking: role?.thinking === null || role?.thinking === undefined
+        ? undefined
+        : (role.thinking ? 'enabled' : 'disabled'),
       jsonOutput: true,
     });
 
@@ -531,7 +542,7 @@ router.get('/roles', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.post('/prompts/:roleKey', async (req, res) => {
   const { roleKey } = req.params;
-  const { systemPrompt, temperature } = req.body || {};
+  const { systemPrompt, temperature, model, thinking } = req.body || {};
 
   if (!systemPrompt || !String(systemPrompt).trim()) {
     return res.status(400).json({ error: '提示词不能为空' });
@@ -541,6 +552,8 @@ router.post('/prompts/:roleKey', async (req, res) => {
     await roles.saveOverride(roleKey, {
       systemPrompt: String(systemPrompt),
       temperature: typeof temperature === 'number' ? temperature : undefined,
+      model: typeof model === 'string' ? model.trim() : undefined,
+      thinking: typeof thinking === 'boolean' ? thinking : undefined,
     });
     const role = await roles.getRole(roleKey);
     res.json(role);

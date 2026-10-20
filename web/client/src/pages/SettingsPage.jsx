@@ -5,6 +5,7 @@ import {
   Input,
   InputNumber,
   Select,
+  Switch,
   Button,
   Card,
   message,
@@ -13,11 +14,24 @@ import {
   Alert,
   Typography,
   Slider,
+  Tooltip,
 } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons';
 import api from '../api/client';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 const { Text, Paragraph } = Typography;
+
+/**
+ * 可选模型列表。
+ *
+ * 角色可以单独指定模型——审稿、查资料这类需要推理的活儿，
+ * 用强模型；续写正文用快模型更顺手。
+ */
+const MODEL_OPTIONS = [
+  { value: 'deepseek-flash', label: 'deepseek-flash（快，日常写作）' },
+  { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro（强，复杂推理）' },
+];
 
 /**
  * 设置页：AI 供应商配置 + 角色提示词编辑。
@@ -30,6 +44,7 @@ export default function SettingsPage() {
         items={[
           { key: 'provider', label: 'AI 供应商', children: <ProviderConfig /> },
           { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
+          { key: 'backup', label: '备份', children: <BackupConfig /> },
         ]}
       />
     </div>
@@ -37,6 +52,7 @@ export default function SettingsPage() {
 }
 
 function ProviderConfig() {
+  const isMobile = useIsMobile();
   const [form] = Form.useForm();
   const [status, setStatus] = useState(null);
   const [testing, setTesting] = useState('');
@@ -183,16 +199,16 @@ function ProviderConfig() {
                 <Input />
               </Form.Item>
               <Form.Item name={['deepseek', 'model']} label="模型">
-                <Select
-                  options={[
-                    { value: 'deepseek-flash', label: 'deepseek-flash（快，日常写作）' },
-                    { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro（强，复杂推理）' },
-                  ]}
-                />
+                <Select options={MODEL_OPTIONS} />
               </Form.Item>
               <Space size={16} wrap>
                 <Form.Item name={['deepseek', 'temperature']} label="温度" style={{ marginBottom: 0 }}>
-                  <Slider min={0} max={1.5} step={0.05} style={{ width: 140 }} />
+                  <Slider
+                    min={0}
+                    max={1.5}
+                    step={0.05}
+                    style={{ width: isMobile ? '100%' : 140 }}
+                  />
                 </Form.Item>
                 <Form.Item name={['deepseek', 'maxTokens']} label="最大输出" style={{ marginBottom: 0 }}>
                   <InputNumber min={1024} max={32768} step={1024} />
@@ -208,6 +224,17 @@ function ProviderConfig() {
                   />
                 </Form.Item>
               </Space>
+              <div style={{ marginTop: 12 }}>
+                <Form.Item
+                  name={['deepseek', 'thinking']}
+                  label="深度思考"
+                  valuePropName="checked"
+                  help="开启后模型先推理再作答，更准但更慢也更贵。"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Switch />
+                </Form.Item>
+              </div>
               <div style={{ marginTop: 12 }}>
                 <Button size="small" loading={testing === 'deepseek'} onClick={() => test('deepseek')}>
                   测试连接
@@ -227,9 +254,24 @@ function ProviderConfig() {
               <Form.Item name={['openaiCompat', 'model']} label="模型">
                 <Input placeholder="gpt-4o-mini" />
               </Form.Item>
-              <Button size="small" loading={testing === 'openaiCompat'} onClick={() => test('openaiCompat')}>
-                测试连接
-              </Button>
+              <Space size={16} wrap>
+                <Form.Item name={['openaiCompat', 'temperature']} label="温度" style={{ marginBottom: 0 }}>
+                  <Slider
+                    min={0}
+                    max={1.5}
+                    step={0.05}
+                    style={{ width: isMobile ? '100%' : 140 }}
+                  />
+                </Form.Item>
+                <Form.Item name={['openaiCompat', 'maxTokens']} label="最大输出" style={{ marginBottom: 0 }}>
+                  <InputNumber min={1024} max={32768} step={1024} />
+                </Form.Item>
+              </Space>
+              <div style={{ marginTop: 12 }}>
+                <Button size="small" loading={testing === 'openaiCompat'} onClick={() => test('openaiCompat')}>
+                  测试连接
+                </Button>
+              </div>
             </div>
           </Form.Item>
 
@@ -241,9 +283,24 @@ function ProviderConfig() {
               <Form.Item name={['ollama', 'model']} label="模型">
                 <Input placeholder="qwen2.5:7b" />
               </Form.Item>
-              <Button size="small" loading={testing === 'ollama'} onClick={() => test('ollama')}>
-                测试连接
-              </Button>
+              <Space size={16} wrap>
+                <Form.Item name={['ollama', 'temperature']} label="温度" style={{ marginBottom: 0 }}>
+                  <Slider
+                    min={0}
+                    max={1.5}
+                    step={0.05}
+                    style={{ width: isMobile ? '100%' : 140 }}
+                  />
+                </Form.Item>
+                <Form.Item name={['ollama', 'maxTokens']} label="最大输出" style={{ marginBottom: 0 }}>
+                  <InputNumber min={1024} max={32768} step={1024} />
+                </Form.Item>
+              </Space>
+              <div style={{ marginTop: 12 }}>
+                <Button size="small" loading={testing === 'ollama'} onClick={() => test('ollama')}>
+                  测试连接
+                </Button>
+              </div>
             </div>
           </Form.Item>
 
@@ -257,21 +314,37 @@ function ProviderConfig() {
 }
 
 function PromptConfig() {
+  const isMobile = useIsMobile();
   const [roles, setRoles] = useState([]);
   const [activeKey, setActiveKey] = useState('writer');
   const [draft, setDraft] = useState('');
   const [temperature, setTemperature] = useState(0.8);
+  const [followGlobalTemp, setFollowGlobalTemp] = useState(false);
+  const [model, setModel] = useState('');
+  const [thinking, setThinking] = useState('inherit');
   const [saving, setSaving] = useState(false);
+
+  // 把某个角色的当前值搬进编辑区
+  const fill = (role) => {
+    if (!role) return;
+    setDraft(role.systemPrompt);
+    setTemperature(role.temperature ?? 0.8);
+    setFollowGlobalTemp(role.temperature === null);
+    setModel(role.model || '');
+    setThinking(
+      role.thinking === null || role.thinking === undefined
+        ? 'inherit'
+        : role.thinking
+          ? 'on'
+          : 'off'
+    );
+  };
 
   const load = async () => {
     try {
       const res = await api.get('/ai/roles');
       setRoles(res.data);
-      const found = res.data.find((r) => r.key === activeKey);
-      if (found) {
-        setDraft(found.systemPrompt);
-        setTemperature(found.temperature);
-      }
+      fill(res.data.find((r) => r.key === activeKey));
     } catch (e) {
       message.error('角色加载失败');
     }
@@ -283,11 +356,7 @@ function PromptConfig() {
 
   const select = (key) => {
     setActiveKey(key);
-    const found = roles.find((r) => r.key === key);
-    if (found) {
-      setDraft(found.systemPrompt);
-      setTemperature(found.temperature);
-    }
+    fill(roles.find((r) => r.key === key));
   };
 
   const save = async () => {
@@ -295,7 +364,9 @@ function PromptConfig() {
     try {
       await api.post(`/ai/prompts/${activeKey}`, {
         systemPrompt: draft,
-        temperature,
+        temperature: followGlobalTemp ? null : temperature,
+        model,
+        thinking: thinking === 'inherit' ? null : thinking === 'on',
       });
       message.success('已保存');
       load();
@@ -340,17 +411,69 @@ function PromptConfig() {
         </Paragraph>
       )}
 
-      <div style={{ marginBottom: 12 }}>
-        <Text style={{ fontSize: 13 }}>温度 {temperature.toFixed(2)}</Text>
-        <Slider
-          min={0}
-          max={1.5}
-          step={0.05}
-          value={temperature}
-          onChange={setTemperature}
-          style={{ margin: 0 }}
-        />
-      </div>
+      <Space size={16} wrap style={{ marginBottom: 12 }}>
+        <div>
+          <Text style={{ fontSize: 13 }}>
+            温度 {followGlobalTemp ? '（跟随全局）' : temperature.toFixed(2)}
+          </Text>
+          <div>
+            <Slider
+              min={0}
+              max={1.5}
+              step={0.05}
+              value={temperature}
+              disabled={followGlobalTemp}
+              onChange={setTemperature}
+              style={{ margin: 0, width: isMobile ? '100%' : 180 }}
+            />
+          </div>
+        </div>
+
+        <div>
+          <Text style={{ fontSize: 13 }}>模型</Text>
+          <div>
+            <Select
+              value={model || '__inherit__'}
+              onChange={(v) => setModel(v === '__inherit__' ? '' : v)}
+              options={[
+                { value: '__inherit__', label: '跟随全局设置' },
+                ...MODEL_OPTIONS,
+              ]}
+              style={{ width: isMobile ? '100%' : 240 }}
+            />
+          </div>
+        </div>
+
+        <div>
+          <Text style={{ fontSize: 13 }}>深度思考</Text>
+          <div>
+            <Select
+              value={thinking}
+              onChange={setThinking}
+              options={[
+                { value: 'inherit', label: '跟随全局设置' },
+                { value: 'on', label: '开启' },
+                { value: 'off', label: '关闭' },
+              ]}
+              style={{ width: isMobile ? '100%' : 140 }}
+            />
+          </div>
+        </div>
+      </Space>
+
+      <Space size={16} wrap style={{ marginBottom: 12 }}>
+        <Tooltip title="勾上则用「AI 供应商」里设的全局温度，不单独指定">
+          <label style={{ fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={followGlobalTemp}
+              onChange={(e) => setFollowGlobalTemp(e.target.checked)}
+              style={{ marginRight: 6 }}
+            />
+            跟随全局温度
+          </label>
+        </Tooltip>
+      </Space>
 
       <Input.TextArea
         value={draft}
@@ -367,6 +490,103 @@ function PromptConfig() {
           恢复默认
         </Button>
       </Space>
+    </Card>
+  );
+}
+
+function BackupConfig() {
+  const isMobile = useIsMobile();
+  const [backups, setBackups] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await api.get('/export/backups');
+      setBackups(res.data || []);
+    } catch (e) {
+      // 备份列表拿不到不影响手动下载
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const createNow = async () => {
+    setBusy(true);
+    try {
+      const res = await api.post('/export/backups');
+      message.success(`已生成备份：${res.data.name}`);
+      load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '备份失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const formatSize = (bytes) => {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = bytes;
+    let i = 0;
+    while (value >= 1024 && i < units.length - 1) {
+      value /= 1024;
+      i += 1;
+    }
+    return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  };
+
+  return (
+    <Card size="small" title="备份">
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="服务器每天凌晨 3 点自动备份一次，保留最近 7 份。"
+        description="备份包含全部稿件、素材库、人物卡与设定。也可以现在手动生成一份，或直接下载完整备份到本地。"
+      />
+
+      <Space wrap style={{ marginBottom: 16 }}>
+        <Button type="primary" loading={busy} onClick={createNow}>
+          立即备份
+        </Button>
+        <Button href="/api/export/backup">下载完整备份</Button>
+        <Button onClick={load}>刷新列表</Button>
+      </Space>
+
+      {backups.length === 0 ? (
+        <Paragraph type="secondary" style={{ fontSize: 13 }}>
+          还没有定时备份。点「立即备份」会马上生成一份。
+        </Paragraph>
+      ) : (
+        <div style={{ fontSize: 13 }}>
+          {backups.map((b) => (
+            <div
+              key={b.name}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 8,
+                padding: '5px 0',
+                borderBottom: '1px solid rgba(128,128,128,0.1)',
+              }}
+            >
+              <Text style={{ flex: 1, minWidth: 0, wordBreak: 'break-all' }}>{b.name}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {formatSize(b.size)}
+              </Text>
+              <Text
+                type="secondary"
+                style={{ fontSize: 12, width: isMobile ? '100%' : 160, textAlign: 'right' }}
+              >
+                {new Date(b.mtime).toLocaleString('zh-CN')}
+              </Text>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

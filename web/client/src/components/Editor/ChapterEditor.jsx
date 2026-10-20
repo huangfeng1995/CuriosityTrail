@@ -1,13 +1,24 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Typography, Button, Space, message, Modal, Input } from 'antd';
-import { DownloadOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons';
+import { Typography, Button, Space, message, Modal, Input, Tooltip } from 'antd';
+import { SaveOutlined, UndoOutlined, RedoOutlined } from '@ant-design/icons';
 import { useWorkspace } from '../../store/workspace';
 import { createBlock, countChars } from './blocks';
 import Block from './Block';
 import BlockPalette from './BlockPalette';
 import BlockToolbar from './BlockToolbar';
+import ExportButton from '../ExportButton';
+import { useIsMobile } from '../../hooks/useMediaQuery';
 
 const { Title, Text } = Typography;
+
+// 保存状态对应的提示文案。状态来自 store，与真实落库进度一致。
+const SAVE_LABEL = {
+  idle: '已保存',
+  dirty: '编辑中…',
+  saving: '保存中…',
+  saved: '已保存',
+  error: '保存失败',
+};
 
 /**
  * 章节块编辑器。
@@ -19,20 +30,23 @@ export default function ChapterEditor() {
     chapter,
     blocks,
     selection,
-    setBlocks,
     updateBlock,
     insertBlock,
     removeBlock,
     convertBlock,
     moveBlock,
+    undo,
+    redo,
+    past,
+    future,
+    saveStatus,
     dispatch,
   } = useWorkspace();
 
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [toolbarPos, setToolbarPos] = useState(null);
-  const [undoStack, setUndoStack] = useState([]);
-  const [saveHint, setSaveHint] = useState('');
   const editorRef = useRef(null);
+  const isMobile = useIsMobile();
 
   // 选区变化时，计算工具条的浮层位置
   useEffect(() => {
@@ -66,41 +80,32 @@ export default function ChapterEditor() {
     return () => document.removeEventListener('mousedown', onClick);
   }, [dispatch]);
 
-  const pushUndo = useCallback(() => {
-    setUndoStack((stack) => [...stack.slice(-9), blocks.map((b) => ({ ...b }))]);
-  }, [blocks]);
-
   const handleBlockChange = useCallback(
     (id, patch) => {
       updateBlock(id, patch);
-      setSaveHint('编辑中…');
     },
     [updateBlock]
   );
 
   const handleDelete = useCallback(
     (id) => {
-      pushUndo();
       removeBlock(id);
     },
-    [pushUndo, removeBlock]
+    [removeBlock]
   );
 
   const handleMove = useCallback(
     (id, offset) => {
-      pushUndo();
       moveBlock(id, offset);
     },
-    [pushUndo, moveBlock]
+    [moveBlock]
   );
 
   const handleConvert = useCallback(
     (id, type) => {
-      pushUndo();
       convertBlock(id, type);
-      setSaveHint('已转换');
     },
-    [pushUndo, convertBlock]
+    [convertBlock]
   );
 
   const handleAdd = useCallback(
@@ -144,19 +149,15 @@ export default function ChapterEditor() {
         if (!res.ok) throw new Error(data.error || '请求失败');
 
         if (data.action === 'replace' && data.content) {
-          pushUndo();
           const next =
             target.content.slice(0, selection.start) +
             data.content +
             target.content.slice(selection.end);
           updateBlock(target.id, { content: next });
-          setSaveHint('已改写');
         } else if (data.action === 'append' && data.content) {
-          pushUndo();
           updateBlock(target.id, {
             content: target.content + data.content,
           });
-          setSaveHint('已续写');
         } else {
           // 建议类输出：只展示，不动稿
           Modal.info({
@@ -173,17 +174,27 @@ export default function ChapterEditor() {
         message.error(e.message || 'AI 调用失败');
       }
     },
-    [blocks, chapter, pushUndo, selection, updateBlock]
+    [blocks, chapter, selection, updateBlock]
   );
 
-  const handleUndo = useCallback(() => {
-    setUndoStack((stack) => {
-      if (!stack.length) return stack;
-      const prev = stack[stack.length - 1];
-      setBlocks(prev);
-      return stack.slice(0, -1);
-    });
-  }, [setBlocks]);
+  // 撤销/重做快捷键。Cmd+Z 撤销，Cmd+Shift+Z 与 Cmd+Y 重做。
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (key === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [undo, redo]);
 
   const handleSaveNow = useCallback(async () => {
     if (!chapter) return;
@@ -195,7 +206,7 @@ export default function ChapterEditor() {
         body: JSON.stringify({ blocks }),
       });
       if (!res.ok) throw new Error('保存失败');
-      setSaveHint('已保存');
+      message.success('已保存');
     } catch (e) {
       message.error(e.message);
     }
@@ -226,7 +237,7 @@ export default function ChapterEditor() {
       {/* 章节头 */}
       <div
         style={{
-          padding: '20px 40px 0',
+          padding: isMobile ? '12px 12px 0' : '20px 40px 0',
           borderBottom: '1px solid rgba(128,128,128,0.15)',
         }}
       >
@@ -235,6 +246,7 @@ export default function ChapterEditor() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            flexWrap: 'wrap',
             gap: 16,
             marginBottom: 12,
           }}
@@ -258,31 +270,35 @@ export default function ChapterEditor() {
               fontWeight: 600,
               padding: 0,
               fontFamily: 'Noto Serif SC, serif',
+              minWidth: 0,
+              flex: '1 1 160px',
             }}
           />
 
-          <Space size={8}>
+          <Space size={8} wrap>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {wordCount} 字{saveHint ? ` · ${saveHint}` : ''}
+              {wordCount} 字 · {SAVE_LABEL[saveStatus] || SAVE_LABEL.idle}
             </Text>
-            <Button
-              size="small"
-              icon={<UndoOutlined />}
-              disabled={!undoStack.length}
-              onClick={handleUndo}
-            >
-              撤销
-            </Button>
+            <Tooltip title="撤销（⌘Z）">
+              <Button
+                size="small"
+                icon={<UndoOutlined />}
+                disabled={!past.length}
+                onClick={undo}
+              />
+            </Tooltip>
+            <Tooltip title="重做（⌘⇧Z）">
+              <Button
+                size="small"
+                icon={<RedoOutlined />}
+                disabled={!future.length}
+                onClick={redo}
+              />
+            </Tooltip>
             <Button size="small" icon={<SaveOutlined />} onClick={handleSaveNow}>
               保存
             </Button>
-            <Button
-              size="small"
-              icon={<DownloadOutlined />}
-              href={`/api/export/chapter/${chapter.id}/markdown`}
-            >
-              导出
-            </Button>
+            <ExportButton scope="chapter" id={chapter.id} />
           </Space>
         </div>
       </div>
@@ -290,7 +306,12 @@ export default function ChapterEditor() {
       {/* 正文区 */}
       <div
         ref={editorRef}
-        style={{ flex: 1, overflowY: 'auto', position: 'relative', padding: '24px 40px 80px' }}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          position: 'relative',
+          padding: isMobile ? '16px 12px 80px' : '24px 40px 80px',
+        }}
       >
         <div style={{ maxWidth: 760, margin: '0 auto' }}>
           {blocks.map((block, index) => (

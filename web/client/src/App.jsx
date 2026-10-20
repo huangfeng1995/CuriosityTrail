@@ -19,6 +19,7 @@ import {
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './store/auth';
 import { WorkspaceProvider } from './store/workspace';
+import { useIsMobile } from './hooks/useMediaQuery';
 import Login from './pages/Login';
 import Works from './pages/Works';
 import Workspace from './pages/Workspace';
@@ -91,6 +92,7 @@ function AppShell({ isDark, setIsDark }) {
   const { authenticated, checking, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const isMobile = useIsMobile();
 
   const navItems = [
     { key: '/works', icon: <Feather size={16} />, label: '作品' },
@@ -162,7 +164,7 @@ function AppShell({ isDark, setIsDark }) {
               fontFamily: 'Noto Serif SC, serif',
             }}
           >
-            Curiosity
+            {isMobile ? 'CT' : 'Curiosity'}
           </Title>
         </div>
 
@@ -175,6 +177,7 @@ function AppShell({ isDark, setIsDark }) {
                 size="small"
                 icon={item.icon}
                 onClick={() => navigate(item.key)}
+                title={item.label}
                 style={{
                   color:
                     location.pathname === item.key
@@ -186,7 +189,8 @@ function AppShell({ isDark, setIsDark }) {
                         : '#6b7280',
                 }}
               >
-                {item.label}
+                {/* 窄屏只留图标，否则导航会把标题挤掉 */}
+                {!isMobile && item.label}
               </Button>
             ))}
           </div>
@@ -211,7 +215,7 @@ function AppShell({ isDark, setIsDark }) {
           <Route
             path="/works"
             element={
-              <div style={{ padding: '28px 24px' }}>
+              <div style={{ padding: isMobile ? '16px 12px' : '28px 24px' }}>
                 <Works />
               </div>
             }
@@ -227,7 +231,7 @@ function AppShell({ isDark, setIsDark }) {
           <Route
             path="/materials"
             element={
-              <div style={{ padding: '28px 24px' }}>
+              <div style={{ padding: isMobile ? '16px 12px' : '28px 24px' }}>
                 <Materials />
               </div>
             }
@@ -235,7 +239,7 @@ function AppShell({ isDark, setIsDark }) {
           <Route
             path="/settings"
             element={
-              <div style={{ padding: '28px 24px' }}>
+              <div style={{ padding: isMobile ? '16px 12px' : '28px 24px' }}>
                 <SettingsPage />
               </div>
             }
