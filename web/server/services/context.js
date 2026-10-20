@@ -390,7 +390,14 @@ async function assembleContext(params = {}) {
   // ---- 8. 检索层 ----
   if (retrieval.length) {
     const items = retrieval
-      .map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet || ''}`)
+      .map((r, i) => {
+        // 来源要写清：站内素材（带页码）还是外部网页
+        const bits = [r.source];
+        if (r.page) bits.push(`第 ${r.page} 页`);
+        const label = bits.filter(Boolean).join(' · ');
+        const head = label ? `[${i + 1}] ${r.title}（${label}）` : `[${i + 1}] ${r.title}`;
+        return `${head}\n${r.snippet || ''}`;
+      })
       .join('\n\n');
     systemParts.push(`## 检索到的参考资料\n${items}`);
   }

@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS materials (
   file_path    TEXT,
   tags         TEXT,
   char_count   INTEGER DEFAULT 0,
+  page_count   INTEGER DEFAULT 0,
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
@@ -179,6 +180,31 @@ CREATE TABLE IF NOT EXISTS prompt_overrides (
 `;
 
 /**
+ * 给已存在的表补一列。
+ *
+ * SQLite 的 CREATE TABLE IF NOT EXISTS 不会给老表加新列，
+ * 而 SCHEMA_VERSION 保持 1（老数据不重建），所以新列要单独补。
+ */
+function ensureColumn(table, column, definition) {
+  return new Promise((resolve, reject) => {
+    db.all(`PRAGMA table_info(${table})`, (err, rows) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      if (rows.some((r) => r.name === column)) {
+        resolve(false);
+        return;
+      }
+      db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, (alterErr) => {
+        if (alterErr) reject(alterErr);
+        else resolve(true);
+      });
+    });
+  });
+}
+
+/**
  * 初始化数据库：版本不匹配则重建表结构，匹配则只确保表存在。
  * @returns {Promise<void>}
  */
@@ -196,8 +222,13 @@ function initDatabase() {
         if (currentVersion === SCHEMA_VERSION) {
           // 版本一致：只确保表存在，不动任何数据
           db.exec(SCHEMA, (execErr) => {
-            if (execErr) reject(execErr);
-            else resolve();
+            if (execErr) {
+              reject(execErr);
+              return;
+            }
+            ensureColumn('materials', 'page_count', 'INTEGER DEFAULT 0')
+              .then(() => resolve())
+              .catch(reject);
           });
           return;
         }

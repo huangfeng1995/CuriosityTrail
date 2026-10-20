@@ -244,14 +244,18 @@ CREATE TABLE materials (
   file_path    TEXT,                  -- 原始文件路径（PDF）
   tags         TEXT,                  -- 逗号分隔
   char_count   INTEGER DEFAULT 0,
+  page_count   INTEGER DEFAULT 0,     -- PDF 页数
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
 
--- 素材全文检索（FTS5 外部内容表，与 materials 通过 rid 同步）
+-- 素材全文检索。
+-- 不是 external content 表：external content 模式要求索引内容与 materials 原文一致，
+-- 而索引里存的是 bigram 化后的文本，两者对不上。
+-- rowid 对齐 materials.rid，业务 id 另存一列供回查。
 CREATE VIRTUAL TABLE materials_fts USING fts5(
   title, body, tags,
-  content='materials', content_rowid='rid',
+  material_id UNINDEXED,
   tokenize='unicode61'
 );
 
@@ -356,6 +360,7 @@ web/server/
 │   ├── ai.js                AI 调用：对话、角色、行内操作、流式（新增）
 │   ├── prompts.js           提示词覆盖读写（新增）
 │   ├── auth.js              登录 / 登出 / 会话校验（新增）
+│   ├── search.js            联网搜索 / 抓取网页（作者手动触发，新增）
 │   └── config.js            系统配置读写（新增）
 ├── services/
 │   ├── providers/           AI 供应商抽象（新增）
@@ -374,6 +379,7 @@ web/server/
 │   │   ├── inspirer.js
 │   │   └── researcher.js
 │   ├── context.js           上下文装配器（新增，核心）
+│   ├── documentText.js      PDF / TXT 正文提取（新增）
 │   ├── provider.js          统一 provider 门面（改造自 chatManager.js）
 │   └── aiConfig.js          配置管理（改造，含 DeepSeek 段）
 ├── middleware/
@@ -736,6 +742,18 @@ web/client/src/
 3. 需要正文细节时，对高分结果调 Fetch → 拿 Markdown 正文
 4. 汇总成答案，输出 `action: "comment"`，`citations` 数组带上全部来源
 5. 用户可把某条引用"插入为素材"存进素材库
+
+**落地补充（P2）**：
+
+- **PDF 页码**：解析时在每页开头插入 `[[PAGE n]]` 标记，检索命中后据此算出页码，
+  引用角标显示"第 N 页"，作者可回原文核对。标记本身不显示在片段里。
+- **Fetch 触发条件**：不是每次都抓。search 返回的 `summary` 已有 600-800 字，
+  只有作者话里出现"原文/全文/完整版"这类词时才 fetch 最相关的那一条，
+  否则每次提问都要多等 1 秒域名节流。
+- **站内优先、联网兜底**：资料员在站内命中时也查联网（内外对照更有价值），
+  但非资料员角色只有作者明确说"上网/联网/查一下维基"才走联网，避免每次聊天都花搜索额度。
+- **联网不可用要说出来**：没配 key 或请求失败时，响应里带 `notice` 事件告诉作者
+  "本次只用了站内素材"，不能默默少给资料。
 
 ---
 

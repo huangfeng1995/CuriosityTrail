@@ -21,11 +21,15 @@ const multer = require('multer');
 const config = require('../config');
 const { all, get, run } = require('../database');
 const localSearch = require('../services/search/local');
+const documentText = require('../services/documentText');
 
 const router = express.Router();
 const now = () => new Date().toISOString();
 
 const ALLOWED_EXT = new Set(['.pdf', '.txt', '.md', '.markdown']);
+
+/** 列表里每条素材给的正文预览长度 */
+const PREVIEW_LEN = 120;
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, config.docsDir),
@@ -47,21 +51,44 @@ const upload = multer({
   },
 });
 
+/**
+ * 素材列表。
+ *
+ * 不返回完整正文：一本解析好的 PDF 有几十万字，全量返回会拖垮列表页。
+ * 列表只给一段预览，正文在详情接口里按需取。
+ */
 router.get('/', async (req, res) => {
   const { search } = req.query;
   try {
     let rows;
     if (search) {
       rows = await all(
-        `SELECT * FROM materials
+        `SELECT id, title, substr(body, 1, ?) AS preview, source, source_url, tags,
+                char_count, page_count, file_path, created_at, modified_at
+         FROM materials
          WHERE title LIKE ? OR body LIKE ? OR tags LIKE ?
          ORDER BY modified_at DESC`,
-        [`%${search}%`, `%${search}%`, `%${search}%`]
+        [PREVIEW_LEN, `%${search}%`, `%${search}%`, `%${search}%`]
       );
     } else {
-      rows = await all('SELECT * FROM materials ORDER BY modified_at DESC');
+      rows = await all(
+        `SELECT id, title, substr(body, 1, ?) AS preview, source, source_url, tags,
+                char_count, page_count, file_path, created_at, modified_at
+         FROM materials
+         ORDER BY modified_at DESC`,
+        [PREVIEW_LEN]
+      );
     }
-    res.json(rows);
+    // 页码标记是内部记号，列表里不显示；页码单独用 page_count 字段
+    res.json(
+      rows.map((r) => ({
+        ...r,
+        preview: (r.preview || '')
+          .replace(/\[\[PAGE \d+\]\]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      }))
+    );
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -123,33 +150,71 @@ router.post('/', async (req, res) => {
   }
 });
 
+/**
+ * 上传参考文件。
+ *
+ * 上传即解析：正文抽出来存进 body，正文才能被检索到。
+ * 只存文件名的话，作者问"里面怎么写巷子的"，AI 什么也答不上。
+ */
 router.post('/upload', upload.array('files'), async (req, res) => {
   try {
     const results = [];
+    const warnings = [];
+
     for (const file of req.files || []) {
       const ext = path.extname(file.originalname).toLowerCase();
-      let body = '';
+      const title = path.basename(file.originalname, ext);
 
-      // 文本类文件直接读入正文；PDF 解析留到 P2
-      if (ext !== '.pdf') {
-        body = fs.readFileSync(file.path, 'utf8');
+      let body = '';
+      let pageCount = 0;
+
+      try {
+        const extracted = await documentText.extract(file.path);
+        body = extracted.text;
+        pageCount = extracted.pageCount;
+        // 扫描版 PDF 没有文本层，正文是空的——得告诉作者，不然他以为导入失败了
+        if (ext === '.pdf' && !extracted.hasTextLayer) {
+          warnings.push(`${title}：这份 PDF 没有可提取的文字层（可能是扫描件），暂时搜不到内容`);
+        }
+      } catch (err) {
+        warnings.push(`${title}：解析失败（${err.message}），已保存文件但正文为空`);
       }
 
       const id = crypto.randomUUID();
       const ts = now();
-      const title = path.basename(file.originalname, ext);
       await run(
-        `INSERT INTO materials (id, title, body, source, file_path, char_count, created_at, modified_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, title, body, ext === '.pdf' ? 'PDF' : '文件', file.path, body.length, ts, ts]
+        `INSERT INTO materials
+           (id, title, body, source, file_path, char_count, page_count, created_at, modified_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          title,
+          body,
+          ext === '.pdf' ? 'PDF' : '文件',
+          file.path,
+          body.length,
+          pageCount,
+          ts,
+          ts,
+        ]
       );
       results.push(await get('SELECT * FROM materials WHERE id = ?', [id]));
     }
+
     // 上传的文件同样要进索引，否则检索不到
     for (const material of results) {
       await localSearch.indexMaterial(material);
     }
-    res.json(results);
+
+    res.json({
+      materials: results.map((m) => ({
+        id: m.id,
+        title: m.title,
+        charCount: m.char_count,
+        pageCount: m.page_count,
+      })),
+      warnings,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -22,6 +22,7 @@
  */
 
 const { all, get, run } = require('../../database');
+const { pageAt } = require('../documentText');
 
 /** 单次精确查询最多用多少个 bigram 参与 AND */
 const MAX_TERMS = 8;
@@ -187,28 +188,51 @@ function extractQueryTerms(query) {
 }
 
 /**
- * 从正文里截出命中位置附近的片段。
+ * 从正文里截出命中位置附近的片段，并算出所在页码。
  * 索引存的是 bigram，原文要从 materials 取回。
+ *
+ * @param {string} body
+ * @param {Array} terms
+ * @returns {{snippet: string, page: number, index: number}}
  */
-function extractSnippet(body, terms) {
-  if (!body) return '';
-  const flat = body.replace(/\s+/g, ' ').trim();
-  if (!flat) return '';
+function locateSnippet(body, terms) {
+  if (!body) return { snippet: '', page: 0, index: -1 };
+  if (!body.trim()) return { snippet: '', page: 0, index: -1 };
 
-  // 优先用长度 ≥2 的词元定位，单字词元太容易误命中
+  // 优先用长度 ≥2 的词元定位，单字词元太容易误命中。
+  // 必须在原文里定位：压缩空白后的下标对不回原文，页码会算错。
   const probes = (terms || [])
     .map((t) => (typeof t === 'string' ? t : t.term))
     .filter((t) => t.length >= 2);
   let at = -1;
   for (const probe of probes) {
-    const idx = flat.indexOf(probe);
+    const idx = body.indexOf(probe);
     if (idx >= 0 && (at < 0 || idx < at)) at = idx;
   }
-  if (at < 0) return flat.slice(0, SNIPPET_LEN);
+
+  if (at < 0) {
+    return { snippet: body.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN), page: 0, index: -1 };
+  }
 
   const start = Math.max(0, at - 40);
-  const end = Math.min(flat.length, start + SNIPPET_LEN);
-  return (start > 0 ? '…' : '') + flat.slice(start, end) + (end < flat.length ? '…' : '');
+  const end = Math.min(body.length, start + SNIPPET_LEN);
+  // 页码标记是内部记号，页码单独用 page 字段带给作者，片段里不留
+  const window = body
+    .slice(start, end)
+    .replace(/\[\[PAGE \d+\]\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const snippet =
+    (start > 0 ? '…' : '') + window + (end < body.length ? '…' : '');
+
+  return { snippet, page: pageAt(body, at), index: at };
+}
+
+/**
+ * 只要片段文本。
+ */
+function extractSnippet(body, terms) {
+  return locateSnippet(body, terms).snippet;
 }
 
 /**
@@ -260,10 +284,12 @@ async function search(query, options = {}) {
   for (const row of rows) {
     const material = await get('SELECT * FROM materials WHERE id = ?', [row.material_id]);
     if (!material) continue;
+    const located = locateSnippet(material.body, terms);
     results.push({
       id: material.id,
       title: material.title,
-      snippet: extractSnippet(material.body, terms),
+      snippet: located.snippet,
+      page: located.page,
       source: material.source || '素材库',
       sourceUrl: material.source_url || '',
       tags: material.tags || '',
@@ -340,16 +366,20 @@ async function searchLoose(query, options = {}) {
 
   scored.sort((a, b) => b.score - a.score);
 
-  return scored.slice(0, limit).map(({ material, hits }) => ({
-    id: material.id,
-    title: material.title,
-    snippet: extractSnippet(material.body, terms),
-    source: material.source || '素材库',
-    sourceUrl: material.source_url || '',
-    tags: material.tags || '',
-    charCount: material.char_count || 0,
-    matchedTerms: hits,
-  }));
+  return scored.slice(0, limit).map(({ material, hits }) => {
+    const located = locateSnippet(material.body, terms);
+    return {
+      id: material.id,
+      title: material.title,
+      snippet: located.snippet,
+      page: located.page,
+      source: material.source || '素材库',
+      sourceUrl: material.source_url || '',
+      tags: material.tags || '',
+      charCount: material.char_count || 0,
+      matchedTerms: hits,
+    };
+  });
 }
 
 /**
@@ -418,7 +448,11 @@ async function recent(limit = 3) {
   return rows.map((material) => ({
     id: material.id,
     title: material.title,
-    snippet: (material.body || '').replace(/\s+/g, ' ').slice(0, SNIPPET_LEN),
+    snippet: (material.body || '')
+      .replace(/\[\[PAGE \d+\]\]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .slice(0, SNIPPET_LEN),
+    page: 0,
     source: material.source || '素材库',
     sourceUrl: material.source_url || '',
     tags: material.tags || '',
@@ -436,6 +470,7 @@ module.exports = {
   bigrams,
   indexTerms,
   extractSnippet,
+  locateSnippet,
   extractQueryTerms,
   isGenericQuery,
   stripGeneric,

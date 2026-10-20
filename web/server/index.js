@@ -55,6 +55,7 @@ const aiRouter = require('./routes/ai');
 const configRouter = require('./routes/config');
 const exportRouter = require('./routes/export');
 const uploadRouter = require('./routes/upload');
+const searchRouter = require('./routes/search');
 
 // 公开路由：健康检查与登录（登录自带限流）
 app.get('/api/health', (req, res) => {
@@ -75,6 +76,7 @@ app.use('/api/ai', aiLimiter, aiRouter);
 app.use('/api/config', aiLimiter, configRouter);
 app.use('/api/export', exportRouter);
 app.use('/api/upload', uploadRouter);
+app.use('/api/search', searchRouter);
 
 // 图片目录同样纳入鉴权
 app.use('/uploads', requireAuth, express.static(config.uploadsDir));

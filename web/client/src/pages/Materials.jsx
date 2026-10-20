@@ -76,11 +76,34 @@ export default function Materials() {
     load();
   }, [load]);
 
-  const openEditor = (item) => {
-    setEditing(item || {});
-    form.setFieldsValue(
-      item || { title: '', body: '', source: '手记', sourceUrl: '', tags: '' }
-    );
+  // 列表接口不返回完整正文（一份 PDF 可能有几十万字），
+  // 编辑时按 id 取详情再填表。
+  const openEditor = async (item) => {
+    if (!item?.id) {
+      setEditing({});
+      form.setFieldsValue({
+        title: '',
+        body: '',
+        source: '手记',
+        sourceUrl: '',
+        tags: '',
+      });
+      return;
+    }
+    try {
+      const res = await api.get(`/materials/${item.id}`);
+      setEditing(res.data);
+      form.setFieldsValue({
+        title: res.data.title,
+        body: res.data.body,
+        source: res.data.source,
+        // 接口字段是 source_url，表单字段是 sourceUrl，不映射会丢链接
+        sourceUrl: res.data.source_url,
+        tags: res.data.tags,
+      });
+    } catch (e) {
+      message.error('素材详情加载失败');
+    }
   };
 
   // 从 AI 引用跳过来时，直接打开那条素材
@@ -154,10 +177,15 @@ export default function Materials() {
             const formData = new FormData();
             formData.append('files', file);
             try {
-              await api.post('/materials/upload', formData, {
+              const res = await api.post('/materials/upload', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
               });
-              message.success(`已导入 ${file.name}`);
+              const warnings = res.data?.warnings || [];
+              if (warnings.length) {
+                warnings.forEach((w) => message.warning(w));
+              } else {
+                message.success(`已导入 ${file.name}`);
+              }
               load();
               onSuccess?.();
             } catch (err) {
@@ -228,11 +256,12 @@ export default function Materials() {
                           whiteSpace: 'pre-wrap',
                         }}
                       >
-                        {item.body || '（无正文）'}
+                        {item.preview || '（无正文）'}
                       </div>
                     )}
                     <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4 }}>
                       {item.char_count || 0} 字
+                      {item.page_count ? ` · ${item.page_count} 页` : ''}
                       {item.tags ? ` · ${item.tags}` : ''}
                     </div>
                   </div>

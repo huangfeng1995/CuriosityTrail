@@ -19,6 +19,7 @@ const { resolveProvider, checkAllProviders } = require('../services/providers');
 const { assembleContext } = require('../services/context');
 const roles = require('../services/roles');
 const localSearch = require('../services/search/local');
+const webSearch = require('../services/search/deepseekSearch');
 
 const router = express.Router();
 
@@ -79,6 +80,8 @@ function normalizeAction(payload) {
           url: String(c.url || ''),
           // 站内素材的 id：前端靠它跳回素材详情
           materialId: c.materialId ? String(c.materialId) : '',
+          // PDF 素材的页码：作者要能核对"出自第几页"
+          page: Number(c.page) || 0,
         }))
     : [];
 
@@ -125,6 +128,16 @@ const SEARCH_INTENT = [
 ];
 
 /**
+ * 作者明确要"外部资料"的信号词。
+ * 站内素材是作者自己的东西，联网是查世界上的事实，两者不能混为一谈。
+ */
+const WEB_INTENT = [
+  '上网', '网上', '联网', '外网', '外部', '外部资料', '外部信息',
+  '百度', '维基', '百科', '谷歌', 'google', 'wiki', 'wikipedia',
+  '网上查', '上网查', '查一下网上',
+];
+
+/**
  * 判断这次提问是否需要检索素材库。
  */
 function needsRetrieval(roleKey, message) {
@@ -133,15 +146,44 @@ function needsRetrieval(roleKey, message) {
 }
 
 /**
- * 检索素材库并归一化成上下文装配器认识的片段格式。
+ * 作者明确要"原文/全文"的信号词。
+ * search 返回的 summary 只有几百字，正文细节要 fetch 才有。
+ */
+const FETCH_INTENT = ['原文', '全文', '完整版', '完整内容', '详细内容', '详细点', '具体内容'];
+
+/**
+ * 判断是否要联网检索。
+ * 资料员默认要联网——它的本职是"查资料"，站内没有就该往外找。
+ */
+function needsWebSearch(roleKey, message) {
+  if (roleKey === 'researcher') return true;
+  return WEB_INTENT.some((word) => message.toLowerCase().includes(word));
+}
+
+/**
+ * 判断是否要抓取网页正文。
+ */
+function needsWebFetch(message) {
+  return FETCH_INTENT.some((word) => message.includes(word));
+}
+
+/**
+ * 检索素材库与外部资料，归一化成上下文装配器认识的片段格式。
  *
  * 站内检索是纯关键词匹配，召回的是"候选"——真正相关的片段由模型二次筛选，
  * 所以这里放宽召回、限制条数，把判断权交给模型。
  *
- * @returns {Promise<Array<{title, snippet, source, sourceUrl, materialId}>>}
+ * @returns {Promise<{fragments: Array, notices: Array<string>}>}
+ *   fragments 是喂给模型的参考资料，notices 是给作者看的提示
+ *   （比如"联网检索没配 key，这次只用了站内素材"）
  */
 async function runRetrieval(roleKey, message, existing) {
-  if (!needsRetrieval(roleKey, message)) return existing;
+  if (!needsRetrieval(roleKey, message)) {
+    return { fragments: existing, notices: [] };
+  }
+
+  const fragments = [];
+  const notices = [];
 
   let results = await localSearch.searchLoose(message, { limit: 4 });
 
@@ -151,18 +193,55 @@ async function runRetrieval(roleKey, message, existing) {
     results = await localSearch.recent(4);
   }
 
-  if (!results.length) return existing;
+  for (const r of results) {
+    fragments.push({
+      kind: 'local',
+      title: r.title,
+      snippet: r.snippet,
+      source: r.source,
+      sourceUrl: r.sourceUrl,
+      materialId: r.id,
+      page: r.page || 0,
+    });
+  }
 
-  const fragments = results.map((r) => ({
-    title: r.title,
-    snippet: r.snippet,
-    source: r.source,
-    sourceUrl: r.sourceUrl,
-    materialId: r.id,
-  }));
+  // 联网检索。作者明确要外部资料时无条件查；
+  // 资料员角色在站内没查到东西时也往外找——本地没有就该上网。
+  if (needsWebSearch(roleKey, message) || (roleKey === 'researcher' && !results.length)) {
+    const web = await webSearch.search(message, {
+      oriQuestion: message,
+      count: 4,
+    });
+    if (web.ok) {
+      const webFragments = web.items.map((item) => ({
+        kind: 'web',
+        title: item.title,
+        snippet: item.snippet,
+        source: '网页',
+        sourceUrl: item.url,
+        materialId: '',
+        page: 0,
+      }));
+
+      // 作者要"原文/全文"时，把最相关的那条网页正文抓下来换掉摘要
+      if (webFragments.length && needsWebFetch(message)) {
+        const fetched = await webSearch.fetchPage(webFragments[0].sourceUrl);
+        if (fetched.ok && fetched.content) {
+          webFragments[0].snippet = fetched.content;
+        }
+      }
+
+      fragments.push(...webFragments);
+    } else if (web.reason) {
+      // 联网不可用（没配 key / 请求失败）要告诉作者，不能默默少给资料
+      notices.push(web.reason);
+    }
+  }
+
+  if (!fragments.length) return { fragments: existing, notices };
 
   // 调用方已经带了片段（用户手动指定的），以手动的为准
-  return existing.length ? existing : fragments;
+  return { fragments: existing.length ? existing : fragments, notices };
 }
 
 /**
@@ -177,15 +256,19 @@ function mergeCitations(modelCitations, fragments) {
   const seen = new Set(list.map((c) => c.materialId || c.url || c.title));
 
   for (const fragment of fragments) {
-    if (!fragment?.materialId) continue;
-    if (seen.has(fragment.materialId)) continue;
-    seen.add(fragment.materialId);
+    if (!fragment) continue;
+    // 站内素材有 materialId，联网结果只有 url，两者都是有效来源
+    const key = fragment.materialId || fragment.sourceUrl;
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
     list.push({
       source: fragment.source || '素材库',
       title: fragment.title,
       snippet: fragment.snippet,
       url: fragment.sourceUrl || '',
-      materialId: fragment.materialId,
+      materialId: fragment.materialId || '',
+      page: fragment.page || 0,
     });
   }
   return list;
@@ -221,9 +304,13 @@ router.post('/chat', async (req, res) => {
   };
 
   try {
-    // 站内素材检索：资料员角色总会搜；其他角色在作者明确要"找/查"时也搜。
+    // 站内素材检索 + 联网检索：资料员角色总会搜；其他角色在作者明确要"找/查"时也搜。
     // 检索结果既进上下文，也作为引用的兜底来源。
-    const searched = await runRetrieval(roleKey, String(message), retrieval);
+    const { fragments: searched, notices } = await runRetrieval(
+      roleKey,
+      String(message),
+      retrieval
+    );
     if (searched.length) {
       retrieval = searched;
     }
@@ -263,6 +350,10 @@ router.post('/chat', async (req, res) => {
 
     if (degraded) {
       send({ type: 'notice', content: reason });
+    }
+    // 检索过程中的提示（比如联网检索没配 key）
+    for (const notice of notices) {
+      send({ type: 'notice', content: notice });
     }
 
     const role = await roles.getRole(roleKey);
