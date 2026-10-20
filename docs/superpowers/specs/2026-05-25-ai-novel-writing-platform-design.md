@@ -53,13 +53,17 @@
 | 旧报告数据 | **删除**，不迁移 |
 | 深度思考档模型 | `deepseek-v4-pro`（低/高/最高三档思考强度） |
 | 日常默认模型 | `deepseek-flash` |
+| 访问方式 | **公网可达**，用户本人与太太各自从家里 / 公司浏览器访问 |
+| 鉴权方式 | 密码登录 + JWT 会话 Cookie（非长期 token 头） |
+| 部署形态 | Docker Compose + Nginx + HTTPS；若暂无服务器可先用 SSH 隧道过渡 |
 
 ### 1.4 非目标
 
 明确不做，避免范围蔓延：
 
-- 不做多用户、注册、登录、权限体系
-- 不做云同步、多端、协同编辑
+- 不做多用户、注册、**权限体系**（仍需单一密码登录以防公网暴露，见 §4.6）
+- 不做云同步、协同编辑
+- 不做离线编辑（断网时不能写，保存需联网）
 - 不做图片生成（文生图能力）
 - 不做向量数据库（依赖外部 embedding 服务；改用 FTS5 + DeepSeek 搜索，见 §6）
 - 不做移动端原生 App
@@ -351,6 +355,7 @@ web/server/
 │   ├── inspirations.js      灵感速记 CRUD（新增）
 │   ├── ai.js                AI 调用：对话、角色、行内操作、流式（新增）
 │   ├── prompts.js           提示词覆盖读写（新增）
+│   ├── auth.js              登录 / 登出 / 会话校验（新增）
 │   └── config.js            系统配置读写（新增）
 ├── services/
 │   ├── providers/           AI 供应商抽象（新增）
@@ -371,9 +376,9 @@ web/server/
 │   ├── context.js           上下文装配器（新增，核心）
 │   ├── provider.js          统一 provider 门面（改造自 chatManager.js）
 │   └── aiConfig.js          配置管理（改造，含 DeepSeek 段）
-└── middleware/
-    ├── auth.js              X-Access-Token 校验（新增）
-    └── rateLimit.js         AI 调用限流（新增）
+├── middleware/
+│   ├── auth.js              JWT 会话校验（新增）
+│   └── rateLimit.js         登录 / AI / 全局限流（新增）
 ```
 
 **整个删除**：`agent/` 目录（`orchestrator.js` / `memory/` / `tools/`）、`routes/translate.js`、`routes/graph.js`、`routes/categories.js`、`routes/agent.js`、`routes/aiConfig.js`、`services/chat/`、`services/translation/`、`services/ollama.js`、`services/llamaCpp.js`、`services/prompts.js`。
@@ -488,16 +493,82 @@ data: {"type":"done","messageId":"..."}
 
 Key 配置：`DEEPSEEK_API_KEY` 环境变量，key 到位后填入 `web/.env`。未配置时设置页显示"未配置"，平台自动降级到 Ollama provider。
 
-### 4.6 安全
+### 4.6 鉴权与公网部署
 
-单用户部署在公网仍有风险——服务器上的 API key 不能被陌生人消耗。最小措施：
+**使用场景**：用户本人与太太各有一台电脑（家 / 公司），都需要通过浏览器访问平台写作。因此平台需要公网可达，且必须鉴权。
 
-1. 一个 `ACCESS_TOKEN` 环境变量；前端首次访问需输入，存 localStorage，后续请求带 `X-Access-Token` 头
-2. 中间件校验所有 `/api/*`（`/api/health` 除外）
-3. 静态资源与 `/uploads` 不校验
-4. 限流：同一 IP 每分钟最多 60 次 AI 调用（避免误触或脚本刷爆 DeepSeek 额度）
+#### 4.6.1 现有代码中的三个必修问题
 
-这比完整的用户体系轻得多，但能挡住"别人拿到网址就能用你额度"这个最实际的风险。
+| 问题 | 现状 | 公网后果 |
+|---|---|---|
+| `dotenv` 未安装 | `package.json` 缺 `dotenv`，`index.js` 里 `require('dotenv')` 静默失败 | **`.env` 从未被加载**。DeepSeek key 写进 `.env` 也不生效。必须补装依赖 |
+| `cors()` 全开 | `app.use(cors())` 无来源白名单 | 任意第三方网站的 JS 都能读取 API 响应。必须收紧为同源 / 白名单 |
+| `uploads` 静态直出 | `app.use('/uploads', express.static(...))` 无鉴权 | 任何人可枚举下载图片。必须纳入鉴权 |
+
+#### 4.6.2 鉴权方案：密码登录 + 会话 Cookie
+
+不用长期 token 头，改用服务端会话，理由：她从公司浏览器访问，token 方案要求每次手动粘贴且无法安全存储；Cookie 方案登录一次后长期有效，浏览器自动携带。
+
+```
+POST /api/auth/login   { password }   → 设置 HttpOnly 会话 Cookie
+POST /api/auth/logout                → 清除 Cookie
+GET  /api/auth/session                → 返回 { authenticated: true }
+```
+
+- 密码存 `APP_PASSWORD` 环境变量（**只存哈希**：用 Node 内置 `crypto.scrypt` 计算 `scrypt(password, salt)`，salt 存环境变量 `APP_PASSWORD_SALT`；不引入 bcrypt 依赖）
+- 会话：随机 32 字节 token 存内存 `Map`（服务重启后失效，需重新登录——可接受，且更安全）；或用 `jsonwebtoken` 签发带过期时间的 token（**推荐**，无状态，重启不掉线）
+- Cookie 属性：`httpOnly: true`、`sameSite: 'strict'`、`secure: true`（生产环境经 HTTPS）
+- 会话有效期 30 天，支持"记住我"延长到 90 天
+- 中间件 `requireAuth` 保护所有 `/api/*`（除 `/api/health`、`/api/auth/login`）
+- 前端：未认证时路由跳转到 `/login`，登录成功后跳回原页面
+
+**为什么用 `jsonwebtoken` 而不是内存 Map**：单用户场景下 JWT 无需存储、天然支持多实例、重启不掉线，实现成本约 30 行。代价是无法主动踢下线（可接受）。
+
+#### 4.6.3 限流
+
+`express-rate-limit`（新增依赖）：
+
+| 范围 | 限制 | 理由 |
+|---|---|---|
+| `/api/auth/login` | 5 次 / 15 分钟 / IP | 防密码爆破 |
+| `/api/ai/*` | 60 次 / 分钟 / IP | 防脚本刷爆 DeepSeek 额度 |
+| 全局 API | 300 次 / 15 分钟 / IP | 防一般滥用 |
+
+#### 4.6.4 CORS 收紧
+
+```js
+app.use(cors({
+  origin: process.env.APP_ORIGIN || 'http://localhost:3000',  // 生产填 https://实际域名
+  credentials: true
+}));
+```
+
+同域部署时其实不需要 CORS，但保留白名单以便开发时前端 `localhost:5173` 直连后端。
+
+#### 4.6.5 部署形态
+
+推荐 **Docker Compose + Nginx 反向代理 + Let's Encrypt 证书**：
+
+```
+公网 → Nginx (443, TLS) → Node 应用 (127.0.0.1:3001, 不对外暴露)
+```
+
+- 现有 `web/Dockerfile` 与 `web/server/Dockerfile` 可复用，但 `web/server/Dockerfile` 里 `COPY ../client/dist ./public` **是错的**——Dockerfile 不能 `COPY` 构建上下文之外的路径。需在构建阶段先构建前端，或用多阶段构建
+- `.env` 存放 `DEEPSEEK_API_KEY`、`APP_PASSWORD`、`APP_PASSWORD_SALT`、`JWT_SECRET`、`APP_ORIGIN`
+- **`.env` 必须在 `.gitignore` 中**（当前已包含 `.env`，正确）
+- 数据持久化：`web/server/data/` 目录（SQLite 数据库 + uploads）挂载为 Docker volume
+- SQLite 单机写入，Nginx 需配置 `client_max_body_size 20m`（PDF 上传）
+
+**如果暂时没有域名/服务器**：可以先用 SSH 隧道（`ssh -L 3001:localhost:3001 user@server`）让公司电脑直连家里的机器，安全性等价于内网访问，不需要上面那套 HTTPS 方案。这可以作为过渡方案。
+
+#### 4.6.6 移动端可访问性
+
+公司里可能用手机查看进度。当前 `App.jsx` 已有 `isMobile` 判断（`< 992px` 走底部 Tab 布局）。三栏布局在手机上无法三栏并列，需要：
+
+- 中间编辑器占满
+- 左栏与右栏改为抽屉（Drawer），由顶部按钮唤出
+- 保留核心能力：读稿 + 发消息给 AI + 行内改写
+- 写作（长文本输入）在手机上体验有限，这是次要场景
 
 ---
 
@@ -510,9 +581,15 @@ web/client/src/
 ├── main.jsx
 ├── App.jsx                 应用壳 + 三栏布局
 ├── api/
-│   └── client.js           axios 实例，统一注入 X-Access-Token（新增）
+│   └── client.js           axios 实例，统一注入 Cookie 凭据（新增）
 ├── store/
-│   └── workspace.js        当前作品/章节/选中项的全局状态（新增）
+│   ├── workspace.js        当前作品/章节/选中项的全局状态（新增）
+│   └── auth.js            登录态管理（新增）
+├── pages/
+│   ├── Login.jsx           登录页（新增）
+│   ├── Workspace.jsx       三栏工作区（新增）
+│   ├── Materials.jsx       素材库页（新增）
+│   └── SettingsPage.jsx    设置页（新增）
 ├── components/
 │   ├── Sidebar/
 │   │   ├── TreePanel.jsx       左栏导航树
@@ -544,11 +621,14 @@ web/client/src/
 **路由**：当前无路由库，视图靠 `useState` 切换，URL 不可分享、无法深层链接。改造后引入 `react-router-dom`（唯一新增前端依赖），路由：
 
 ```
-/                     → 重定向到 /works
+/                     → 未登录跳 /login；已登录跳 /works
+/login                 → 登录页
 /works/:workId        → 工作区（三栏）
 /materials            → 素材库（独立页，便于大量素材的批量管理）
 /settings             → 设置
 ```
+
+路由守卫：`RequireAuth` 包装器检查 `/api/auth/session`，未认证跳转到 `/login` 并记录原路径，登录成功后跳回。
 
 **样式**：沿用 Ant Design 5 token 主题方案（`App.jsx` 现有的 `scholarlyLightTheme` / `scholarlyDarkTheme`），不引入 Tailwind。深浅主题切换保留。
 
@@ -621,9 +701,22 @@ web/client/src/
 
 每期结束时平台都可独立使用。
 
-### P0 — 地基修复
+### P0 — 地基与鉴权
 
-**目标**：让已有功能真正可用，不新增用户可见功能。
+**目标**：让平台在公网上安全可用。这是所有后续工作的前提——DeepSeek key 一旦在无鉴权的公网服务上，就是给别人送钱。
+
+**P0-a 鉴权与加固（最高优先级）**
+
+- 安装 `dotenv`（修复 `.env` 从未加载的问题），补 `.env.example`
+- `routes/auth.js`：登录 / 登出 / 会话查询，密码用 `crypto.scrypt` 校验，签发 JWT
+- `middleware/auth.js`：`requireAuth` 保护所有 API（`/api/health`、`/api/auth/login` 除外）
+- `middleware/rateLimit.js`：登录 5次/15min、AI 60次/min、全局 300次/15min
+- 收紧 CORS 为白名单（`APP_ORIGIN`）
+- `/uploads` 纳入鉴权（改为经鉴权中间件后 `express.static`）
+- 前端：`api/client.js` 走 `withCredentials`，`store/auth.js` 管理登录态，`pages/Login.jsx` 登录页，`RequireAuth` 路由守卫
+- 验收：未登录访问任何 API 返回 401；登录后正常；连续错误密码被限流
+
+**P0-b 数据与 AI 地基**
 
 - `database.js` 新 schema 落地，旧表直接删除
 - 删除 `agent/` 目录、`routes/translate.js`、`routes/graph.js`、`routes/categories.js`、`routes/agent.js`、`routes/aiConfig.js`、`services/chat/`、`services/translation/`
@@ -631,7 +724,6 @@ web/client/src/
 - `services/roles/` 五个角色定义
 - `services/context.js` 上下文装配器
 - 修 `routes/ai.js`：统一 `{message, workId, chapterId, role, scope}` 契约，SSE 流式
-- 前端 axios 实例 + `X-Access-Token` 中间件 + 限流
 - 死代码清理（`AIConfig.jsx`、`TranslationSettings.jsx` 等）
 
 **验收**：能在作品里创建章节，用侧边栏和 DeepSeek 聊天，AI 回复带上下文（知道人物名和当前章节）。
@@ -655,16 +747,18 @@ web/client/src/
 
 **验收**：上传一本 PDF，AI 引用其中的具体段落回答问题，点引用能跳回素材详情。
 
-### P3 — 打磨
+### P3 — 打磨与部署
 
 - 行内工具条补全剩余动作（换语气/续写/找茬/口语化）
 - 编辑器撤销/重做
 - 导出修复：DOCX 改用 `docx` 库正确处理格式（现在手写 OOXML 会丢掉全部富格式），新增 Markdown 导出
 - 自动保存（防抖 2s）与版本快照
 - 角色模型与思考强度调节
-- README 与部署文档更新
+- **公网部署**：`docker-compose.yml`（应用 + Nginx）、修正 `web/server/Dockerfile` 的非法 `COPY ../client/dist`（改多阶段构建）、Nginx 配置（TLS + `client_max_body_size 20m`）、systemd 服务单元、部署文档
+- **移动端适配**：三栏在窄屏降级为抽屉（§4.6.6）
+- README 更新
 
-**验收**：写完一章能导出格式正确的 DOCX；刷新页面不丢内容。
+**验收**：写完一章能导出格式正确的 DOCX；刷新页面不丢内容；公司浏览器可通过 HTTPS 域名访问并正常写作。
 
 ---
 
@@ -672,16 +766,18 @@ web/client/src/
 
 | 包 | 位置 | 原因 |
 |---|---|---|
+| `dotenv` | server | **必须补装**。当前 `require('dotenv')` 静默失败，`.env` 从未被加载 |
+| `jsonwebtoken` | server | 签发会话 token，无状态登录态 |
+| `express-rate-limit` | server | 登录爆破 / AI 额度 / 全局滥用限流 |
 | `pdf-parse` | server | PDF 解析入库 |
 | `docx` | server | 正确的 DOCX 导出 |
-| `express-rate-limit` | server | AI 调用限流 |
-| `react-router-dom` | client | 路由 |
+| `react-router-dom` | client | 路由 + 登录守卫 |
 | `node-llama-cpp` | server | **移除**（声明了但从未 import，实际用 spawn 调 CLI） |
 | `multer` | server | 保留，素材 PDF 上传复用 |
 | `adm-zip` | server | 保留，备份/恢复复用 |
 | `archiver` | server | 保留，备份复用 |
 
-不引入：向量库、中文分词库、状态管理库、Tailwind、UI 框架、embedding 服务、翻译相关库。
+不引入：向量库、中文分词库、状态管理库、Tailwind、UI 框架、embedding 服务、翻译相关库、bcrypt（用 Node 内置 `crypto.scrypt`）。
 
 ---
 
@@ -689,12 +785,16 @@ web/client/src/
 
 | 风险 | 影响 | 应对 |
 |---|---|---|
+| **公网暴露导致额度被盗刷** | 陌生人用你的 DeepSeek key 刷到破产 | P0-a 鉴权 + 限流是硬性前置；DeepSeek 侧再设账户级用量告警 |
+| **`.env` 从未生效（现存缺陷）** | 配了 key 也不生效，误判为"key 无效" | P0-a 第一件事装 `dotenv`，并加启动日志打印"key 已加载 / 未加载" |
+| 弱密码被爆破 | 小说稿泄露 | 登录限流 5次/15min；建议密码 ≥12 位随机串 |
+| 未上 HTTPS | 密码与 Cookie 明文过网 | 部署时强制 HTTPS；`secure` Cookie 标志；过渡期可用 SSH 隧道 |
 | 长篇上下文超出装配能力 | 长章节 AI 可能写崩 | DeepSeek 1M 上下文余量充足；装配器对超长内容做分段截断并在提示词中说明截断范围 |
 | 纯关键词检索召回不佳 | 站内素材搜不到想要的 | 检索结果交 `deepseek-v4-pro` 语义 rerank；用户可手动补充上下文 |
-| API key 泄露 | 额度被盗刷 | key 只在服务器环境变量；访问令牌拦截；调用限流 |
 | 删掉旧数据后无法回退 | 历史报告丢失 | 已确认旧数据无保留价值；且旧报告可从 git 历史找回（提交 `44be5b0` 及之前） |
 | 范围过大导致做不完 | 平台半成品 | 四期切分，每期独立可用；P0/P1 完成即可满足"AI 辅助写作"核心诉求 |
 | SQLite 单机限制 | 未来多用户会受限 | 当前单人场景无碍；真要多用户时再迁移，schema 已按作品维度组织 |
+| 公司网络策略限制 | 打不开或加载慢 | SSE 流式在部分企业代理下可能缓冲；提供非流式降级开关 |
 
 ---
 
@@ -706,3 +806,6 @@ web/client/src/
 | 2 | 旧报告数据是否迁移 | **不迁移，直接删除**。需要时从 git 历史找回 |
 | 3 | DeepSeek 对话与搜索是否需要两把 key | **一把**。三个端点（Chat / Search / Fetch）共用同一 Bearer Key，环境变量 `DEEPSEEK_API_KEY` |
 | 4 | 模型选择 | 按官方最新文档：日常 `deepseek-flash`，深度思考 `deepseek-v4-pro`（思考强度 low/high/max） |
+| 5 | 访问方式 | **公网可达**。用户本人与太太各自从家里 / 公司浏览器访问。鉴权用密码登录 + JWT 会话 Cookie |
+| 6 | 部署形态 | 目标 Docker Compose + Nginx + HTTPS；若暂无域名/服务器，过渡期用 SSH 隧道（安全性等价内网） |
+| 7 | 鉴权优先级 | **P0-a 最高优先级**，是公网部署的硬性前置，不可后置到 P1 |
