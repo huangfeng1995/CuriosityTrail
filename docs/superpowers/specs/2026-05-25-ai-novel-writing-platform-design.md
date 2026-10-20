@@ -55,7 +55,7 @@
 | 日常默认模型 | `deepseek-flash` |
 | 访问方式 | **公网可达**，用户本人与太太各自从家里 / 公司浏览器访问 |
 | 鉴权方式 | 密码登录 + JWT 会话 Cookie（非长期 token 头） |
-| 部署形态 | Docker Compose + Nginx + HTTPS；若暂无服务器可先用 SSH 隧道过渡 |
+| 部署平台 | **沿用 Fly.io**（`fly.toml` 已配好：hkg 区域、数据卷、强制 HTTPS、免费层） |
 
 ### 1.4 非目标
 
@@ -536,30 +536,72 @@ GET  /api/auth/session                → 返回 { authenticated: true }
 
 #### 4.6.4 CORS 收紧
 
+Fly.io 上前后端同域（Node 同时 serve 静态前端与 API），**生产环境不需要 CORS**，直接移除 `app.use(cors())` 即可——这样也顺带消除了"任意第三方网站读 API"的攻击面。
+
+仅本地开发需要（Vite dev server `localhost:5173` 直连后端 `localhost:3001`）：
+
 ```js
-app.use(cors({
-  origin: process.env.APP_ORIGIN || 'http://localhost:3000',  // 生产填 https://实际域名
-  credentials: true
-}));
+if (process.env.NODE_ENV !== 'production') {
+  app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+}
 ```
 
-同域部署时其实不需要 CORS，但保留白名单以便开发时前端 `localhost:5173` 直连后端。
+生产环境保留 `APP_ORIGIN` 环境变量以便将来启用独立前端域名。
 
-#### 4.6.5 部署形态
+#### 4.6.5 部署形态：沿用 Fly.io
 
-推荐 **Docker Compose + Nginx 反向代理 + Let's Encrypt 证书**：
+**项目此前已部署在 Fly.io**，配置见 `fly.toml`（应用名 `curiosity-trail`，区域 `hkg` 香港，数据卷 `curiosity_trail_data` 挂载 `/app/data`，`force_https = true`，`min_machines_running = 1`）。**保持该平台不变**，理由：
 
+| 理由 | 说明 |
+|---|---|
+| 配置现成 | 数据卷、区域、HTTPS 均已配好，无需重做 |
+| 自动 HTTPS | `force_https = true` + `*.fly.dev` 域名，开箱即用；不必买域名、不必配 Nginx |
+| 成本 | 免费层足够单人使用（`DEPLOY.md` 明确标注"个人使用完全免费"） |
+| 免运维 | 系统更新、进程重启、证书续期都由平台托管 |
+
+`railway.json` 是一次未完成的尝试（`buildCommand` 指向不存在的 `npm run build`），**不采用**。
+
+##### Fly.io 特有的三个约束
+
+**1. Volume 只能单实例挂载**
+
+Fly.io 的 volume 一次只能挂载到一个 machine。SQLite 在多实例并发写入时会损坏数据库，因此必须保持 `min_machines_running = 1`（`fly.toml` 已是此配置）。
+
+应用启动时增加校验：若检测到 `FLY_ALLOC_ID` 缺失但 `/app/data` 未挂载，或环境变量 `ALLOW_MULTI_INSTANCE` 未开启而实例数 > 1，则拒绝启动并打印明确错误。避免误操作 `fly scale count 2` 导致数据损坏。
+
+**2. 容器可替换，本地文件不持久**
+
+容器重建后 `/app/web/server/uploads` 会丢失。因此**所有运行时写入路径必须基于 `DATA_DIR`**：
+
+- 当前 [upload.js](file:///Users/openclaw/Documents/trae_projects/CuriosityTrail/web/server/routes/upload.js) 写死 `path.join(__dirname, '../uploads')` → 改为 `path.join(process.env.DATA_DIR || <默认>, 'uploads')`
+- SQLite 数据库路径同样基于 `DATA_DIR`
+- 插图、PDF 原文件都必须落在卷内
+
+**3. 备份需主动触发**
+
+单机 SQLite 没有时间点自动快照，需用 Fly.io 的定时机制（`fly scale count` + 外部 cron，或在应用内加 `POST /api/admin/backup` 由外部定时器调用）。沿用现有 [export.js](file:///Users/openclaw/Documents/trae_projects/CuriosityTrail/web/server/routes/export.js) 的备份能力，补一个定时触发入口。
+
+##### 密钥注入
+
+不使用 `.env` 文件，改为 Fly.io secrets（平台加密存储，不进 Git、不进镜像）：
+
+```bash
+fly secrets set DEEPSEEK_API_KEY=... APP_PASSWORD=... APP_PASSWORD_SALT=... JWT_SECRET=...
 ```
-公网 → Nginx (443, TLS) → Node 应用 (127.0.0.1:3001, 不对外暴露)
-```
 
-- 现有 `web/Dockerfile` 与 `web/server/Dockerfile` 可复用，但 `web/server/Dockerfile` 里 `COPY ../client/dist ./public` **是错的**——Dockerfile 不能 `COPY` 构建上下文之外的路径。需在构建阶段先构建前端，或用多阶段构建
-- `.env` 存放 `DEEPSEEK_API_KEY`、`APP_PASSWORD`、`APP_PASSWORD_SALT`、`JWT_SECRET`、`APP_ORIGIN`
-- **`.env` 必须在 `.gitignore` 中**（当前已包含 `.env`，正确）
-- 数据持久化：`web/server/data/` 目录（SQLite 数据库 + uploads）挂载为 Docker volume
-- SQLite 单机写入，Nginx 需配置 `client_max_body_size 20m`（PDF 上传）
+- `DEEPSEEK_API_KEY` — DeepSeek key
+- `APP_PASSWORD` — 登录明文密码（用于 scrypt 校验），**由实施时生成并单独告知用户，不写入任何文件**
+- `APP_PASSWORD_SALT` — scrypt salt（随机串）
+- `JWT_SECRET` — JWT 签名密钥（随机串）
+- `APP_ORIGIN` — `https://curiosity-trail.fly.dev`
 
-**如果暂时没有域名/服务器**：可以先用 SSH 隧道（`ssh -L 3001:localhost:3001 user@server`）让公司电脑直连家里的机器，安全性等价于内网访问，不需要上面那套 HTTPS 方案。这可以作为过渡方案。
+本地开发仍支持 `.env`（需先安装 `dotenv`），但 `.env` 已在 `.gitignore` 中。
+
+##### 备用方案
+
+若将来需要迁出 Fly.io（国内访问速度、或平台政策变化），现有 [Dockerfile](file:///Users/openclaw/Documents/trae_projects/CuriosityTrail/Dockerfile) 是正确的多阶段构建版本，可直接用于国内服务器 + Docker Compose，届时再补 Nginx。
+
+过渡期若完全不想动云平台，可用 SSH 隧道（`ssh -L 3001:localhost:3001 user@server`）让公司电脑直连家里的机器，安全性等价于内网访问。
 
 #### 4.6.6 移动端可访问性
 
@@ -711,8 +753,10 @@ web/client/src/
 - `routes/auth.js`：登录 / 登出 / 会话查询，密码用 `crypto.scrypt` 校验，签发 JWT
 - `middleware/auth.js`：`requireAuth` 保护所有 API（`/api/health`、`/api/auth/login` 除外）
 - `middleware/rateLimit.js`：登录 5次/15min、AI 60次/min、全局 300次/15min
-- 收紧 CORS 为白名单（`APP_ORIGIN`）
+- 收紧 CORS：生产环境移除（Fly.io 同域），仅开发环境保留 `localhost:5173` 白名单
 - `/uploads` 纳入鉴权（改为经鉴权中间件后 `express.static`）
+- **所有运行时写入路径改基于 `DATA_DIR`**：当前 `upload.js` 写死 `__dirname/../uploads`，容器重建后会丢图；SQLite 路径同理
+- 启动时校验单实例约束（Fly.io volume 只能挂一个 machine，多实例会损坏 SQLite）
 - 前端：`api/client.js` 走 `withCredentials`，`store/auth.js` 管理登录态，`pages/Login.jsx` 登录页，`RequireAuth` 路由守卫
 - 验收：未登录访问任何 API 返回 401；登录后正常；连续错误密码被限流
 
@@ -754,9 +798,9 @@ web/client/src/
 - 导出修复：DOCX 改用 `docx` 库正确处理格式（现在手写 OOXML 会丢掉全部富格式），新增 Markdown 导出
 - 自动保存（防抖 2s）与版本快照
 - 角色模型与思考强度调节
-- **公网部署**：`docker-compose.yml`（应用 + Nginx）、修正 `web/server/Dockerfile` 的非法 `COPY ../client/dist`（改多阶段构建）、Nginx 配置（TLS + `client_max_body_size 20m`）、systemd 服务单元、部署文档
+- **公网部署**：修正 `web/server/Dockerfile` 的非法 `COPY ../client/dist`（根目录 `Dockerfile` 已是正确的多阶段版本，删掉重复的那个）；Fly.io secrets 配置说明；备份定时触发入口
 - **移动端适配**：三栏在窄屏降级为抽屉（§4.6.6）
-- README 更新
+- README 与 DEPLOY.md 更新（部署步骤、备份恢复、密钥轮换）
 
 **验收**：写完一章能导出格式正确的 DOCX；刷新页面不丢内容；公司浏览器可通过 HTTPS 域名访问并正常写作。
 
@@ -787,8 +831,10 @@ web/client/src/
 |---|---|---|
 | **公网暴露导致额度被盗刷** | 陌生人用你的 DeepSeek key 刷到破产 | P0-a 鉴权 + 限流是硬性前置；DeepSeek 侧再设账户级用量告警 |
 | **`.env` 从未生效（现存缺陷）** | 配了 key 也不生效，误判为"key 无效" | P0-a 第一件事装 `dotenv`，并加启动日志打印"key 已加载 / 未加载" |
-| 弱密码被爆破 | 小说稿泄露 | 登录限流 5次/15min；建议密码 ≥12 位随机串 |
-| 未上 HTTPS | 密码与 Cookie 明文过网 | 部署时强制 HTTPS；`secure` Cookie 标志；过渡期可用 SSH 隧道 |
+| 弱密码被爆破 | 小说稿泄露 | 登录限流 5次/15min；密码用 192 位随机串（非人工设定） |
+| **Fly.io 多实例导致 SQLite 损坏** | 数据库文件损坏，稿件全丢 | 保持 `min_machines_running = 1`；启动时校验实例数；误操作 `fly scale count 2` 时直接拒绝启动 |
+| **容器重建导致插图丢失** | 已插入的插图消失 | 所有写入路径基于 `DATA_DIR`（卷内）；P0-a 必修项 |
+| 未上 HTTPS | 密码与 Cookie 明文过网 | Fly.io `force_https = true` 已强制；Cookie 设 `secure` 标志 |
 | 长篇上下文超出装配能力 | 长章节 AI 可能写崩 | DeepSeek 1M 上下文余量充足；装配器对超长内容做分段截断并在提示词中说明截断范围 |
 | 纯关键词检索召回不佳 | 站内素材搜不到想要的 | 检索结果交 `deepseek-v4-pro` 语义 rerank；用户可手动补充上下文 |
 | 删掉旧数据后无法回退 | 历史报告丢失 | 已确认旧数据无保留价值；且旧报告可从 git 历史找回（提交 `44be5b0` 及之前） |
@@ -807,5 +853,6 @@ web/client/src/
 | 3 | DeepSeek 对话与搜索是否需要两把 key | **一把**。三个端点（Chat / Search / Fetch）共用同一 Bearer Key，环境变量 `DEEPSEEK_API_KEY` |
 | 4 | 模型选择 | 按官方最新文档：日常 `deepseek-flash`，深度思考 `deepseek-v4-pro`（思考强度 low/high/max） |
 | 5 | 访问方式 | **公网可达**。用户本人与太太各自从家里 / 公司浏览器访问。鉴权用密码登录 + JWT 会话 Cookie |
-| 6 | 部署形态 | 目标 Docker Compose + Nginx + HTTPS；若暂无域名/服务器，过渡期用 SSH 隧道（安全性等价内网） |
+| 6 | 部署平台 | **沿用 Fly.io**（`fly.toml` 已配好：hkg 区域 + 数据卷 + 强制 HTTPS + 免费层）。不引入 Nginx / 域名 |
 | 7 | 鉴权优先级 | **P0-a 最高优先级**，是公网部署的硬性前置，不可后置到 P1 |
+| 8 | 登录密码 | 实施时生成 192 位随机串（`crypto.randomBytes(24)`），单独告知用户，不写入任何文件或 Git |
