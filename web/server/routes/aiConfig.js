@@ -3,6 +3,8 @@ const router = express.Router();
 const aiConfig = require('../services/aiConfig');
 const chatManager = require('../services/chat/chatManager');
 const translationManager = require('../services/translation/translationManager');
+// 中心配置（别名避免与下方局部变量 config 冲突）
+const appConfig = require('../config');
 
 // 获取当前配置
 router.get('/config', (req, res) => {
@@ -78,8 +80,7 @@ router.get('/status', async (req, res) => {
 router.post('/reset', (req, res) => {
   try {
     const fs = require('fs');
-    const path = require('path');
-    const configPath = path.join(__dirname, '../data/ai-config.json');
+    const configPath = appConfig.aiConfigPath;
     if (fs.existsSync(configPath)) {
       fs.unlinkSync(configPath);
     }

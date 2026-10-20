@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const archiver = require('archiver');
 const AdmZip = require('adm-zip');
+const config = require('../config');
 
 router.get('/report/:id/txt', async (req, res) => {
   try {
@@ -27,7 +28,7 @@ router.get('/report/:id/docx', async (req, res) => {
     if (!report) return res.status(404).json({ error: '报告不存在' });
     
     // 简单的 DOCX 结构
-    const tempDir = path.join(__dirname, '../../temp');
+    const tempDir = config.tempDir;
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     const tempZip = new AdmZip();
     
@@ -72,8 +73,8 @@ router.get('/report/:id/docx', async (req, res) => {
 });
 
 router.get('/backup', async (req, res) => {
-  const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
-  const docsDir = process.env.DOCS_DIR || path.join(__dirname, '../../documents');
+  const dataDir = config.dataDir;
+  const docsDir = config.docsDir;
   const timestamp = new Date().toISOString().slice(0, 10);
 
   res.setHeader('Content-Type', 'application/zip');
@@ -98,7 +99,7 @@ router.post('/restore', async (req, res) => {
     return res.status(400).json({ error: '请选择备份文件' });
   }
 
-  const tempDir = path.join(__dirname, '../../temp');
+  const tempDir = config.tempDir;
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
   const extractDir = path.join(tempDir, 'restore-' + Date.now());
 
@@ -108,8 +109,8 @@ router.post('/restore', async (req, res) => {
 
     const dbSrc = path.join(extractDir, 'curiosity.db');
     const docsSrc = path.join(extractDir, 'documents');
-    const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
-    const docsDir = process.env.DOCS_DIR || path.join(__dirname, '../../documents');
+    const dataDir = config.dataDir;
+    const docsDir = config.docsDir;
 
     if (fs.existsSync(dbSrc)) {
       fs.copyFileSync(dbSrc, path.join(dataDir, 'curiosity.db'));

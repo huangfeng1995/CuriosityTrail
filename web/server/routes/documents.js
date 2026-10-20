@@ -4,12 +4,11 @@ const { all, get, run } = require('../database');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const config = require('../config');
 
-const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
-const docsDir = path.join(dataDir, 'uploads');
-if (!fs.existsSync(docsDir)) {
-  fs.mkdirSync(docsDir, { recursive: true });
-}
+// 统一走 DATA_DIR：容器可替换，容器内相对路径不持久
+const dataDir = config.dataDir;
+const docsDir = config.docsDir;
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, docsDir),

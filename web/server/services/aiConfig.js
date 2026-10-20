@@ -1,9 +1,11 @@
 const path = require('path');
 const fs = require('fs');
+const config = require('../config');
 
 class AIConfigManager {
   constructor() {
-    this.configPath = path.join(__dirname, '../data/ai-config.json');
+    // 统一走 DATA_DIR：容器可替换，容器内相对路径不持久
+    this.configPath = config.aiConfigPath;
     this.defaultConfig = {
       version: '1.0',
       chatService: 'ollama',

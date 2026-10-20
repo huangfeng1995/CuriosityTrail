@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, theme, Button, Input, ConfigProvider, Switch, Typography } from 'antd';
-import { Sun, Moon, BookOpen, Settings as SettingsIcon } from 'lucide-react';
+import { Layout, theme, Button, Input, ConfigProvider, Switch, Typography, Spin } from 'antd';
+import { Sun, Moon, BookOpen, Settings as SettingsIcon, LogOut } from 'lucide-react';
 import {
   FileTextOutlined,
   PlusOutlined,
@@ -13,6 +13,8 @@ import Settings from './components/Settings';
 import SearchBar from './components/SearchBar';
 import KnowledgeGraph from './components/KnowledgeGraph';
 import AgentAssistant from './components/AgentAssistant';
+import Login from './pages/Login';
+import { AuthProvider, useAuth } from './store/auth';
 
 const { Header, Sider, Content } = Layout;
 const { Title } = Typography;
@@ -65,9 +67,9 @@ const scholarlyDarkTheme = {
   },
 };
 
-function App() {
+function AppShell({ isDark, setIsDark }) {
+  const { authenticated, checking, logout } = useAuth();
   const [current, setCurrent] = useState('reports');
-  const [isDark, setIsDark] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [isMobile, setIsMobile] = useState(false);
 
@@ -80,17 +82,6 @@ function App() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  useEffect(() => {
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme) {
-      setIsDark(savedTheme === 'dark');
-    }
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem('theme', isDark ? 'dark' : 'light');
-  }, [isDark]);
-
   const menuItems = [
     { key: 'reports', icon: <FileTextOutlined size={20} />, label: '探索报告' },
     { key: 'agent', icon: <RobotOutlined size={20} />, label: 'AI 助手' },
@@ -99,13 +90,26 @@ function App() {
     { key: 'settings', icon: <SettingsIcon size={20} />, label: '系统设置' },
   ];
 
+  if (checking) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: isDark ? '#0f172a' : '#f8f9fa',
+      }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  if (!authenticated) {
+    return <Login isDark={isDark} />;
+  }
+
   return (
-    <ConfigProvider
-      theme={{
-        algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        ...(isDark ? scholarlyDarkTheme : scholarlyLightTheme),
-      }}
-    >
+    <>
       <Layout style={{ minHeight: '100vh', backgroundColor: isDark ? '#0f172a' : '#f8f9fa' }}>
         {isMobile ? (
           <>
@@ -159,6 +163,12 @@ function App() {
                   onClick={() => setIsDark(!isDark)}
                   style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
                 />
+                  <Button
+                    type="text"
+                    icon={<LogOut size={18} />}
+                    onClick={logout}
+                    style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
+                  />
               </div>
             </Header>
 
@@ -336,12 +346,18 @@ function App() {
                 }}
               >
                 {current === 'reports' && (
-                  <SearchBar 
-                    value={searchText} 
+                  <SearchBar
+                    value={searchText}
                     onChange={setSearchText}
                     isDark={isDark}
                   />
                 )}
+                <Button
+                  type="text"
+                  icon={<LogOut size={18} />}
+                  onClick={logout}
+                  style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
+                />
               </Header>
 
               <Content
@@ -362,6 +378,34 @@ function App() {
           </>
         )}
       </Layout>
+    </>
+  );
+}
+
+function App() {
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) {
+      setIsDark(savedTheme === 'dark');
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('theme', isDark ? 'dark' : 'light');
+  }, [isDark]);
+
+  return (
+    <ConfigProvider
+      theme={{
+        algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+        ...(isDark ? scholarlyDarkTheme : scholarlyLightTheme),
+      }}
+    >
+      <AuthProvider>
+        <AppShell isDark={isDark} setIsDark={setIsDark} />
+      </AuthProvider>
     </ConfigProvider>
   );
 }

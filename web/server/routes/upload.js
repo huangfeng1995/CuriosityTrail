@@ -2,14 +2,12 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const config = require('../config');
 
 const router = express.Router();
 
-const uploadsDir = path.join(__dirname, '../uploads');
-
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// 统一走 DATA_DIR：容器可替换，容器内相对路径不持久
+const uploadsDir = config.uploadsDir;
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -52,9 +50,9 @@ router.post('/image', upload.single('image'), (req, res) => {
 
 router.delete('/image/:filename', (req, res) => {
   try {
-    const filename = req.params.filename;
+    const filename = path.basename(req.params.filename);
     const filePath = path.join(uploadsDir, filename);
-    
+
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
       res.json({ success: true });

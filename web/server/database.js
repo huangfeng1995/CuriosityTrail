@@ -1,14 +1,10 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+const config = require('./config');
 
-// 使用 DATA_DIR 环境变量，或者回退到默认路径
-const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-const dbPath = path.join(dataDir, 'curiosity.db');
+// 统一走 DATA_DIR：容器可替换，容器内相对路径不持久
+const dbPath = config.dbPath;
 const db = new sqlite3.Database(dbPath);
 
 function initDatabase() {

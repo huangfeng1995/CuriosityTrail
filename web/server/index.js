@@ -1,25 +1,50 @@
-// 加载环境变量（如果有 .env 文件）
-try {
-  const dotenv = require('dotenv');
-  const path = require('path');
-  const envPath = path.join(__dirname, '..', '.env');
-  dotenv.config({ path: envPath });
-} catch (e) {
-  // 如果没有安装 dotenv 或者没有 .env 文件，没关系，继续运行
-}
+'use strict';
+
+/**
+ * 服务入口。
+ *
+ * 注意：config 必须最先加载——它负责加载 .env 并统一运行时路径，
+ * 后续模块都依赖 process.env 已被正确读取。
+ */
+const config = require('./config');
 
 const express = require('express');
-const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const fileUpload = require('express-fileupload');
 
-const app = express();
-const PORT = process.env.PORT || 3001;
+const { requireAuth } = require('./middleware/auth');
+const { aiLimiter, apiLimiter } = require('./middleware/rateLimit');
+const { checkSingleInstance } = require('./middleware/singleInstance');
 
-app.use(cors());
-app.use(express.json());
+// ---------------------------------------------------------------------------
+// 单实例校验：多实例并发写 SQLite 会损坏数据库，稿子全丢
+// ---------------------------------------------------------------------------
+const instanceCheck = checkSingleInstance();
+if (!instanceCheck.ok) {
+  console.error('❌ 启动中止：' + instanceCheck.reason);
+  process.exit(1);
+}
+
+const app = express();
+const PORT = config.port;
+
+// Fly.io 等平台在反代后面，需信任代理才能拿到真实客户端 IP（限流依赖）
+app.set('trust proxy', 1);
+
+// 生产环境前后端同域，不需要 CORS；开发环境放开供 vite dev server 直连
+if (config.enableCors) {
+  const cors = require('cors');
+  app.use(cors({ origin: config.appOrigin, credentials: true }));
+}
+
+app.use(express.json({ limit: '10mb' }));
 app.use(fileUpload());
 
+// ---------------------------------------------------------------------------
+// 路由
+// ---------------------------------------------------------------------------
+const authRouter = require('./routes/auth');
 const categoriesRouter = require('./routes/categories');
 const reportsRouter = require('./routes/reports');
 const documentsRouter = require('./routes/documents');
@@ -30,41 +55,57 @@ const translateRouter = require('./routes/translate');
 const aiConfigRouter = require('./routes/aiConfig');
 const uploadRouter = require('./routes/upload');
 
+// 公开路由：健康检查与登录（登录自带限流）
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+app.use('/api/auth', authRouter);
+
+// 其余 API 一律要求登录
+app.use('/api', apiLimiter, requireAuth);
+
 app.use('/api/categories', categoriesRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/export', exportRouter);
 app.use('/api/graph', graphRouter);
-app.use('/api/agent', agentRouter);
-app.use('/api/translate', translateRouter);
-app.use('/api/ai-config', aiConfigRouter);
+app.use('/api/agent', aiLimiter, agentRouter);
+app.use('/api/translate', aiLimiter, translateRouter);
+app.use('/api/ai-config', aiLimiter, aiConfigRouter);
 app.use('/api/upload', uploadRouter);
 
-// 图片上传目录静态服务
-const uploadsPath = path.join(__dirname, 'uploads');
-app.use('/uploads', express.static(uploadsPath));
+// 图片目录同样纳入鉴权
+app.use('/uploads', requireAuth, express.static(config.uploadsDir));
 
-// 先检查是否有 Docker 环境下的 public 目录，再检查本地开发的 dist
+// 静态前端
 const staticPath = path.join(__dirname, 'public');
 const fallbackPath = path.join(__dirname, '../client/dist');
+const staticRoot = fs.existsSync(staticPath) ? staticPath : fallbackPath;
 
-if (require('fs').existsSync(staticPath)) {
-  app.use(express.static(staticPath));
-} else {
-  app.use(express.static(fallbackPath));
-}
+app.use(express.static(staticRoot));
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
+// SPA 回退
 app.get('*', (req, res) => {
-  const indexPath = require('fs').existsSync(staticPath) 
-    ? path.join(staticPath, 'index.html') 
-    : path.join(fallbackPath, 'index.html');
-  res.sendFile(indexPath);
+  res.sendFile(path.join(staticRoot, 'index.html'));
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`   环境: ${config.nodeEnv}`);
+  console.log(`   数据目录: ${config.dataDir}`);
+  console.log(
+    `   DEEPSEEK_API_KEY: ${config.deepseekApiKey ? '已加载' : '未配置（将回退到本地 Ollama）'}`
+  );
+  if (config.appPasswordIsFallback) {
+    console.warn(
+      '⚠️  未设置 APP_PASSWORD 环境变量，已生成临时密码并存入 ' +
+        `${config.dataDir}/.app-password —— 生产环境请用平台 secret 注入`
+    );
+  }
+  if (config.jwtSecretIsFallback) {
+    console.warn(
+      '⚠️  未设置 JWT_SECRET 环境变量，已生成临时密钥并存入 ' +
+        `${config.dataDir}/.session-secret —— 生产环境请用平台 secret 注入`
+    );
+  }
 });
