@@ -25,7 +25,7 @@ const BY_KEY = new Map(DEFINITIONS.map((r) => [r.key, r]));
 
 /**
  * 读取所有提示词覆盖。
- * @returns {Promise<Map<string, {systemPrompt: string, temperature: number|null, model: string|null, thinking: number|null}>>}
+ * @returns {Promise<Map<string, {systemPrompt: string, temperature: number|null, model: string|null, thinking: boolean|null}>>}
  */
 async function loadOverrides() {
   const rows = await all(
@@ -47,12 +47,15 @@ async function loadOverrides() {
 /**
  * 把覆盖套到默认定义上。
  *
- * 温度的语义：
- *   没有覆盖行      → 用角色自带温度（写手 0.85、审稿 0.4 这种角色性格）
- *   有覆盖行且有值  → 用作者指定的温度
- *   有覆盖行但为 null → 跟随全局供应商温度
+ * 温度 / 模型 / 思考三项都是同一套三态语义：
+ *   没有覆盖行        → 用角色自带默认（写手 0.85、审稿人强模型这种角色性格）
+ *   有覆盖行且有值    → 用作者指定的值
+ *   有覆盖行但为 null → 跟随全局供应商设置
  * 所以不能写成 override?.temperature ?? def.temperature，
  * 那样"显式选跟随全局"会被当成"没设置"给回默认温度。
+ *
+ * 覆盖行是按角色整行存的：作者改过某个角色的提示词，这一行就存在了，
+ * 于是模型与思考开关会被写成 null（跟随全局），温度会写成角色自带值。
  */
 function withOverride(def, override) {
   return {
@@ -61,11 +64,11 @@ function withOverride(def, override) {
     icon: def.icon,
     description: def.description,
     color: def.color,
-    temperature: override ? override.temperature ?? null : def.temperature,
+    temperature: override ? override.temperature ?? null : def.temperature ?? null,
     // 空串表示跟随全局
-    model: override?.model || '',
+    model: override ? override.model || '' : def.model || '',
     // null 表示跟随全局
-    thinking: override?.thinking ?? null,
+    thinking: override ? override.thinking ?? null : def.thinking ?? null,
     suggestions: def.suggestions,
     systemPrompt: override?.systemPrompt ?? def.systemPrompt,
     overridden: Boolean(override),

@@ -13,6 +13,14 @@ module.exports = {
   icon: '✍️',
   description: '把思路变成正文。起稿、续写、扩写、描写具体化。',
   color: '#3b6ea5',
+  // 角色自带参数：
+  //   model     不钉死，跟随全局（日常写作用快模型最划算）
+  //   thinking  不钉死，跟随全局
+  //   temperature 0.85 是写手的"性格"——发散一点，别写得太保守
+  //
+  // 为什么温度要保留：DeepSeek 思考模式下 temperature / top_p 等采样参数
+  // 完全不生效（官方原文：设了不报错，但也没有任何效果）。
+  // 写手要的是"多个写法里挑一个"，靠的正是温度。
   temperature: 0.85,
   // 侧边栏对话时的快捷建议
   suggestions: [

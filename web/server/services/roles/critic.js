@@ -13,6 +13,11 @@ module.exports = {
   icon: '🔍',
   description: '挑毛病。逻辑漏洞、设定冲突、人物失真、节奏塌陷。',
   color: '#a04a4a',
+  // 审稿人要在整章里追线索、查矛盾，这是唯一一个真正需要推理深度的角色。
+  // 代价是思考模式下 temperature 失效（官方限制），但审稿要的是"稳定地挑毛病"，
+  // 那种一致性由提示词和推理本身保证，不依赖采样温度。
+  model: 'deepseek-v4-pro',
+  thinking: true,
   temperature: 0.4,
   suggestions: [
     '这段有什么逻辑问题',

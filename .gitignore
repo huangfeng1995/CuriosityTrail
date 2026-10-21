@@ -41,3 +41,7 @@ documents/
 
 # Backup files
 *.zip.backup
+
+# PDF 原型工作台的测试产物（源码已入库，产物不入库）
+pdf_workbench/output/
+pdf_workbench/*.txt

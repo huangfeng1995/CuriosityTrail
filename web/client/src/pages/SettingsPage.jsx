@@ -57,6 +57,10 @@ function ProviderConfig() {
   const [status, setStatus] = useState(null);
   const [testing, setTesting] = useState('');
 
+  // 深度思考开关开着时，DeepSeek 会忽略温度（官方明确说明），
+  // 所以温度滑块要置灰并说明原因，免得调了没反应还以为坏了。
+  const deepseekThinking = Form.useWatch(['deepseek', 'thinking'], form);
+
   const load = async () => {
     try {
       const res = await api.get('/config/ai');
@@ -202,11 +206,21 @@ function ProviderConfig() {
                 <Select options={MODEL_OPTIONS} />
               </Form.Item>
               <Space size={16} wrap>
-                <Form.Item name={['deepseek', 'temperature']} label="温度" style={{ marginBottom: 0 }}>
+                <Form.Item
+                  name={['deepseek', 'temperature']}
+                  label="温度"
+                  style={{ marginBottom: 0 }}
+                  help={
+                    deepseekThinking
+                      ? '深度思考开启时温度不生效（DeepSeek 官方限制）'
+                      : undefined
+                  }
+                >
                   <Slider
                     min={0}
                     max={1.5}
                     step={0.05}
+                    disabled={deepseekThinking}
                     style={{ width: isMobile ? '100%' : 140 }}
                   />
                 </Form.Item>
@@ -216,8 +230,8 @@ function ProviderConfig() {
                 <Form.Item name={['deepseek', 'reasoningEffort']} label="思考档位" style={{ marginBottom: 0 }}>
                   <Select
                     style={{ width: 100 }}
+                    disabled={!deepseekThinking}
                     options={[
-                      { value: 'low', label: '低' },
                       { value: 'high', label: '高' },
                       { value: 'max', label: '最高' },
                     ]}
@@ -229,7 +243,7 @@ function ProviderConfig() {
                   name={['deepseek', 'thinking']}
                   label="深度思考"
                   valuePropName="checked"
-                  help="开启后模型先推理再作答，更准但更慢也更贵。"
+                  help="开启后模型先推理再作答，更准但更慢也更贵。注意：此时温度不生效。日常写作建议关闭。"
                   style={{ marginBottom: 0 }}
                 >
                   <Switch />
@@ -389,6 +403,16 @@ function PromptConfig() {
 
   const active = roles.find((r) => r.key === activeKey);
 
+  // 实时算出这个角色现在实际会不会开思考。
+  // 作者在下拉框里一改就得立刻看到温度滑块置灰，不能等保存后才变。
+  const thinkingOn = (() => {
+    if (thinking === 'on') return true;
+    if (thinking === 'off') return false;
+    return active?.globalThinking ?? false;
+  })();
+  const temperatureDead = active?.provider === 'deepseek' && thinkingOn;
+  const effectiveModel = model || active?.globalModel || '';
+
   return (
     <Card size="small">
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
@@ -417,15 +441,23 @@ function PromptConfig() {
             温度 {followGlobalTemp ? '（跟随全局）' : temperature.toFixed(2)}
           </Text>
           <div>
-            <Slider
-              min={0}
-              max={1.5}
-              step={0.05}
-              value={temperature}
-              disabled={followGlobalTemp}
-              onChange={setTemperature}
-              style={{ margin: 0, width: isMobile ? '100%' : 180 }}
-            />
+            <Tooltip
+              title={
+                temperatureDead
+                  ? 'DeepSeek 思考模式下温度不生效（官方限制）。关闭深度思考后温度才会起作用。'
+                  : ''
+              }
+            >
+              <Slider
+                min={0}
+                max={1.5}
+                step={0.05}
+                value={temperature}
+                disabled={followGlobalTemp || temperatureDead}
+                onChange={setTemperature}
+                style={{ margin: 0, width: isMobile ? '100%' : 180 }}
+              />
+            </Tooltip>
           </div>
         </div>
 
@@ -442,6 +474,9 @@ function PromptConfig() {
               style={{ width: isMobile ? '100%' : 240 }}
             />
           </div>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            实际使用：{effectiveModel}
+          </Text>
         </div>
 
         <div>
@@ -460,6 +495,16 @@ function PromptConfig() {
           </div>
         </div>
       </Space>
+
+      {temperatureDead && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="这个角色开着深度思考，温度参数不会生效（DeepSeek 官方限制：思考模式忽略 temperature）。"
+          description="如果想用温度控制发散度，请把「深度思考」关掉；需要推理深度则保留开启，改为在提示词里要求更细致。"
+        />
+      )}
 
       <Space size={16} wrap style={{ marginBottom: 12 }}>
         <Tooltip title="勾上则用「AI 供应商」里设的全局温度，不单独指定">

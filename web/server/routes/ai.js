@@ -94,6 +94,43 @@ function normalizeAction(payload) {
 }
 
 /**
+ * 解析角色最终实际生效的模型与思考状态。
+ *
+ * 角色级值有三种来源：角色自带默认、作者显式覆盖、跟随全局。
+ * 设置页必须显示"最终用的是哪个"，否则作者看到"跟随全局设置"，
+ * 根本猜不到实际跑的是哪套参数。
+ *
+ * 另外要算出温度到底生不生效：DeepSeek 思考模式下会忽略 temperature
+ * （官方明确说明：设了不报错，但也没有任何效果）。
+ * 前端据此把温度滑块置灰，避免作者调了半天发现毫无变化。
+ */
+function decorateRole(role, cfg, activeProvider) {
+  const deepseek = cfg.deepseek || {};
+  const globalThinking = deepseek.thinking === true;
+  const globalModel = deepseek.model || 'deepseek-flash';
+
+  // null / '' 表示跟随全局
+  const thinking = role.thinking === null || role.thinking === undefined
+    ? globalThinking
+    : role.thinking;
+  const model = role.model || globalModel;
+
+  return {
+    ...role,
+    effectiveModel: model,
+    effectiveThinking: thinking,
+    // 只有实际用的 provider 是 DeepSeek 且开着思考时，温度才会失效。
+    // 降级到 Ollama / OpenAI 兼容服务时它们没有思考模式，温度照常生效。
+    temperatureEffective: !(activeProvider === 'deepseek' && thinking),
+    // 全局基线也一起返回：作者在设置页改下拉框时需要实时重算，
+    // 光给"已保存状态"的解析结果不够。
+    globalThinking,
+    globalModel,
+    provider: activeProvider,
+  };
+}
+
+/**
  * 取得或创建会话。
  */
 async function ensureConversation(conversationId, workId, title) {
@@ -531,7 +568,16 @@ router.post('/inline', async (req, res) => {
 router.get('/roles', async (req, res) => {
   try {
     const list = await roles.listRoles();
-    res.json(list);
+    const cfg = aiConfig.getConfig();
+    // 用实际生效的 provider，而不是设置页里选的那个：
+    // DeepSeek 没配 key 时会降级到 Ollama，而 Ollama 没有思考模式。
+    let activeProvider = cfg.provider;
+    try {
+      activeProvider = resolveProvider(cfg).name;
+    } catch (e) {
+      // 一个可用 provider 都没有时保持原样，前端只是少显示一条提示
+    }
+    res.json(list.map((role) => decorateRole(role, cfg, activeProvider)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

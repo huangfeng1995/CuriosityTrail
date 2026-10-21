@@ -128,15 +128,22 @@
 
 角色是提示词预设 + 参数预设的组合，用户可切换，也可编辑其提示词。
 
-| 角色 | 职责 | 典型动作 | 输出倾向 | 默认模型 |
-|---|---|---|---|---|
-| 作家 | 生成新内容 | 起稿、续写场景、扩写描写 | 文学性，重视画面与节奏 | `deepseek-flash` |
-| 编辑 | 修改已有内容 | 改写、润色、删冗余、调节奏 | 克制，解释改了什么、为什么 | `deepseek-flash` |
-| 审稿人 | 挑问题 | 找逻辑漏洞、找设定冲突、找重复表达 | 直率，列条目，不客气 | `deepseek-v4-pro` + high 思考 |
-| 灵感师 | 提供点子 | 情节走向、人物动机、冲突设计、反转 | 发散，给多个方向而非单一答案 | `deepseek-v4-pro` + high 思考 |
-| 资料员 | 找信息 | 搜站内素材、搜网络、汇总并标注来源 | 只讲有来源的，无来源明说 | `deepseek-flash` |
+| 角色 | 职责 | 典型动作 | 输出倾向 | 默认温度 | 默认模型 | 默认思考 |
+|---|---|---|---|---|---|---|
+| 作家 | 生成新内容 | 起稿、续写场景、扩写描写 | 文学性，重视画面与节奏 | 0.85 | 跟随全局 | 跟随全局 |
+| 编辑 | 修改已有内容 | 改写、润色、删冗余、调节奏 | 克制，解释改了什么、为什么 | 0.60 | 跟随全局 | 跟随全局 |
+| 审稿人 | 挑问题 | 找逻辑漏洞、找设定冲突、找重复表达 | 直率，列条目，不客气 | 0.40 | `deepseek-v4-pro` | 开启 |
+| 灵感师 | 提供点子 | 情节走向、人物动机、冲突设计、反转 | 发散，给多个方向而非单一答案 | 0.95 | 跟随全局 | 跟随全局 |
+| 资料员 | 找信息 | 搜站内素材、搜网络、汇总并标注来源 | 只讲有来源的，无来源明说 | 0.30 | 跟随全局 | 跟随全局 |
 
-角色定义存放在 `services/roles/`，每个角色包含：系统提示词、默认温度、默认模型、默认思考强度、默认动作集、输出格式约束。用户在设置页可覆盖默认提示词，覆盖后存库，不改代码。
+**为什么只有审稿人钉住模型与思考**：DeepSeek 思考模式下 `temperature` 完全不生效（见 §4.5），所以每个角色只能二选一——要么靠温度控制发散度，要么靠推理深度换质量。
+
+- **温度是角色的"性格"**：写手 0.85 写得活、编辑 0.60 改得克制、灵感师 0.95 出人意料、资料员 0.30 不添油加醋。这些角色的活儿本来就靠发散度吃饭，开思考等于把温度调参变成摆设。
+- **思考是审稿人的"专业能力"**：要在整章里追线索、查矛盾，需要推理深度而不是随机性。它放弃温度控制，换强模型 + 推理。
+
+角色定义存放在 `services/roles/`，每个角色包含：系统提示词、默认温度、默认模型、默认思考开关、默认动作集、输出格式约束。用户在设置页可覆盖，覆盖后存库，不改代码。
+
+**模型与思考的三态语义**（温度、模型、思考三项统一）：没有覆盖行 → 用角色自带默认；有覆盖行且有值 → 用作者指定的值；有覆盖行但为 NULL → 跟随全局供应商设置。注意"有覆盖行"是按角色整行存的——作者改过某个角色的提示词，这一行就存在了，于是模型与思考会被写成 NULL（跟随全局），温度会被写成角色自带值。
 
 ### 2.4 结构化输出契约
 
@@ -290,8 +297,11 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_conv ON messages(conversation_id, created_at);
 
 -- 提示词覆盖（用户编辑过的角色提示词）
--- model / thinking 为 NULL 表示"跟随全局设置"；temperature 为 NULL
--- 表示"跟随全局供应商温度"（而不是角色的默认温度）。
+-- 三项（temperature / model / thinking）统一三态语义：
+--   没有覆盖行        → 用角色自带默认（见 services/roles/*.js）
+--   有覆盖行且有值    → 用作者指定的值
+--   有覆盖行但为 NULL → 跟随全局供应商设置
+-- 注意"有覆盖行"是按角色整行存的：改过某个角色的提示词，这一行就存在了。
 CREATE TABLE prompt_overrides (
   id           TEXT PRIMARY KEY,      -- 角色 key，如 'writer'
   system_prompt TEXT NOT NULL,
@@ -426,6 +436,8 @@ class Provider {
 
 DeepSeek 特有的 `thinking` / `reasoning_effort` 参数作为 provider 专属选项透传，不污染通用接口。
 
+`thinking` 参数的取值是 `'enabled'` / `'disabled'` 字符串（不是布尔），且**必须显式传给 DeepSeek**——官方默认就是 `enabled`，不传等于开思考。`temperature` 只在非思考模式下发送（思考模式忽略它，见 §4.5）。
+
 **关键点**：现有 `services/chat/`（`chatService.js` / `chatManager.js` / `ollamaChat.js` / `minimaxChat.js` / `llamaCppChat.js`）与 `services/ollama.js` / `services/llamaCpp.js` 全部删除，合并进 `services/providers/`。`services/translation/` 随翻译功能一起删除。
 
 ### 4.3 上下文装配器
@@ -477,8 +489,8 @@ data: {"type":"done","messageId":"..."}
 
 | 模型名 | 实际版本 | 上下文 | 最大输出 | 视觉 | 思考档位 |
 |---|---|---|---|---|---|
-| `deepseek-flash` | DeepSeek-V4.1-Flash-1017 | 1M | 384K | 支持 | low/high/max |
-| `deepseek-v4-pro` | DeepSeek-V4-Pro-0813 | 1M | 384K | 不支持 | low/high/max |
+| `deepseek-flash` | DeepSeek-V4.1-Flash-1017 | 1M | 384K | 支持 | high/max |
+| `deepseek-v4-pro` | DeepSeek-V4-Pro-0813 | 1M | 384K | 不支持 | high/max |
 
 已停用，不要使用：`deepseek-chat`、`deepseek-reasoner`（2026-07-24 停用）、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`（已退役，兼容期内路由到 V4.1-Flash）。
 
@@ -488,7 +500,19 @@ data: {"type":"done","messageId":"..."}
 - OpenAI 兼容格式，也支持 Anthropic 格式（`https://api.deepseek.com/anthropic`）与 Responses API
 - 支持 `response_format: {"type":"json_object"}` JSON Output
 - 支持 tool calls
-- 思考控制：`thinking: {"type": "enabled"}` + `reasoning_effort: "low" | "high" | "max"`
+- 思考控制：`thinking: {"type": "enabled" | "disabled"}` + `reasoning_effort: "high" | "max"`
+
+**思考模式与温度互斥**（官方明确，写在思考模式文档里）：
+
+> Thinking mode does not support the `temperature`, `top_p`, `presence_penalty`, or `frequency_penalty` parameters. Please note that, for compatibility with existing software, setting these parameters will not trigger an error but will also have no effect.
+
+三条由此推出的硬规则：
+
+1. **`thinking` 必须显式下发。** 官方默认就是 `enabled`，不传等于开了思考——设置页里那个"关闭深度思考"的开关会形同虚设。
+2. **开了思考就不发 `temperature`。** 发了不会报错，但也没任何效果；不发至少不会让人误以为温度在起作用。前端据此把温度滑块置灰。
+3. **`reasoning_effort` 只有 `high` / `max` 两档。** 官方为兼容性把 `low`/`medium` 映射成 `high`、`xhigh` 映射成 `max`，所以设置页不提供"低"档——那个选项本来就不比"高"省思考。
+
+因此平台的参数分配原则是**创作靠温度、分析靠思考**：靠发散度吃饭的角色（写手、编辑、灵感师、资料员）走非思考模式，温度真正生效；需要跨线索推理的角色（审稿人）走思考模式，用强模型 + 推理深度换质量，放弃温度控制。
 
 **搜索** — `POST https://api.deepseek.com/v1/tools/search`
 - 必填 `query`（1–128 字符）
@@ -833,11 +857,12 @@ web/client/src/
 | 2 | 编辑器撤销/重做 | ✅ 已完成（reducer 内 past/future 快照栈，`MAX_UNDO=50`，输入合并窗口 700ms，按章隔离，Ctrl/Cmd+Z / Shift+Z） |
 | 3 | 导出修复：DOCX 改用 `docx` 库，新增 Markdown 导出 | ✅ 已完成（work/chapter × txt/markdown/docx 六条端点，前端统一格式选择） |
 | 4 | 自动保存（防抖 2s）与版本快照 | ✅ 已完成（自动保存 ✅；版本快照由备份系统承担，见第 7 项） |
-| 5 | 角色模型与思考强度调节 | ✅ 已完成（`prompt_overrides` 增 `model` / `thinking` 列，模型、温度、思考强度三态语义） |
+| 5 | 角色模型与思考强度调节 | ✅ 已完成（`prompt_overrides` 增 `model` / `thinking` 列，模型、温度、思考强度统一三态语义；角色自带默认参数，审稿人钉住 `deepseek-v4-pro` + 思考） |
 | 6 | **公网部署**：删掉非法 `web/server/Dockerfile`；Fly.io secrets 说明；备份定时触发入口 | ⚠️ 代码与配置已完成（`fly.toml` 指向根目录多阶段 Dockerfile、`[env]`/`[mounts]` 齐全、`BACKUP_HOUR` 定时注册已实测）；**实际 `fly deploy` 尚未执行**，待用户提供平台 secret |
 | 7 | 备份定时触发 + 设置页备份 UI | ✅ 已完成（`setTimeout` 计算下一个整点，滚动保留 7 份；设置页可手动备份/下载/恢复） |
 | 8 | **移动端适配**：窄屏降级（§4.6.6） | ✅ 已完成（新增 `useMediaQuery` hook；作品列表/素材库/设置页/块操作按钮/章节头均已适配，375×812 实测无溢出） |
 | 9 | README 与 DEPLOY.md 更新（部署步骤、备份恢复、密钥轮换） | ✅ 已完成（新建根 README，重写 web/README.md 与 web/DEPLOY.md） |
+| 10 | **思考模式与温度互斥的修正** | ✅ 已完成（依官方文档：`thinking` 显式下发、开思考时不发 `temperature`、`reasoning_effort` 归一化为 high/max；角色按"创作靠温度、分析靠思考"分配；前端温度滑块在开思考时置灰并说明原因。详见 §2.3 / §4.5 / §9 / §10） |
 
 **验收**：写完一章能导出格式正确的 DOCX ✅；刷新页面不丢内容 ✅；公司浏览器可通过 HTTPS 域名访问并正常写作 ⏳（待 Fly.io 实际部署）。
 
@@ -880,6 +905,8 @@ web/client/src/
 | 范围过大导致做不完 | 平台半成品 | 四期切分，每期独立可用；P0/P1 完成即可满足"AI 辅助写作"核心诉求 |
 | SQLite 单机限制 | 未来多用户会受限 | 当前单人场景无碍；真要多用户时再迁移，schema 已按作品维度组织 |
 | 公司网络策略限制 | 打不开或加载慢 | SSE 流式在部分企业代理下可能缓冲；提供非流式降级开关 |
+| **思考模式下温度调参失效** | 作者调了半天温度，输出毫无变化，以为是 bug | DeepSeek 官方明确思考模式忽略 `temperature`。已在三处处理：① `thinking` 显式下发（官方默认是 enabled，不传就等于开）；② 开思考时不发 `temperature`；③ 前端把温度滑块置灰并说明原因。角色按"创作靠温度、分析靠思考"分配（§2.3） |
+| 思考强度档位名存实亡 | 设置页上的"低"档其实和"高"一样 | 官方只认 `high` / `max`，`low`/`medium` 会被映射成 `high`。服务端归一化后只回传这两档，前端不再提供"低"档 |
 
 ---
 
@@ -890,8 +917,10 @@ web/client/src/
 | 1 | 翻译功能与知识图谱是否砍掉 | **砍掉**。两者当前均为坏功能，且写小说用不上 |
 | 2 | 旧报告数据是否迁移 | **不迁移，直接删除**。需要时从 git 历史找回 |
 | 3 | DeepSeek 对话与搜索是否需要两把 key | **一把**。三个端点（Chat / Search / Fetch）共用同一 Bearer Key，环境变量 `DEEPSEEK_API_KEY` |
-| 4 | 模型选择 | 按官方最新文档：日常 `deepseek-flash`，深度思考 `deepseek-v4-pro`（思考强度 low/high/max） |
+| 4 | 模型选择 | 按官方最新文档：日常 `deepseek-flash`，深度思考 `deepseek-v4-pro`（思考强度只有 high/max 两档有效） |
 | 5 | 访问方式 | **公网可达**。用户本人与太太各自从家里 / 公司浏览器访问。鉴权用密码登录 + JWT 会话 Cookie |
 | 6 | 部署平台 | **沿用 Fly.io**（`fly.toml` 已配好：hkg 区域 + 数据卷 + 强制 HTTPS + 免费层）。不引入 Nginx / 域名 |
 | 7 | 鉴权优先级 | **P0-a 最高优先级**，是公网部署的硬性前置，不可后置到 P1 |
 | 8 | 登录密码 | 实施时生成 192 位随机串（`crypto.randomBytes(24)`），单独告知用户，不写入任何文件或 Git |
+| 9 | 全局默认开不开深度思考 | **默认关闭**。官方文档明确思考模式下 `temperature` 完全不生效，开着思考等于把温度调参变成摆设；默认走非思考模式，快、便宜、温度真起作用。审稿人这类需要推理的角色在角色级单独开启 |
+| 10 | 角色参数如何分配 | **创作靠温度、分析靠思考**。写手 0.85 / 编辑 0.60 / 灵感师 0.95 / 资料员 0.30 走非思考模式；审稿人走 `deepseek-v4-pro` + 思考，放弃温度控制换推理深度 |

@@ -130,7 +130,7 @@ web/
 |------|------|------|
 | `/api/ai/chat` | POST | 侧边栏对话，SSE 流式 |
 | `/api/ai/inline` | POST | 行内操作（改写/续写/审稿），返回结构化 JSON |
-| `/api/ai/roles` | GET | 五个角色（含用户覆盖后的实际提示词与参数） |
+| `/api/ai/roles` | GET | 五个角色（含用户覆盖后的实际提示词与参数，并附 `effectiveModel` / `effectiveThinking` / `temperatureEffective` 供前端提示） |
 | `/api/ai/prompts/:roleKey` | POST | 保存角色覆盖（提示词/温度/模型/思考） |
 | `/api/ai/prompts/:roleKey` | DELETE | 恢复默认 |
 | `/api/ai/status` | GET | 各 provider 连通状态 |

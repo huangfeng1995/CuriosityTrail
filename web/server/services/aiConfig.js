@@ -22,7 +22,11 @@ const DEFAULT_CONFIG = {
     temperature: 0.8,
     maxTokens: 8192,
     reasoningEffort: 'high',
-    thinking: true,
+    // 默认关闭深度思考。官方文档明确：思考模式下 temperature / top_p 等
+    // 采样参数不生效（设了不报错，但也没有任何效果）。开着思考等于把温度调参
+    // 变成摆设，所以默认走非思考模式——快、便宜，且温度真的起作用。
+    // 需要推理的角色（审稿人）在角色级单独开启。
+    thinking: false,
   },
   openaiCompat: {
     apiKey: '',
@@ -125,8 +129,10 @@ class AIConfigManager {
         model: c.deepseek.model,
         temperature: c.deepseek.temperature,
         maxTokens: c.deepseek.maxTokens,
-        reasoningEffort: c.deepseek.reasoningEffort,
-        thinking: c.deepseek.thinking,
+        // 归一化后再回传：官方只认 high / max，
+        // 存着的旧值（比如 low）要在返回前折掉，否则设置页下拉框会显示成空白。
+        reasoningEffort: normalizeEffort(c.deepseek.reasoningEffort),
+        thinking: c.deepseek.thinking !== false,
       },
       openaiCompat: {
         configured: Boolean(c.openaiCompat.baseUrl && c.openaiCompat.model),
@@ -154,5 +160,20 @@ function maskKey(key) {
   return `${key.slice(0, 4)}••••${key.slice(-4)}`;
 }
 
+/**
+ * 归一化思考强度。
+ *
+ * 官方文档只承认两个档位：high 与 max。
+ * 为了兼容，"low" 和 "medium" 会被映射成 "high"，"xhigh" 会被映射成 "max"。
+ * 所以这里直接把 low/medium 折成 high、xhigh 折成 max，
+ * 别让设置页上的"低"档名存实亡——它本来就不比"高"更省思考。
+ */
+function normalizeEffort(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'max' || v === 'xhigh') return 'max';
+  return 'high';
+}
+
 module.exports = new AIConfigManager();
 module.exports.AIConfigManager = AIConfigManager;
+module.exports.normalizeEffort = normalizeEffort;

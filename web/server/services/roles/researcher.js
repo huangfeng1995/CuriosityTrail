@@ -13,6 +13,9 @@ module.exports = {
   icon: '🔎',
   description: '搜素材、查资料，提供有来源的依据。',
   color: '#4a7c59',
+  // 温度 0.3 是资料员的"性格"——忠实转述，不添油加醋。
+  // 模型与思考跟随全局：检索本身已经由 DeepSeek Search 排好序了，
+  // 这里的活儿是"照着说"，用不着再推理一遍。
   temperature: 0.3,
   suggestions: [
     '找找适合这场戏的环境描写',

@@ -13,6 +13,7 @@
  */
 
 const { Provider, readSseStream, fetchWithRetry } = require('./base');
+const { normalizeEffort } = require('../aiConfig');
 
 const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 const DEFAULT_MODEL = 'deepseek-flash';
@@ -25,8 +26,11 @@ class DeepSeekProvider extends Provider {
     this.model = (settings.model || DEFAULT_MODEL).trim();
     this.temperature = settings.temperature ?? 0.8;
     this.maxTokens = settings.maxTokens ?? 4096;
-    this.reasoningEffort = settings.reasoningEffort || 'high';
-    this.thinking = settings.thinking === false ? 'disabled' : 'enabled';
+    this.reasoningEffort = normalizeEffort(settings.reasoningEffort);
+    // 只有显式配了 true 才开思考。
+    // 官方默认是 enabled，但思考模式下 temperature 完全不生效，
+    // 所以"没配"应当等价于"不思考"——温度得真的能用。
+    this.thinking = settings.thinking === true ? 'enabled' : 'disabled';
   }
 
   get configured() {
@@ -34,24 +38,29 @@ class DeepSeekProvider extends Provider {
   }
 
   buildBody(options) {
+    // 思考开关必须显式下发：官方默认就是 enabled，
+    // 不传等于开了思考，"关闭深度思考"这个设置就形同虚设。
+    const thinking = options.thinking !== undefined ? options.thinking : this.thinking;
+
     const body = {
       model: options.model || this.model,
       messages: options.messages,
-      temperature: options.temperature ?? this.temperature,
       max_tokens: options.maxTokens ?? this.maxTokens,
       stream: Boolean(options.onToken),
+      thinking: { type: thinking },
     };
+
+    if (thinking === 'enabled') {
+      body.reasoning_effort = options.reasoningEffort || this.reasoningEffort;
+    } else {
+      // 思考模式不接受 temperature / top_p 等采样参数——
+      // 官方原文：设了不会报错，但也不会有任何效果。
+      // 所以温度只在非思考模式下发，别让人以为滑块在起作用。
+      body.temperature = options.temperature ?? this.temperature;
+    }
 
     if (options.jsonOutput) {
       body.response_format = { type: 'json_object' };
-    }
-
-    // 思考控制：仅在需要时携带，避免无谓消耗
-    if (options.thinking !== undefined) {
-      body.thinking = { type: options.thinking };
-    } else if (this.thinking === 'enabled') {
-      body.thinking = { type: 'enabled' };
-      body.reasoning_effort = options.reasoningEffort || this.reasoningEffort;
     }
 
     return body;
