@@ -908,6 +908,50 @@ web/client/src/
 | **思考模式下温度调参失效** | 作者调了半天温度，输出毫无变化，以为是 bug | DeepSeek 官方明确思考模式忽略 `temperature`。已在三处处理：① `thinking` 显式下发（官方默认是 enabled，不传就等于开）；② 开思考时不发 `temperature`；③ 前端把温度滑块置灰并说明原因。角色按"创作靠温度、分析靠思考"分配（§2.3） |
 | 思考强度档位名存实亡 | 设置页上的"低"档其实和"高"一样 | 官方只认 `high` / `max`，`low`/`medium` 会被映射成 `high`。服务端归一化后只回传这两档，前端不再提供"低"档 |
 
+### 9.1 安全审计结论（2026-10-21）
+
+围绕"key 交给平台后会不会出问题"做了一轮专项审计，结论与处置如下。
+
+**密钥与凭据（重点）**
+
+| 检查项 | 结论 | 证据 |
+|---|---|---|
+| git 历史里是否提交过真实 key | 安全 | 全历史 `git log -S 'sk-'` 只命中 `DEPLOY.md` 里的 `sk-xxxxxxxx` 占位符 |
+| key 是否会进 Docker 镜像 | 安全 | `.dockerignore` 排除 `data/`、`.env`、`.env.*` |
+| key 是否会进备份 zip | 安全 | `services/backup.js` 只打包 `curiosity.db` + `uploads/` + `documents/`，不含 `ai-config.json` 与密钥文件 |
+| 前端能否拿到明文 key | 安全 | `GET /api/config/ai` 只回 `apiKeyMasked`（前后四位掩码），实测响应不含 `sk-` 原文 |
+| 日志是否泄露 key | 安全 | 全部 `console.*` 调用点逐条核查，只打错误信息与文件名，无配置对象、无请求头 |
+| 密钥文件权限 | 已加固 | `.app-password` / `.session-secret` / `.app-password-salt` 生成时即 0600；`ai-config.json` 原为 0644（明文 key 机器上其他账户可读），已改为写入时 0600 并显式 `chmod` |
+| 密码比对 | 安全 | scrypt + 持久化随机 salt + `timingSafeEqual`，无明文比对路径 |
+
+**鉴权与会话**
+
+| 检查项 | 结论 | 证据 |
+|---|---|---|
+| 路由鉴权覆盖 | 安全 | `app.use('/api', apiLimiter, requireAuth)` 单一护栏兜底（`index.js`），59 条业务路由无一漏挂；仅 `/api/health`、`/api/auth/*`、静态资源豁免，均合理 |
+| Cookie | 安全 | `httpOnly` + `sameSite: strict` + `secure(生产)` 三件套；JWT 与 Cookie 过期时间同源（30/90 天） |
+| 登录爆破 | 安全 | 5 次 / 15 分钟 / IP 限流，且限流在 scrypt 计算之前 |
+| SQL 注入 | 安全 | 全部参数化；FTS5 的 MATCH 表达式对词元做过双引号转义 |
+| 路径穿越 | 安全 | 上传文件名由服务端生成，下载用 `path.basename` 剥目录成分；恢复解压依赖 adm-zip 自带的 `sanitize()` 防 zip-slip |
+| SSRF | 安全 | 联网抓取只把 URL 转发给 DeepSeek 的 `/v1/tools/fetch`，本服务器不直连目标 |
+
+**已修复（本轮）**
+
+| 问题 | 原状 | 处置 |
+|---|---|---|
+| `/uploads` 存储型 XSS | 上传文件的扩展名取自客户端 `originalname`，可声明 `image/png` 上传 `x.html`，被静态服务当 HTML 返回执行 | 扩展名改由服务端 `EXT_BY_MIME` 映射表决定，客户端输入不参与；实测伪装 `.html` 落盘成 `.png` |
+| 错误响应泄露堆栈 | Express 默认错误页把完整堆栈（含服务器绝对路径）吐给浏览器 | 加统一错误处理：堆栈只进日志，前端只拿一句人话；客户端错误 400、超限 413 |
+| 上传无大小/数量上限 | `materials.js` 的 multer 未配 `limits`，`restore` 的 `express-fileupload` 也无限制且整个 zip 进内存 | 素材限 50MB / 10 个文件；恢复改为 `useTempFiles` 落盘处理 + 500MB 上限，用完即删临时文件 |
+| 缺安全响应头 | 无 `nosniff` / 防 iframe | 补 `X-Content-Type-Options`、`X-Frame-Options: DENY`、`Referrer-Policy`；HTTPS 强制由 `fly.toml` 的 `force_https` 承担 |
+
+**已知残留（低危，暂不处理）**
+
+- 登出只清 Cookie，无法吊销已签发的 JWT（token 无 `jti`、无服务端黑名单）。单人自用影响小，真要吊销可换 `JWT_SECRET` 全体失效。
+- CSRF 防护只靠 `sameSite: strict` 一层，无 token/Origin 校验。切勿为了跨站体验把它改成 `lax`/`none`。
+- `trust proxy: 1` 在非 Fly 直连场景可被伪造 `X-Forwarded-For` 绕过 IP 限流。只走 Fly.io 部署不受影响。
+- 依赖版本偏旧（`multer` 1.x、`adm-zip` 0.5.x）。均非鉴权绕过类问题，待后续统一升级。
+- `sameSite: strict` 的固有副作用：从邮件/微信点外链进来会显示未登录，需重新输密码。这是安全换体验，属预期行为。
+
 ---
 
 ## 10. 决策记录（已确认）

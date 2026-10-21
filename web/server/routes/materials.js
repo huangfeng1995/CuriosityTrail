@@ -41,12 +41,23 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
+  // 上限必须显式写：multer 不给默认值，不写就等于不限制，
+  // 已登录用户可以无限量上传大文件把磁盘塞满。
+  limits: {
+    fileSize: 50 * 1024 * 1024,
+    files: 10,
+  },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (ALLOWED_EXT.has(ext)) {
       cb(null, true);
     } else {
-      cb(new Error(`不支持的文件类型：${ext}（支持 ${[...ALLOWED_EXT].join('、')}）`));
+      cb(
+        Object.assign(
+          new Error(`不支持的文件类型：${ext}（支持 ${[...ALLOWED_EXT].join('、')}）`),
+          { status: 400 }
+        )
+      );
     }
   },
 });

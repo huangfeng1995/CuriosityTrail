@@ -91,7 +91,13 @@ class AIConfigManager {
   saveConfig() {
     try {
       fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
-      fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2));
+      // 这个文件里是明文 API key，权限必须 0600——
+      // 默认的 0644 会让机器上其他账户/进程都能读走 key。
+      fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2), {
+        mode: 0o600,
+      });
+      // mode 只在新建文件时生效，已存在的文件要显式 chmod。
+      fs.chmodSync(this.configPath, 0o600);
       return true;
     } catch (e) {
       console.error('AI 配置保存失败：', e.message);

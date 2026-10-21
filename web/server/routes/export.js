@@ -251,22 +251,33 @@ router.post('/backups', async (req, res) => {
   });
 });
 
-// 备份恢复要读整个 zip 进内存（req.files.backup.data）。
-// express-fileupload 会消费 multipart 流，与 multer 冲突，
+// 备份恢复会消费 multipart 流，与 multer 冲突，
 // 所以它只挂在这一个路由上，不能做全局中间件——
 // 否则图片上传（upload.js）和素材导入（materials.js）的 multer 会拿到空流。
-router.post('/restore', fileUpload(), async (req, res) => {
-  if (!req.files || !req.files.backup) {
-    return res.status(400).json({ error: '请选择备份文件' });
-  }
+// 用临时文件而不是内存缓冲：默认配置下整个 zip 会被读进内存，
+// 大备份包能直接把进程内存打爆。落盘后再让 AdmZip 按路径读，
+// 内存占用只取决于解压出的内容。
+// fileSize 上限也要显式给：express-fileupload 默认不限制大小。
+router.post(
+  '/restore',
+  fileUpload({
+    useTempFiles: true,
+    tempFileDir: config.tempDir,
+    limits: { fileSize: 500 * 1024 * 1024 },
+    abortOnLimit: true,
+  }),
+  async (req, res) => {
+    if (!req.files || !req.files.backup) {
+      return res.status(400).json({ error: '请选择备份文件' });
+    }
 
-  const tempDir = config.tempDir;
-  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-  const extractDir = path.join(tempDir, 'restore-' + Date.now());
+    const tempDir = config.tempDir;
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const extractDir = path.join(tempDir, 'restore-' + Date.now());
 
-  try {
-    const zip = new AdmZip(req.files.backup.data);
-    zip.extractAllTo(extractDir, true);
+    try {
+      const zip = new AdmZip(req.files.backup.tempFilePath);
+      zip.extractAllTo(extractDir, true);
 
     const dbSrc = path.join(extractDir, 'curiosity.db');
     if (fs.existsSync(dbSrc)) {
@@ -296,6 +307,12 @@ router.post('/restore', fileUpload(), async (req, res) => {
   } finally {
     if (fs.existsSync(extractDir)) {
       fs.rmSync(extractDir, { recursive: true, force: true });
+    }
+    // useTempFiles 模式下上传的 zip 会留在 tempFileDir，得自己删，
+    // 否则每次恢复都往磁盘上留一份几百 MB 的孤儿文件。
+    const tmpUpload = req.files?.backup?.tempFilePath;
+    if (tmpUpload && fs.existsSync(tmpUpload)) {
+      fs.unlinkSync(tmpUpload);
     }
   }
 });

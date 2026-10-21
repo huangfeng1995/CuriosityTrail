@@ -34,6 +34,19 @@ const PORT = config.port;
 // Fly.io 等平台在反代后面，需信任代理才能拿到真实客户端 IP（限流依赖）
 app.set('trust proxy', 1);
 
+// 基本安全响应头。
+//   nosniff —— 别让浏览器按内容猜类型，配合 /uploads 只存图片的约束，
+//              上传的东西不会被当成 HTML 执行
+//   DENY    —— 禁止被别的站点套 iframe，挡点击劫持
+//   referrer 略紧一点，少往外漏路径
+// HTTPS 强制由 fly.toml 的 force_https 负责，这里不用重复设 HSTS。
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Referrer-Policy', 'same-origin');
+  next();
+});
+
 // 生产环境前后端同域，不需要 CORS；开发环境放开供 vite dev server 直连
 if (config.enableCors) {
   const cors = require('cors');
@@ -92,6 +105,28 @@ app.use(express.static(staticRoot));
 // SPA 回退
 app.get('*', (req, res) => {
   res.sendFile(path.join(staticRoot, 'index.html'));
+});
+
+// 统一错误处理。
+// Express 默认的错误页会把整个堆栈（含服务器绝对路径）吐给浏览器，
+// 上传被拒之类的错误也走这条路。堆栈只进服务端日志，前端只拿一句人话。
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error(`请求出错 ${req.method} ${req.path}：`, err.message);
+
+  let status = Number(err.status) || 500;
+  let message = '服务器内部错误';
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    status = 413;
+    message = '文件太大';
+  } else if (err.name === 'MulterError') {
+    status = 400;
+    message = '上传参数有误';
+  } else if (status >= 400 && status < 500) {
+    // 各路由显式构造的客户端错误（带 status），message 是给用户看的
+    message = err.message;
+  }
+  res.status(status).json({ error: message });
 });
 
 app.listen(PORT, () => {
