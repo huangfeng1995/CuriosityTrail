@@ -9,16 +9,19 @@
  *
  * 端点（与对话端点共用同一把 Bearer key）：
  *   POST /v1/tools/search  搜索
- *     入参 { query(必填,1-128), count(默认10,最多50), ori_question, localization, need_content }
- *     返回每条含 title / url / summary(约600-800字) / snippet / rerank_score(0-3) / authority(0-4) / date
+ *     入参 { query(必填,1-128), count(默认10,最多50), ori_question(≤128),
+ *            localization, need_content }
+ *     返回每条含 title / url / summary(约600-800字) / snippet /
+ *            rerank_score(0-3) / authority(0-4) / date
  *   POST /v1/tools/fetch   抓取网页正文
  *     入参 { url(必填,最长8192) }
  *     返回 { title, content }，content 是 Markdown 正文
  *
- * 限流：账号级 5 QPS（search 与 fetch 独立计算）；fetch 另有域名级 ≤1 QPS。
- * 重试：仅 429 与 5xx 指数退避（最多 3 次），4xx 直接失败不重试。
+ * 限流：官方文档标注账号级 Search 100 QPS、Fetch 25 QPS（两者独立计算），
+ * Fetch 另有域名级限制。本地节流取得比这更保守，单人写作够用。
+ * 重试：仅 429 与 5xx 指数退避（最多 3 次），其余 4xx 直接失败不重试。
  *
- * 官方建议用 rerank_score >= 1.5 过滤低质结果，authority >= 2 的优先。
+ * 官方建议用 rerank_score >= 1.5 过滤低质结果，authority >= 3 为高度权威来源。
  */
 
 const aiConfig = require('../aiConfig');
@@ -26,14 +29,17 @@ const { fetchWithRetry } = require('../providers/base');
 
 const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 
-/** 账号级限流：5 QPS，留一点余量 */
+/** 账号级节流：220ms 一次，约 4.5 QPS，比官方上限保守 */
 const ACCOUNT_INTERVAL_MS = 220;
 
-/** 同一域名的抓取间隔：≤1 QPS */
+/** 同一域名的抓取间隔：1 秒一次，避开域名级 QPS 限制 */
 const DOMAIN_INTERVAL_MS = 1000;
 
 /** 默认返回条数 */
 const DEFAULT_COUNT = 8;
+
+/** 官方限制：query 与 ori_question 都不超过 128 个字符 */
+const MAX_QUERY_CHARS = 128;
 
 /** 单页正文最多保留多少字，避免把上下文撑爆 */
 const MAX_FETCH_CHARS = 8000;
@@ -150,14 +156,17 @@ async function search(query, options = {}) {
   }
 
   const baseUrl = (cfg.deepseek?.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
+  // 官方允许 count 到 50，这里收到 20：写作查资料用不了那么多，
+  // 少拿几条也能省下模型读长摘要的时间
   const count = Math.min(Math.max(Number(options.count) || DEFAULT_COUNT, 1), 20);
   const threshold = Number(
     options.threshold ?? cfg.search?.rerankScoreThreshold ?? 1.5
   );
 
-  const body = { query: text.slice(0, 128), count };
+  const body = { query: text.slice(0, MAX_QUERY_CHARS), count };
   if (options.oriQuestion) {
-    body.ori_question = String(options.oriQuestion).slice(0, 512);
+    // 官方限制 ori_question 也不超过 128 字符，超了会整个请求被 400 拒掉
+    body.ori_question = String(options.oriQuestion).slice(0, MAX_QUERY_CHARS);
   }
   if (options.needContent) {
     body.need_content = true;
