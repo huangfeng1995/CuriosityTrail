@@ -769,7 +769,7 @@ web/client/src/
 │   ├── Works.jsx           作品列表页（新增）
 │   ├── Workspace.jsx       三栏工作区（新增）
 │   ├── Materials.jsx       素材库页（新增）
-│   └── SettingsPage.jsx    设置页：AI 状态 / 角色提示词 / 备份（新增）
+│   └── SettingsPage.jsx    设置页：角色提示词 / 备份（新增）
 ├── components/
 │   ├── Sidebar/
 │   │   ├── WorkTree.jsx       作品章节树
@@ -801,7 +801,7 @@ web/client/src/
     └── wordCount.js        字数统计，与服务端 services/wordCount.js 同口径（新增）
 ```
 
-**设置页没有拆成 `components/Settings/`**：三个标签页（AI 状态、角色提示词、备份）逻辑上都只服务于设置页，拆成独立目录反而要跨目录传状态，所以留在 `pages/SettingsPage.jsx` 内部组件里。
+**设置页没有拆成 `components/Settings/`**：两个标签页（角色提示词、备份）逻辑上都只服务于设置页，拆成独立目录反而要跨目录传状态，所以留在 `pages/SettingsPage.jsx` 内部组件里。
 
 **整个删除**：`KnowledgeGraph.jsx`、`TranslationModal.jsx`、`DocumentTranslationModal.jsx`、`TranslationSettings.jsx`、`AIConfig.jsx`、`SearchBar.jsx`、`Documents.jsx`、`Settings.jsx`、`Reports.jsx`、`AgentAssistant.jsx`。
 
@@ -871,7 +871,7 @@ antd 组件的颜色全部映射到这些变量（`App.jsx` 的 `baseTheme`）�
 
 #### 5.4.2 三个关键决策
 
-**决策一：删除「AI 供应商」设置页。** 供应商配置属于部署参数，不是作者要每天面对的东西。页面删除，改成设置页里的只读「AI 状态」卡：显示 deepseek 是否已连接、openAICompat 是否未配置、ollama 的 HTTP 状态。看得见状态、但改不了配置。
+**决策一：删除「AI 供应商」设置页，供应商细节完全不对用户暴露。** 供应商配置属于部署参数，不是作者要每天面对的东西。页面删除后曾保留一张只读「AI 状态」卡，后来也删了——deepseek/ollama 连没连上、跑哪个模型，客户不需要知道，AI 出问题由服务端日志诊断。后端 `/ai/status` 接口保留，供部署时排查。
 
 **决策二：左栏 7 个面板改用自研 `PanelNav`，不用 antd Tabs。** 原来 7 个面板用 antd Tabs 承载，左栏只有 288px 宽，Tabs 溢出后 antd 会把「检查/作品/灵感」塞进「更多」下拉里——**功能就这么被藏起来了**，用户根本不知道它们存在。`PanelNav` 改成一行 7 个图标+文字（每个 38px），全部露出，一眼扫完。右栏 5 个 AI 角色同理，从 `overflow-x: auto` 的横排改成 5 列 grid。
 
@@ -1125,7 +1125,7 @@ antd 组件的颜色全部映射到这些变量（`App.jsx` 的 `baseTheme`）�
 | 8 | 登录密码 | 实施时生成 192 位随机串（`crypto.randomBytes(24)`），单独告知用户，不写入任何文件或 Git |
 | 9 | 全局默认开不开深度思考 | **默认关闭**。官方文档明确思考模式下 `temperature` 完全不生效，开着思考等于把温度调参变成摆设；默认走非思考模式，快、便宜、温度真起作用。审稿人这类需要推理的角色在角色级单独开启 |
 | 10 | 角色参数如何分配 | **创作靠温度、分析靠思考**。写手 0.85 / 编辑 0.60 / 灵感师 0.95 / 资料员 0.30 走非思考模式；审稿人走 `deepseek-v4-pro` + 思考，放弃温度控制换推理深度 |
-| 11 | 「AI 供应商」是否暴露给用户 | **删除该设置页**。供应商配置属于部署参数，改成设置页里的只读「AI 状态」卡（见 §5.4.2） |
+| 11 | 「AI 供应商」是否暴露给用户 | **删除该设置页，且不留状态卡**。供应商配置与连接状态都属于部署细节，客户不需要知道，AI 出问题由服务端日志诊断（见 §5.4.2） |
 | 12 | 界面风格方向 | **墨·书房**。浅色宣纸为主调（长时间写作浅底省眼），深色为暖调「暮墨」备用，不做纯黑 |
 | 13 | 7 个左栏面板用 antd Tabs 还是自研 | **自研 `PanelNav`**。antd Tabs 溢出后会把面板藏进「更多」下拉，功能等于不存在（见 §5.4.2） |
 
