@@ -4,7 +4,6 @@ import {
   theme,
   Button,
   ConfigProvider,
-  Typography,
   Spin,
   App as AntApp,
 } from 'antd';
@@ -20,7 +19,6 @@ import Materials from './pages/Materials';
 import SettingsPage from './pages/SettingsPage';
 
 const { Header, Content } = Layout;
-const { Text } = Typography;
 
 /**
  * antd 主题 token。
@@ -117,8 +115,6 @@ function AppShell({ isDark, setIsDark }) {
     );
   }
 
-  const active = navItems.find((n) => location.pathname === n.key);
-
   return (
     <Layout style={{ minHeight: '100vh', background: 'var(--bg-layout)' }}>
       <Header className="ct-topbar">
@@ -142,9 +138,6 @@ function AppShell({ isDark, setIsDark }) {
         )}
 
         <div className="ct-topbar-right">
-          {active && !isMobile && (
-            <Text className="ct-topbar-current">{active.label}</Text>
-          )}
           <Button
             type="text"
             className="ct-icon-btn"
