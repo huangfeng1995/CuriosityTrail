@@ -10,6 +10,9 @@ import {
   Empty,
   Typography,
   Popconfirm,
+  Drawer,
+  Tag,
+  Spin,
 } from 'antd';
 import {
   PlusOutlined,
@@ -17,6 +20,7 @@ import {
   EditOutlined,
   UploadOutlined,
   SearchOutlined,
+  AimOutlined,
 } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
@@ -41,9 +45,15 @@ export default function Materials() {
   const [params, setParams] = useSearchParams();
 
   const focusId = params.get('focus');
+  // 从 AI 引用跳过来时带的片段，用来在原文里定位出处
+  const snippet = params.get('snippet');
 
   // 检索模式下的结果结构与列表模式不同，命中片段单独存
   const [hits, setHits] = useState(null);
+
+  // 定位结果：命中的原文位置、页码与上下文
+  const [locate, setLocate] = useState(null);
+  const [locateLoading, setLocateLoading] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -117,6 +127,34 @@ export default function Materials() {
       setParams({}, { replace: true });
     }
   }, [focusId, items, setParams]);
+
+  /**
+   * 定位引用片段在原文中的位置。
+   *
+   * 服务端算好字符下标、页码和上下文，前端只要把命中段标出来，
+   * 作者一眼就能核对"这句话是从哪本书第几页来的"。
+   */
+  const locateSnippet = useCallback(async (materialId, text) => {
+    if (!materialId || !text) return;
+    setLocateLoading(true);
+    setLocate(null);
+    try {
+      const res = await api.get(
+        `/materials/${materialId}/locate?snippet=${encodeURIComponent(text)}`
+      );
+      setLocate(res.data);
+    } catch (e) {
+      message.error('定位失败');
+    } finally {
+      setLocateLoading(false);
+    }
+  }, []);
+
+  // 从 AI 引用跳过来时，定位到片段出处
+  useEffect(() => {
+    if (!focusId || !snippet) return;
+    locateSnippet(focusId, snippet);
+  }, [focusId, snippet, locateSnippet]);
 
   const save = async () => {
     const values = await form.validateFields();
@@ -274,6 +312,73 @@ export default function Materials() {
           )}
         />
       )}
+
+      <Drawer
+        open={!!locate}
+        title={
+          <span>
+            <AimOutlined style={{ marginRight: 8 }} />
+            引用出处
+            {locate?.page ? (
+              <Tag color="blue" style={{ marginLeft: 8 }}>
+                第 {locate.page} 页
+              </Tag>
+            ) : null}
+          </span>
+        }
+        width={620}
+        onClose={() => setLocate(null)}
+      >
+        {locateLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}>
+            <Spin />
+          </div>
+        ) : locate?.found ? (
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              在《{locate.title}》中定位到：
+            </Text>
+            <div
+              style={{
+                marginTop: 10,
+                padding: '12px 14px',
+                borderRadius: 8,
+                background: 'rgba(128,128,128,0.06)',
+                fontSize: 14,
+                lineHeight: 1.9,
+                fontFamily: 'Noto Serif SC, serif',
+              }}
+            >
+              {locate.before && <span style={{ opacity: 0.55 }}>{locate.before}</span>}
+              <mark
+                style={{
+                  background: 'rgba(250, 204, 21, 0.45)',
+                  padding: '1px 2px',
+                  borderRadius: 2,
+                }}
+              >
+                {locate.match}
+              </mark>
+              {locate.after && <span style={{ opacity: 0.55 }}>{locate.after}</span>}
+            </div>
+            {locate.sourceUrl && (
+              <a
+                href={locate.sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: 12, display: 'inline-block', marginTop: 12 }}
+              >
+                打开来源链接
+              </a>
+            )}
+          </div>
+        ) : (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="没能在这条素材里定位到引用的片段。可能是 AI 转述了原文而不是照抄。"
+          />
+        )}
+      </Drawer>
 
       <Modal
         open={!!editing}

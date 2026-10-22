@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Input, Button, Form, message, Empty, Collapse } from 'antd';
+import { Input, Button, Form, message, Empty, InputNumber } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import api from '../../api/client';
 
@@ -21,6 +21,7 @@ export default function WorkInfoPanel({ work, onSaved }) {
       genre: work.genre || '',
       synopsis: work.synopsis || '',
       outline: work.outline || '',
+      targetWords: work.target_words || 0,
     });
   }, [work, form]);
 
@@ -63,6 +64,13 @@ export default function WorkInfoPanel({ work, onSaved }) {
             rows={6}
             placeholder="主线、关键转折、结局走向。写在这里，AI 续写时不会跑偏。"
           />
+        </Form.Item>
+        <Form.Item
+          name="targetWords"
+          label="目标字数"
+          help="设了之后「进度」面板会显示完成度。"
+        >
+          <InputNumber min={0} step={10000} style={{ width: '100%' }} placeholder="未设定" />
         </Form.Item>
         <Button
           type="primary"

@@ -48,6 +48,9 @@ const ALL_TABLES = [
   'conversations',
   'messages',
   'prompt_overrides',
+  'chapter_versions',
+  'plot_cards',
+  'writing_events',
 ];
 
 const SCHEMA = `
@@ -58,6 +61,7 @@ CREATE TABLE IF NOT EXISTS works (
   genre        TEXT,
   synopsis     TEXT,
   outline      TEXT,
+  target_words INTEGER DEFAULT 0,
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
@@ -72,10 +76,60 @@ CREATE TABLE IF NOT EXISTS chapters (
   status       TEXT DEFAULT 'draft',
   content      TEXT,
   blocks       TEXT,
+  outline      TEXT,
+  word_count   INTEGER DEFAULT 0,
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chapters_work ON chapters(work_id, seq);
+
+-- 章节版本历史。
+--
+-- 撤销栈只存在浏览器内存里，关掉页面就没了——写小说最怕改坏了找不回来。
+-- 每次保存前的旧内容在这里留一份快照，作者可以随时回滚到任意一个历史版本。
+-- blocks 存完整块结构（权威数据），content 只是便于检索的纯文本快照。
+CREATE TABLE IF NOT EXISTS chapter_versions (
+  id           TEXT PRIMARY KEY,
+  chapter_id   TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+  work_id      TEXT NOT NULL,
+  title        TEXT,
+  blocks       TEXT,
+  content      TEXT,
+  label        TEXT,
+  manual       INTEGER DEFAULT 0,
+  word_count   INTEGER DEFAULT 0,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chapter_versions_chapter
+  ON chapter_versions(chapter_id, created_at);
+
+-- 情节卡。作者在动笔前把关键节点、伏笔、冲突先列成卡片挂在章节上。
+CREATE TABLE IF NOT EXISTS plot_cards (
+  id           TEXT PRIMARY KEY,
+  work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  chapter_id   TEXT REFERENCES chapters(id) ON DELETE CASCADE,
+  title        TEXT NOT NULL,
+  kind         TEXT DEFAULT 'plot',
+  content      TEXT,
+  seq          INTEGER DEFAULT 0,
+  status       TEXT DEFAULT 'todo',
+  created_at   TEXT NOT NULL,
+  modified_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plot_cards_work ON plot_cards(work_id, seq);
+CREATE INDEX IF NOT EXISTS idx_plot_cards_chapter ON plot_cards(chapter_id);
+
+-- 每日写作量。按天累计新增字数，用于"写作进度"曲线。
+-- 不从版本历史反推：那是保存时刻，粒度太粗也包含回滚产生的负增量。
+CREATE TABLE IF NOT EXISTS writing_events (
+  id           TEXT PRIMARY KEY,
+  work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  chapter_id   TEXT REFERENCES chapters(id) ON DELETE CASCADE,
+  day          TEXT NOT NULL,
+  words_added  INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_writing_events_work_day ON writing_events(work_id, day);
 
 -- 人物卡
 CREATE TABLE IF NOT EXISTS characters (
@@ -233,6 +287,9 @@ function initDatabase() {
             ensureColumn('materials', 'page_count', 'INTEGER DEFAULT 0')
               .then(() => ensureColumn('prompt_overrides', 'model', 'TEXT'))
               .then(() => ensureColumn('prompt_overrides', 'thinking', 'INTEGER'))
+              .then(() => ensureColumn('chapters', 'outline', 'TEXT'))
+              .then(() => ensureColumn('chapters', 'word_count', 'INTEGER DEFAULT 0'))
+              .then(() => ensureColumn('works', 'target_words', 'INTEGER DEFAULT 0'))
               .then(() => resolve())
               .catch(reject);
           });

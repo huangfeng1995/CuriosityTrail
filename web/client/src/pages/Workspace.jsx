@@ -9,6 +9,9 @@ import CharacterPanel from '../components/Sidebar/CharacterPanel';
 import SettingPanel from '../components/Sidebar/SettingPanel';
 import WorkInfoPanel from '../components/Sidebar/WorkInfoPanel';
 import InspirationPanel from '../components/Sidebar/InspirationPanel';
+import PlotCardPanel from '../components/Sidebar/PlotCardPanel';
+import ProgressPanel from '../components/Sidebar/ProgressPanel';
+import ConsistencyPanel from '../components/Sidebar/ConsistencyPanel';
 
 /**
  * 三栏工作区。
@@ -65,6 +68,27 @@ export default function Workspace() {
             key: 'settings',
             label: '设定',
             children: <SettingPanel workId={work?.id} />,
+          },
+          {
+            key: 'plot',
+            label: '情节',
+            children: <PlotCardPanel workId={work?.id} chapters={chapters} />,
+          },
+          {
+            key: 'progress',
+            label: '进度',
+            children: (
+              <ProgressPanel
+                workId={work?.id}
+                work={work}
+                onWorkChanged={() => loadWork(work.id)}
+              />
+            ),
+          },
+          {
+            key: 'check',
+            label: '检查',
+            children: <ConsistencyPanel workId={work?.id} />,
           },
           {
             key: 'work',

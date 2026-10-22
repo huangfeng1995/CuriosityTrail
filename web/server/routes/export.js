@@ -237,6 +237,13 @@ router.get('/backups', (req, res) => {
 });
 
 /**
+ * 异地备份状态。设置页显示"备份到底存到哪了"。
+ */
+router.get('/backups/offsite', (req, res) => {
+  res.json(backup.offsiteStatus());
+});
+
+/**
  * 立刻生成一份备份。用于"我现在就要一份"和验证定时备份是否在跑。
  */
 router.post('/backups', async (req, res) => {
@@ -248,6 +255,8 @@ router.post('/backups', async (req, res) => {
     ok: true,
     name: path.basename(result.file),
     size: result.size,
+    // 异地复制失败要如实告诉作者，不能只报"成功"
+    offsite: result.offsite,
   });
 });
 

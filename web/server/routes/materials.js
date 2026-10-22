@@ -22,6 +22,7 @@ const config = require('../config');
 const { all, get, run } = require('../database');
 const localSearch = require('../services/search/local');
 const documentText = require('../services/documentText');
+const citations = require('../services/citations');
 
 const router = express.Router();
 const now = () => new Date().toISOString();
@@ -248,6 +249,26 @@ router.get('/:id/file', async (req, res) => {
       return res.status(404).json({ error: '文件不存在' });
     }
     res.sendFile(row.file_path);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 定位引用片段在素材原文中的位置。
+ *
+ * 作者点开 AI 引用时，要能直接落到那段文字上，而不是自己翻。
+ * 返回原文下标、页码和上下文，前端据此滚动并高亮。
+ */
+router.get('/:id/locate', async (req, res) => {
+  const { snippet = '' } = req.query;
+  try {
+    const result = await citations.locateCitation({
+      materialId: req.params.id,
+      snippet: String(snippet),
+    });
+    if (!result) return res.status(404).json({ error: '素材不存在' });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

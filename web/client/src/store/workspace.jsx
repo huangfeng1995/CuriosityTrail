@@ -73,6 +73,18 @@ function reducer(state, action) {
     case 'blocks/set':
       return { ...state, blocks: action.blocks };
 
+    // 版本回滚：整体替换内容。
+    // 撤销栈必须清空——栈里的快照是回滚前的内容，留在栈里会让"撤销"跳到无关状态。
+    // 但对话不清：回滚只改了正文，作者跟 AI 的对话记录不该被抹掉。
+    case 'blocks/replaceAll':
+      return {
+        ...state,
+        blocks: action.blocks,
+        past: [],
+        future: [],
+        saveStatus: 'idle',
+      };
+
     case 'blocks/replace': {
       const blocks = state.blocks.map((b) =>
         b.id === action.id ? { ...b, ...action.patch } : b
@@ -323,6 +335,17 @@ export function WorkspaceProvider({ children }) {
     dispatch({ type: 'history/undo' });
   }, []);
 
+  /**
+   * 用一整套块替换当前内容（版本回滚用）。
+   *
+   * 服务端已经把回滚后的内容落库了，所以这里不能再标 dirty——
+   * 否则防抖保存会拿新内容再写一遍，凭空多出一条自动快照。
+   */
+  const replaceAllBlocks = useCallback((blocks) => {
+    dirtyRef.current = false;
+    dispatch({ type: 'blocks/replaceAll', blocks });
+  }, []);
+
   const redo = useCallback(() => {
     const { future } = stateRef.current;
     if (!future.length) return;
@@ -381,6 +404,7 @@ export function WorkspaceProvider({ children }) {
       moveBlock,
       undo,
       redo,
+      replaceAllBlocks,
       loadWork,
       loadChapter,
     }),
@@ -394,6 +418,7 @@ export function WorkspaceProvider({ children }) {
       moveBlock,
       undo,
       redo,
+      replaceAllBlocks,
       loadWork,
       loadChapter,
     ]

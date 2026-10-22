@@ -6,6 +6,10 @@
  * 备份 = 一个 zip，里面是 SQLite 库 + 上传的图片 + 导入的原始文档。
  * 手动备份走 HTTP 下载，定时备份写到 DATA_DIR/backups/ 下并滚动保留。
  *
+ * 异地备份：本地备份跟数据库在同一个卷上，卷坏了备份一起没。
+ * 配了 BACKUP_OFFSITE_DIR 之后，每份备份会额外复制一份到那个目录，
+ * 并在那里按自己的保留份数滚动清理（默认 30 份，比本地多）。
+ *
  * 定时用"算下一次触发时间 + setTimeout"实现，不用额外依赖：
  * 一天一次而已，node-cron 带来的收益抵不上多一个依赖的麻烦。
  */
@@ -74,10 +78,113 @@ async function createBackup(label) {
     await done;
 
     pruneOldBackups();
-    return { ok: true, file: target, size: fs.statSync(target).size };
+
+    // 异地复制失败不算备份失败：本地这份已经写好了，
+    // 只是没多一份保险。分开报告，作者才知道到底存没存上。
+    let offsite = null;
+    if (config.backupOffsiteDir) {
+      offsite = await copyOffsite(target);
+    }
+
+    return { ok: true, file: target, size: fs.statSync(target).size, offsite };
   } catch (err) {
     return { ok: false, reason: err.message };
   }
+}
+
+/**
+ * 把备份复制到异地目录，并清理旧档。
+ *
+ * @param {string} source 本地备份文件路径
+ * @returns {Promise<{ok: boolean, file?: string, reason?: string}>}
+ */
+async function copyOffsite(source) {
+  const dir = config.backupOffsiteDir;
+  if (!dir) return { ok: false, reason: '未配置异地备份目录' };
+
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+
+    const target = path.join(dir, path.basename(source));
+    // copyFile 不用 rename：源和目标可能在不同卷上，rename 会报 EXDEV
+    fs.copyFileSync(source, target);
+
+    pruneOffsiteBackups();
+
+    return { ok: true, file: target };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
+/**
+ * 清理异地目录里超出保留份数的旧备份。
+ */
+function pruneOffsiteBackups() {
+  const dir = config.backupOffsiteDir;
+  if (!dir) return 0;
+
+  try {
+    if (!fs.existsSync(dir)) return 0;
+    const keep = Number(config.backupOffsiteKeep) || 30;
+
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.zip'))
+      .map((f) => {
+        const filePath = path.join(dir, f);
+        return { path: filePath, mtime: fs.statSync(filePath).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+
+    let removed = 0;
+    for (const file of files.slice(keep)) {
+      fs.unlinkSync(file.path);
+      removed += 1;
+    }
+    return removed;
+  } catch (e) {
+    return 0;
+  }
+}
+
+/**
+ * 列出异地目录里的备份。
+ */
+function listOffsiteBackups() {
+  const dir = config.backupOffsiteDir;
+  if (!dir) return [];
+  try {
+    if (!fs.existsSync(dir)) return [];
+    return fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.zip'))
+      .map((f) => {
+        const stat = fs.statSync(path.join(dir, f));
+        return { name: f, size: stat.size, mtime: stat.mtime.toISOString() };
+      })
+      .sort((a, b) => (a.name < b.name ? 1 : -1));
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * 异地备份的总体状态。给设置页显示用。
+ */
+function offsiteStatus() {
+  const dir = config.backupOffsiteDir;
+  if (!dir) {
+    return { enabled: false, dir: '', keep: 0, count: 0, latest: null };
+  }
+  const list = listOffsiteBackups();
+  return {
+    enabled: true,
+    dir,
+    keep: Number(config.backupOffsiteKeep) || 30,
+    count: list.length,
+    latest: list[0] || null,
+  };
 }
 
 /**
@@ -176,5 +283,8 @@ module.exports = {
   pruneOldBackups,
   startScheduledBackup,
   stopScheduledBackup,
+  copyOffsite,
+  listOffsiteBackups,
+  offsiteStatus,
   BACKUP_DIR,
 };

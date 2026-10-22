@@ -54,7 +54,7 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { title, genre, synopsis, outline } = req.body || {};
+  const { title, genre, synopsis, outline, targetWords } = req.body || {};
   if (!title || !String(title).trim()) {
     return res.status(400).json({ error: '作品标题不能为空' });
   }
@@ -63,14 +63,15 @@ router.post('/', async (req, res) => {
     const id = crypto.randomUUID();
     const ts = now();
     await run(
-      `INSERT INTO works (id, title, genre, synopsis, outline, created_at, modified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO works (id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         String(title).trim(),
         genre || '',
         synopsis || '',
         outline || '',
+        Number(targetWords) || 0,
         ts,
         ts,
       ]
@@ -97,19 +98,21 @@ router.get('/:id', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { title, genre, synopsis, outline } = req.body || {};
+  const { title, genre, synopsis, outline, targetWords } = req.body || {};
   try {
     const existing = await get('SELECT * FROM works WHERE id = ?', [req.params.id]);
     if (!existing) return res.status(404).json({ error: '作品不存在' });
 
     await run(
-      `UPDATE works SET title = ?, genre = ?, synopsis = ?, outline = ?, modified_at = ?
+      `UPDATE works SET title = ?, genre = ?, synopsis = ?, outline = ?, target_words = ?,
+         modified_at = ?
        WHERE id = ?`,
       [
         (title !== undefined ? String(title).trim() : existing.title),
         genre !== undefined ? genre : existing.genre,
         synopsis !== undefined ? synopsis : existing.synopsis,
         outline !== undefined ? outline : existing.outline,
+        targetWords !== undefined ? (Number(targetWords) || 0) : existing.target_words,
         now(),
         req.params.id,
       ]

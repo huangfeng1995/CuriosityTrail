@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Typography, Button, Space, message, Modal, Input, Tooltip } from 'antd';
-import { SaveOutlined, UndoOutlined, RedoOutlined } from '@ant-design/icons';
+import { SaveOutlined, UndoOutlined, RedoOutlined, HistoryOutlined } from '@ant-design/icons';
 import { useWorkspace } from '../../store/workspace';
-import { createBlock, countChars } from './blocks';
+import { createBlock } from './blocks';
+import { countBlockWords, formatWords } from '../../utils/wordCount';
 import Block from './Block';
 import BlockPalette from './BlockPalette';
 import BlockToolbar from './BlockToolbar';
+import VersionHistoryPanel from './VersionHistoryPanel';
 import ExportButton from '../ExportButton';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 
@@ -45,6 +47,7 @@ export default function ChapterEditor() {
 
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [toolbarPos, setToolbarPos] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const editorRef = useRef(null);
   const isMobile = useIsMobile();
 
@@ -228,9 +231,7 @@ export default function ChapterEditor() {
     );
   }
 
-  const wordCount = countChars(
-    blocks.map((b) => b.content).join('')
-  );
+  const wordCount = countBlockWords(blocks);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -277,7 +278,9 @@ export default function ChapterEditor() {
 
           <Space size={8} wrap>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {wordCount} 字 · {SAVE_LABEL[saveStatus] || SAVE_LABEL.idle}
+              {wordCount} 字
+              {wordCount >= 10000 ? `（${formatWords(wordCount)}）` : ''} ·{' '}
+              {SAVE_LABEL[saveStatus] || SAVE_LABEL.idle}
             </Text>
             <Tooltip title="撤销（⌘Z）">
               <Button
@@ -293,6 +296,13 @@ export default function ChapterEditor() {
                 icon={<RedoOutlined />}
                 disabled={!future.length}
                 onClick={redo}
+              />
+            </Tooltip>
+            <Tooltip title="历史版本">
+              <Button
+                size="small"
+                icon={<HistoryOutlined />}
+                onClick={() => setHistoryOpen(true)}
               />
             </Tooltip>
             <Button size="small" icon={<SaveOutlined />} onClick={handleSaveNow}>
@@ -342,6 +352,11 @@ export default function ChapterEditor() {
           />
         )}
       </div>
+
+      <VersionHistoryPanel
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+      />
     </div>
   );
 }

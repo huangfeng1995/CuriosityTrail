@@ -7,3 +7,8 @@ dist/
 data/
 documents/
 temp/
+
+# E2E 测试产物
+e2e/.tmp/
+playwright-report/
+test-results/

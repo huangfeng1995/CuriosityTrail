@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { Button, Typography, message } from 'antd';
-import { FileTextOutlined, LinkOutlined, ImportOutlined } from '@ant-design/icons';
+import {
+  FileTextOutlined,
+  LinkOutlined,
+  ImportOutlined,
+  AimOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../../api/client';
 
@@ -12,6 +17,9 @@ const { Text } = Typography;
  * AI 检索到的参考资料要能溯源——用户点开才知道这段是查来的还是编的。
  * 站内素材可点回素材库详情，外部链接走新标签页。
  * 外部资料看着有用，可以一键存进素材库，下次就不用再查一遍。
+ *
+ * 「定位」按钮带着片段跳回素材库，服务端会算出这段文字在原文里的位置
+ * 和页码，作者不用自己翻三十万字的参考资料。
  */
 export default function CitationBadge({ citations }) {
   const navigate = useNavigate();
@@ -38,6 +46,14 @@ export default function CitationBadge({ citations }) {
     }
   };
 
+  // 带片段跳回素材库，让页面直接定位到引用出处
+  const goToMaterial = (c) => {
+    const params = new URLSearchParams();
+    params.set('focus', c.materialId);
+    if (c.snippet) params.set('snippet', c.snippet);
+    navigate(`/materials?${params.toString()}`);
+  };
+
   return (
     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
       {citations.map((c, i) => (
@@ -60,15 +76,28 @@ export default function CitationBadge({ citations }) {
             <div style={{ opacity: 0.85, lineHeight: 1.6 }}>{c.snippet}</div>
           )}
           {c.materialId ? (
-            <Button
-              type="link"
-              size="small"
-              icon={<FileTextOutlined />}
-              onClick={() => navigate(`/materials?focus=${c.materialId}`)}
-              style={{ fontSize: 12, padding: 0, height: 'auto' }}
-            >
-              查看素材
-            </Button>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+              <Button
+                type="link"
+                size="small"
+                icon={<FileTextOutlined />}
+                onClick={() => goToMaterial(c)}
+                style={{ fontSize: 12, padding: 0, height: 'auto' }}
+              >
+                查看素材
+              </Button>
+              {c.snippet && (
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<AimOutlined />}
+                  onClick={() => goToMaterial(c)}
+                  style={{ fontSize: 12, padding: 0, height: 'auto' }}
+                >
+                  定位到原文
+                </Button>
+              )}
+            </span>
           ) : c.url ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
               <a

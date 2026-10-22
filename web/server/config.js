@@ -93,6 +93,24 @@ const port = Number(process.env.PORT || 3001);
 const nodeEnv = process.env.NODE_ENV || 'development';
 const isProd = nodeEnv === 'production';
 
+// ---------------------------------------------------------------------------
+// 6. 异地备份
+// ---------------------------------------------------------------------------
+//
+// 定时备份写在 DATA_DIR/backups/，跟数据库在同一个卷上——卷坏了备份一起没。
+// BACKUP_OFFSITE_DIR 指向另一个位置（Fly.io 的第二个卷、云盘同步目录、
+// NAS 挂载点……），备份会额外复制一份过去。
+//
+// 不做对象存储直传：那要引入 SDK 并处理签名/密钥管理，
+// 收益不如"指向一个已经在同步的目录"来得实际。
+const backupOffsiteDir = (process.env.BACKUP_OFFSITE_DIR || '').trim()
+  ? path.resolve(process.env.BACKUP_OFFSITE_DIR.trim())
+  : '';
+
+// 异地保留多少份。比本地多——本地只有 7 份滚动，
+// 异地这份才是"卷炸了还能救回来"的最后一道保险。
+const backupOffsiteKeep = Number(process.env.BACKUP_OFFSITE_KEEP || 30);
+
 // 生产环境前后端同域（Node 同时提供静态前端与 API），不需要 CORS。
 // 仅开发环境放开，供 vite dev server (localhost:3000) 直连后端。
 const appOrigin = (process.env.APP_ORIGIN || 'http://localhost:3000').replace(/\/$/, '');
@@ -120,6 +138,9 @@ module.exports = {
   deepseekApiKey,
   ollamaBaseUrl,
   ollamaModel,
+  // 异地备份
+  backupOffsiteDir,
+  backupOffsiteKeep,
   // 运行环境
   port,
   nodeEnv,
