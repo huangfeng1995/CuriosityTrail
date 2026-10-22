@@ -972,6 +972,52 @@ body {
   color: var(--text-primary);
 }
 
+/* ---------- 设置页角色选择 ---------- */
+.ct-role-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.ct-role-pick {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease;
+}
+.ct-role-pick:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.ct-role-pick.is-active {
+  background: var(--accent-dim);
+  border-color: var(--cinnabar-glow);
+  color: var(--accent);
+  font-weight: 600;
+}
+.ct-role-pick-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+.ct-role-pick-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+
 /* ---------- 来源角标 ---------- */
 .ct-citations {
   margin-top: 8px;

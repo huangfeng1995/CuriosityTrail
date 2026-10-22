@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Tabs,
+  Input,
   Button,
   Card,
   message,
@@ -7,6 +9,10 @@ import {
   Alert,
   Typography,
 } from 'antd';
+import {
+  SaveOutlined,
+  UndoOutlined,
+} from '@ant-design/icons';
 import api from '../api/client';
 import { useIsMobile } from '../hooks/useMediaQuery';
 
@@ -15,15 +21,131 @@ const { Text, Paragraph } = Typography;
 /**
  * 设置页。
  *
- * AI 相关的配置（供应商、连接状态、角色提示词、温度/模型/深度思考）
- * 全部不对客户暴露——这些是部署期的运维动作，不是写作期该操心的事。
- * 客户在这里唯一需要的是「备份」：稿子安全最重要。
+ * 供应商配置、连接状态、模型/温度/深度思考这些参数都是部署期
+ * 的运维细节，客户写作用不到，所以设置页里一个不留。
+ * 留下的是客户真正需要的两件事：调每个 AI 角色的提示词、
+ * 以及稿件的备份。
  */
 export default function SettingsPage() {
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
-      <BackupConfig />
+      <Tabs
+        defaultActiveKey="prompts"
+        items={[
+          { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
+          { key: 'backup', label: '备份', children: <BackupConfig /> },
+        ]}
+      />
     </div>
+  );
+}
+
+/**
+ * 角色提示词编辑。
+ *
+ * 客户可以按自己的喜好微调每个 AI 角色的默认提示词（写手、编辑、
+ * 审稿人、灵感师、资料员）。模型、温度、深度思考这些参数不暴露，
+ * 由服务端统一配置。
+ */
+function PromptConfig() {
+  const [roles, setRoles] = useState([]);
+  const [activeKey, setActiveKey] = useState('writer');
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // 把某个角色的当前提示词搬进编辑区
+  const fill = (role) => {
+    if (!role) return;
+    setDraft(role.systemPrompt);
+  };
+
+  const load = async () => {
+    try {
+      const res = await api.get('/ai/roles');
+      setRoles(res.data);
+      fill(res.data.find((r) => r.key === activeKey));
+    } catch (e) {
+      message.error('角色加载失败');
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const select = (key) => {
+    setActiveKey(key);
+    fill(roles.find((r) => r.key === key));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.post(`/ai/prompts/${activeKey}`, {
+        systemPrompt: draft,
+      });
+      message.success('已保存');
+      load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const restore = async () => {
+    try {
+      await api.delete(`/ai/prompts/${activeKey}`);
+      message.success('已恢复默认');
+      load();
+    } catch (e) {
+      message.error('恢复失败');
+    }
+  };
+
+  const active = roles.find((r) => r.key === activeKey);
+
+  return (
+    <Card size="small">
+      <div className="ct-role-picker">
+        {roles.map((r) => (
+          <button
+            key={r.key}
+            type="button"
+            className={`ct-role-pick${r.key === activeKey ? ' is-active' : ''}`}
+            onClick={() => select(r.key)}
+          >
+            <span className="ct-role-pick-icon" aria-hidden="true">
+              {r.icon}
+            </span>
+            <span className="ct-role-pick-name">{r.name}</span>
+            {r.overridden ? <span className="ct-role-pick-dot" title="已自定义" /> : null}
+          </button>
+        ))}
+      </div>
+
+      {active && (
+        <Paragraph type="secondary" style={{ fontSize: 13 }}>
+          {active.description}
+        </Paragraph>
+      )}
+
+      <Input.TextArea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={20}
+        style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12.5, lineHeight: 1.7 }}
+      />
+
+      <Space style={{ marginTop: 12 }}>
+        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>
+          保存
+        </Button>
+        <Button icon={<UndoOutlined />} onClick={restore}>
+          恢复默认
+        </Button>
+      </Space>
+    </Card>
   );
 }
 
