@@ -187,6 +187,7 @@ CREATE TABLE works (
   genre        TEXT,                  -- 题材：悬疑/言情/科幻…
   synopsis     TEXT,                  -- 一句话简介
   outline      TEXT,                  -- Markdown 大纲
+  target_words INTEGER DEFAULT 0,     -- 全书目标字数，0 = 未设定（进度面板可改）
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
@@ -201,10 +202,57 @@ CREATE TABLE chapters (
   status       TEXT DEFAULT 'draft',  -- draft | revising | done
   content      TEXT,                  -- 纯文本派生快照，供搜索与导出
   blocks       TEXT,                  -- JSON 块数组，正式数据源
+  outline      TEXT,                  -- 本章大纲
+  word_count   INTEGER DEFAULT 0,     -- 字数快照，口径同 services/wordCount.js
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
 CREATE INDEX idx_chapters_work ON chapters(work_id, seq);
+
+-- 章节版本历史。
+-- 撤销栈只在浏览器内存里（50 步），关掉页面就没了；每次保存前把被覆盖的
+-- 旧内容在这里存一份快照，可随时回滚。blocks 是权威数据，content 是纯文本快照。
+CREATE TABLE chapter_versions (
+  id           TEXT PRIMARY KEY,
+  chapter_id   TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+  work_id      TEXT NOT NULL,
+  title        TEXT,
+  blocks       TEXT,                  -- 完整块结构（权威）
+  content      TEXT,                  -- 纯文本快照，便于检索
+  label        TEXT,                  -- 快照标签（手动存档用）
+  manual       INTEGER DEFAULT 0,     -- 1 = 手动快照，不参与自动清理
+  word_count   INTEGER DEFAULT 0,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX idx_chapter_versions_chapter ON chapter_versions(chapter_id, created_at);
+
+-- 情节卡。动笔前把关键节点、伏笔、冲突列成卡片挂在作品或章节上
+CREATE TABLE plot_cards (
+  id           TEXT PRIMARY KEY,
+  work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  chapter_id   TEXT REFERENCES chapters(id) ON DELETE CASCADE,  -- 可空 = 挂在作品层
+  title        TEXT NOT NULL,
+  kind         TEXT DEFAULT 'plot',   -- plot | character | setting | conflict | foreshadow
+  content      TEXT,
+  seq          INTEGER DEFAULT 0,
+  status       TEXT DEFAULT 'todo',   -- todo | doing | done
+  created_at   TEXT NOT NULL,
+  modified_at  TEXT NOT NULL
+);
+CREATE INDEX idx_plot_cards_work ON plot_cards(work_id, seq);
+CREATE INDEX idx_plot_cards_chapter ON plot_cards(chapter_id);
+
+-- 每日写作增量。按天累计新增字数，供"写作进度"曲线。
+-- 不从版本历史反推：那是保存时刻的快照，回滚会产生负增量
+CREATE TABLE writing_events (
+  id           TEXT PRIMARY KEY,
+  work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  chapter_id   TEXT REFERENCES chapters(id) ON DELETE CASCADE,
+  day          TEXT NOT NULL,         -- 本地日期 YYYY-MM-DD
+  words_added  INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX idx_writing_events_work_day ON writing_events(work_id, day);
 
 -- 人物卡
 CREATE TABLE characters (
@@ -292,6 +340,7 @@ CREATE TABLE messages (
   role_key     TEXT,                  -- 发起时使用的 AI 角色
   action       TEXT,                  -- 结构化输出的 action
   payload      TEXT,                  -- 完整结构化输出 JSON
+  citations    TEXT,                  -- 引用列表 JSON
   created_at   TEXT NOT NULL
 );
 CREATE INDEX idx_messages_conv ON messages(conversation_id, created_at);
@@ -311,6 +360,8 @@ CREATE TABLE prompt_overrides (
   updated_at   TEXT NOT NULL
 );
 ```
+
+**增量迁移**：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表加新列，而 `SCHEMA_VERSION`（SQLite `user_version`）保持 1、老数据不重建。新列由 `database.js` 的 `ensureColumn()` 逐个 `ALTER TABLE ADD COLUMN` 补齐：`chapters.outline`、`chapters.word_count`、`works.target_words`（以及更早的 `materials.page_count`、`prompt_overrides.model` / `thinking`）。新建的三张表（`chapter_versions` / `plot_cards` / `writing_events`）直接进 `SCHEMA`，随 `initDatabase()` 一并创建。
 
 ### 3.2 blocks 的正确定义
 
@@ -362,19 +413,24 @@ CREATE TABLE prompt_overrides (
 
 ```
 web/server/
-├── index.js                 启动入口：路由挂载、静态资源、定时备份
+├── index.js                 启动入口：单实例校验、监听端口、索引重建、定时备份
+├── app.js                   Express 应用装配（新增）：路由/中间件/静态资源，导出 app 供测试直接 require
 ├── database.js              schema 初始化 + 增量迁移 + all/get/run 封装
 ├── config.js                环境变量与配置读取（新增）
 ├── routes/
 │   ├── works.js             作品/章节 CRUD（新增）
-│   ├── chapters.js          章节详情/更新/删除（新增）
+│   ├── chapters.js          章节详情/更新/删除（新增，保存前自动版本快照、记写作增量）
 │   ├── characters.js        人物卡 CRUD（新增）
 │   ├── settings.js          世界观设定 CRUD（新增）
-│   ├── materials.js         素材库 CRUD + 上传 + 检索（新增）
+│   ├── materials.js         素材库 CRUD + 上传 + 检索 + 引用定位（新增）
 │   ├── inspirations.js      灵感速记 CRUD（新增）
 │   ├── ai.js                AI 调用：对话、行内操作、角色、提示词覆盖、流式（新增）
 │   ├── auth.js              登录 / 登出 / 会话校验（新增）
 │   ├── search.js            联网搜索 / 抓取网页（新增）
+│   ├── versions.js          章节版本列表 / 手动存档 / 回滚 / 删除（新增）
+│   ├── plotCards.js         情节卡 CRUD + 排序（新增）
+│   ├── progress.js          写作进度（目标字数、每日曲线）（新增）
+│   ├── consistency.js       一致性检查：规则层 / 规则+AI 层（新增）
 │   ├── export.js            导出 TXT/Markdown/DOCX + 备份/恢复（改造）
 │   ├── upload.js            图片上传（保留）
 │   └── config.js            系统配置读写（新增）
@@ -396,11 +452,22 @@ web/server/
 │   │   ├── inspiler.js
 │   │   └── researcher.js
 │   ├── context.js           上下文装配器（新增，核心）
+│   ├── versions.js          章节版本快照：自动快照 / 手动存档 / 回滚（新增）
+│   ├── plotCards.js         情节卡业务逻辑（新增）
+│   ├── progress.js          写作进度与每日写作增量（新增）
+│   ├── consistency.js       全书一致性检查：规则层 + AI 层（新增）
+│   ├── citations.js         引用定位：片段下标 / 页码 / 上下文（新增）
+│   ├── wordCount.js         字数统计，前后端同口径（新增）
 │   ├── documentText.js      PDF / TXT / MD 正文提取（新增）
 │   ├── docxExport.js        DOCX 导出（新增）
 │   ├── backup.js            备份与定时备份（新增）
 │   ├── auth.js              密码校验 + JWT 签发（新增）
 │   └── aiConfig.js          配置管理（改造，含 DeepSeek 段）
+├── test/                    node:test 单测（新增）
+│   ├── helpers.js           隔离临时数据目录 + 登录辅助
+│   ├── api.test.js          路由层集成测试
+│   ├── citations.test.js    引用定位测试
+│   └── wordCount.test.js    字数统计测试
 └── middleware/
     ├── auth.js              JWT 会话校验（新增）
     ├── rateLimit.js         登录 / AI / 全局限流（新增）
@@ -654,6 +721,31 @@ fly secrets set DEEPSEEK_API_KEY=... APP_PASSWORD=... APP_PASSWORD_SALT=... JWT_
 - 保留核心能力：读稿 + 发消息给 AI + 行内改写
 - 写作（长文本输入）在手机上体验有限，这是次要场景
 
+### 4.7 功能路由（本轮新增）
+
+版本历史、情节卡、写作进度、一致性检查、引用定位的端点清单（全部经 `requireAuth`）：
+
+| 端点 | 用途 | 语义 |
+|---|---|---|
+| `GET /api/versions/chapter/:chapterId` | 版本列表 | 自动快照 + 手动存档，按时间倒序 |
+| `POST /api/versions/chapter/:chapterId` | 手动存档 | body `{label}`，`manual=1`，不参与自动清理 |
+| `GET /api/versions/chapter/:chapterId/:versionId` | 版本详情 | 含 blocks 与正文，供预览对照 |
+| `POST /api/versions/chapter/:chapterId/:versionId/restore` | 回滚 | 回滚前先把当前内容再存一份快照，返回回滚后的章节 |
+| `DELETE /api/versions/chapter/:chapterId/:versionId` | 删除版本 | — |
+| `GET /api/plot-cards/work/:workId` | 作品的全部情节卡 | 含挂在章节上的卡片 |
+| `GET /api/plot-cards/chapter/:chapterId` | 某章的情节卡 | — |
+| `POST /api/plot-cards/work/:workId` | 新建卡片 | body `{title, chapterId?, kind, content, status}` |
+| `PUT /api/plot-cards/:id` | 更新卡片 | — |
+| `DELETE /api/plot-cards/:id` | 删除卡片 | — |
+| `POST /api/plot-cards/work/:workId/reorder` | 批量排序 | body `{cardIds: []}` |
+| `GET /api/progress` | 所有作品进度汇总 | — |
+| `GET /api/progress/:workId` | 单部作品进度 | 目标完成度 + 章节字数 + 近 N 天每日曲线（`?days=`） |
+| `GET /api/consistency/:workId` | 规则层检查 | 免费、立刻出结果，返回 `{issues}` |
+| `POST /api/consistency/:workId` | 规则 + AI 检查 | 规则层结果照常返回，AI 层失败只写入 `notices` 不整体失败 |
+| `GET /api/materials/:id/locate` | 引用定位 | `?snippet=`，返回原文下标、PDF 页码与前后文，前端据此滚动高亮 |
+
+章节保存（`PUT /api/chapters/:id`）时顺带做两件事：调 `services/versions.js` 的自动快照（保留最近 40 份自动快照，内容未变不重复存），并把字数增量记入 `writing_events`。
+
 ---
 
 ## 5. 前端架构
@@ -684,13 +776,17 @@ web/client/src/
 │   │   ├── CharacterPanel.jsx 人物卡列表 + 编辑抽屉
 │   │   ├── SettingPanel.jsx   设定列表 + 编辑抽屉
 │   │   ├── WorkInfoPanel.jsx  作品信息（题材/简介/大纲）
-│   │   └── InspirationPanel.jsx 灵感速记
+│   │   ├── InspirationPanel.jsx 灵感速记
+│   │   ├── PlotCardPanel.jsx  情节卡看板（类型/状态/排序，新增）
+│   │   ├── ProgressPanel.jsx  写作进度（字数/目标字数/每日曲线，新增）
+│   │   └── ConsistencyPanel.jsx 一致性检查结果（规则层/AI 层，新增）
 │   ├── Editor/
 │   │   ├── ChapterEditor.jsx  块编辑器主组件（改造 ReportEditor.jsx）
 │   │   ├── Block.jsx          单个块的渲染与编辑
 │   │   ├── BlockToolbar.jsx   选中文字浮出的行内工具条
 │   │   ├── BlockPalette.jsx   底部添加块的按钮组
-│   │   └── blocks.js          块类型定义与工具函数
+│   │   ├── blocks.js          块类型定义与工具函数
+│   │   └── VersionHistoryPanel.jsx 版本历史抽屉（快照列表/预览/回滚/手动存档，新增）
 │   ├── Assistant/
 │   │   ├── Sidebar.jsx        AI 侧边栏容器
 │   │   ├── RoleTabs.jsx       五个角色切换
@@ -698,6 +794,8 @@ web/client/src/
 │   │   ├── ActionCard.jsx     结构化输出卡片（comment 类）
 │   │   └── CitationBadge.jsx  来源角标
 │   └── ExportButton.jsx    导出格式下拉（Word / Markdown / 纯文本）
+└── utils/
+    └── wordCount.js        字数统计，与服务端 services/wordCount.js 同口径（新增）
 ```
 
 **设置页没有拆成 `components/Settings/`**：三个标签页（AI 供应商、角色提示词、备份）逻辑上都只服务于设置页，拆成独立目录反而要跨目录传状态，所以留在 `pages/SettingsPage.jsx` 内部组件里。
@@ -878,6 +976,7 @@ web/client/src/
 | `pdf-parse` | server | PDF 解析入库（实际安装 v1.1.4；用自定义 `pagerender` 逐页渲染并在页首插 `[[PAGE n]]` 标记） |
 | `docx` | server | 正确的 DOCX 导出（v9.13.0，CJS 入口 `dist/index.cjs`） |
 | `react-router-dom` | client | 路由 + 登录守卫 |
+| `@playwright/test` | e2e（`web/e2e` 独立 package.json，devDependency） | 端到端测试（v1.64.1，仅装 chromium，见 §11） |
 | `node-llama-cpp` | server | **移除**。两个原因：① 声明了但从未 import，实际靠 spawn 调 CLI；② 其 postinstall 会拉取大型原生二进制，在 Fly.io 镜像构建里既拖慢构建又让镜像体积失控。翻译功能已整体砍掉，不需要它 |
 | `axios` | server | **移除**。后端改用 Node 18+ 内置 `fetch` 调 DeepSeek / Search / Fetch 三个端点，无须 HTTP 客户端依赖（前端仍保留 axios） |
 | `uuid` | server | **移除**。项目内 id 全部是 SQLite 自增整数或自写的短哈希字符串，用不到 UUID |
@@ -952,6 +1051,14 @@ web/client/src/
 - 依赖版本偏旧（`multer` 1.x、`adm-zip` 0.5.x）。均非鉴权绕过类问题，待后续统一升级。
 - `sameSite: strict` 的固有副作用：从邮件/微信点外链进来会显示未登录，需重新输密码。这是安全换体验，属预期行为。
 
+### 9.2 落地踩坑记录（2026-10）
+
+| 坑 | 现象与原因 | 处置 |
+|---|---|---|
+| 引用定位下标偏移 | snippet 在含空白 / `[[PAGE n]]` 标记的正文（CJK、emoji 正文尤其明显）上定位偏移：归一化压平空白后没有下标映射，命中的原文下标整体偏掉，页码也跟着错，作者被送到错误的位置 | `services/citations.js` 的 `buildIndexMap` 逐位建立「归一化字符 → 原文 UTF-16 下标」映射（每个归一化字符都占一个槽位，含空白与标记占位），命中后映射回原文下标再算页码；补 3 项回归测试（上下文包含命中、before/match/after 三段拼接、命中段前有空白时不偏移） |
+| InputNumber 回车保存失效 | rc-input-number 把 `onKeyDown` 挂在外层 div 上，antd `InputNumber` 的 `onPressEnter` 里 `e.currentTarget.value` 是 undefined（currentTarget 是 div），目标字数按回车存不上 | 改用 `e.target.value`（触发按键的 input），见 `web/client/src/components/Sidebar/ProgressPanel.jsx` |
+| E2E 与 antd / 限流的暗坑 | ① antd 给「无图标 + 两汉字」按钮文本插空格（「保 存」），按原文本匹配必失败；② antd Tabs 溢出后真实点击被遮挡，点不到；③ 登录接口 5 次 / 15 分钟限流让逐用例登录的测试随机失败 | ① 宽松正则匹配按钮文本（`helpers.js` 的 `spaced()`）；② 切 Tab 用 `dispatchEvent('click')`；③ `global-setup.js` 登录一次存 storage state，全部用例复用 |
+
 ---
 
 ## 10. 决策记录（已确认）
@@ -968,3 +1075,52 @@ web/client/src/
 | 8 | 登录密码 | 实施时生成 192 位随机串（`crypto.randomBytes(24)`），单独告知用户，不写入任何文件或 Git |
 | 9 | 全局默认开不开深度思考 | **默认关闭**。官方文档明确思考模式下 `temperature` 完全不生效，开着思考等于把温度调参变成摆设；默认走非思考模式，快、便宜、温度真起作用。审稿人这类需要推理的角色在角色级单独开启 |
 | 10 | 角色参数如何分配 | **创作靠温度、分析靠思考**。写手 0.85 / 编辑 0.60 / 灵感师 0.95 / 资料员 0.30 走非思考模式；审稿人走 `deepseek-v4-pro` + 思考，放弃温度控制换推理深度 |
+
+---
+
+## 11. 测试与 CI（实际落地）
+
+### 11.1 后端单测
+
+`web/server/test/`，Node 内置 `node:test`（`npm test` = `node --test test/*.test.js`），不引测试框架：
+
+| 文件 | 覆盖 | 用例数 |
+|---|---|---|
+| `helpers.js` | 每个测试文件独立临时 `DATA_DIR`，环境变量在 require 业务模块**之前**设好（config 加载即定路径，之后再改就晚了） | — |
+| `api.test.js` | 路由层集成测试：登录鉴权、作品/章节、素材、版本历史、情节卡、写作进度、一致性检查 | 23 |
+| `citations.test.js` | 引用定位：归一化、页码计算、下标不偏移、跨页片段、上下文拼接 | 13 |
+| `wordCount.test.js` | 字数统计口径（CJK 逐字、英文按词、标点计数） | 9 |
+
+当前 **45 项全绿**（`node --test` 实测）。
+
+### 11.2 E2E
+
+`web/e2e/`，独立 package（Playwright 1.64，只装 chromium）：
+
+```
+web/e2e/
+├── playwright.config.js    起真服务跑测试：webServer 直接 node index.js，
+│                           前端由同一服务托管 client/dist，同源、无需 vite / CORS
+├── global-setup.js         登录一次存 storage state + 准备公共 fixture（作品/章节/素材）
+├── helpers.js              fixture 读取 + antd 按钮文本/Tab 切换辅助（见 §9.2）
+└── specs/
+    ├── auth.spec.js        登录鉴权（2 项）
+    ├── writing.spec.js     章节写作：正文落库、字数更新、块增删、标题保存（4 项）
+    ├── panels.spec.js      情节卡 / 版本历史 / 进度 / 一致性检查（4 项）
+    └── materials.spec.js   素材搜索、引用定位高亮、focus 打开编辑（3 项）
+```
+
+当前 **13 项全绿**。要点：每次跑用独立 `DATA_DIR`（`web/e2e/.tmp/data`）不碰真实稿件；`NODE_ENV=test` 让 Cookie 不带 `secure`；`workers: 1` 串行（所有用例共用一个服务与库）；失败保留 trace 与截图。
+
+### 11.3 CI
+
+`.github/workflows/ci.yml`，push `main` / PR 触发，4 个 job：
+
+| job | 内容 |
+|---|---|
+| `server-test` 后端单测 | `web/server` 下 `npm ci && npm test` |
+| `client-build` 前端构建 | `web/client` 下 `npm ci && npm run build` |
+| `e2e` E2E 测试 | 构建前端 dist → 装 E2E 依赖 → `npx playwright install --with-deps chromium` → `npx playwright test`；失败上传 `playwright-report`（保留 7 天） |
+| `docker-build` Docker 构建 | 根目录多阶段 Dockerfile 构建校验 |
+
+另有 `.github/workflows/deploy.yml`：push `main` 后 `flyctl deploy --remote-only` 发 Fly.io（依赖仓库 secrets）。
