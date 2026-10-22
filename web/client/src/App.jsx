@@ -123,12 +123,7 @@ function AppShell({ isDark, setIsDark }) {
     <Layout style={{ minHeight: '100vh', background: 'var(--bg-layout)' }}>
       <Header className="ct-topbar">
         <div className="ct-brand" onClick={() => navigate('/works')}>
-          <span className="ct-brand-mark" aria-hidden="true">
-            寻
-          </span>
-          {!isMobile && (
-            <span className="ct-brand-name font-serif">寻迹</span>
-          )}
+          <span className="ct-brand-name font-serif">寻迹</span>
         </div>
 
         {!isWorkspace && (

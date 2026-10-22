@@ -322,23 +322,6 @@ body {
   flex-shrink: 0;
   user-select: none;
 }
-/* 印章：朱砂方块 + 宣纸色字 */
-.ct-brand-mark {
-  width: 26px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--cinnabar);
-  color: #fdf8ef;
-  font-family: 'Noto Serif SC', 'Songti SC', serif;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1;
-  border-radius: 5px;
-  box-shadow: 0 1px 3px rgba(120, 40, 30, 0.28);
-  letter-spacing: 0;
-}
 .ct-brand-name {
   font-size: 16px;
   font-weight: 600;
