@@ -91,8 +91,8 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
 
   // 目标字数这一项
   const target = (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 11, opacity: 0.5, marginBottom: 4 }}>目标字数</div>
+    <div className="ct-section">
+      <div className="ct-stat-label">目标字数</div>
       <InputNumber
         size="small"
         min={0}
@@ -116,21 +116,10 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
   );
 
   const stats = (
-    <div style={{ marginBottom: 16 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          justifyContent: 'space-between',
-          marginBottom: 4,
-        }}
-      >
-        <span style={{ fontSize: 20, fontWeight: 600 }}>{formatWords(totalWords)}</span>
-        {targetWords > 0 && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {percent}%
-          </Text>
-        )}
+    <div className="ct-section">
+      <div className="ct-stat-row">
+        <span className="ct-stat-value">{formatWords(totalWords)}</span>
+        {targetWords > 0 && <Text type="secondary">{percent}%</Text>}
       </div>
       {targetWords > 0 ? (
         <Progress
@@ -143,7 +132,7 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
           设个目标字数，这里会显示完成度
         </Text>
       )}
-      <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6, lineHeight: 1.7 }}>
+      <div className="ct-stat-sub">
         {doneCount}/{chapters.length} 章已完成
         {remainingWords > 0 ? ` · 还差 ${formatWords(remainingWords)} 字` : ''}
         {data.avgWordsPerActiveDay > 0
@@ -155,16 +144,11 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
 
   // 近 30 天写作量
   const chart = (
-    <div style={{ marginBottom: 16 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 4,
-        }}
-      >
-        <span style={{ fontSize: 12, opacity: 0.6 }}>近 30 天</span>
+    <div className="ct-section">
+      <div className="ct-stat-row">
+        <span className="ct-stat-label" style={{ marginBottom: 0 }}>
+          近 30 天
+        </span>
         <Tooltip title="刷新">
           <Button size="small" type="text" icon={<ReloadOutlined />} onClick={load} />
         </Tooltip>
@@ -184,11 +168,11 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
                   formatter={(value) => [`${value} 字`, '当日新增']}
                   labelFormatter={(label) => label}
                 />
-                <Bar dataKey="words" fill="#3b6ea5" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="words" fill="var(--accent)" radius={[2, 2, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>
+          <div className="ct-stat-sub" style={{ marginTop: 2 }}>
             近 30 天共 {formatWords(data.recentWords)} 字 · {data.activeDays} 天有产出
           </div>
         </>
@@ -199,47 +183,25 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
   // 各章字数
   const chapterList = (
     <div>
-      <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 4 }}>各章字数</div>
+      <div className="ct-stat-label">各章字数</div>
       {chapters.map((c) => (
-        <div
-          key={c.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '4px 6px',
-            fontSize: 12,
-            borderBottom: '1px solid rgba(128,128,128,0.08)',
-          }}
-        >
-          <span
-            style={{
-              flex: 1,
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              opacity: c.status === 'done' ? 0.55 : 1,
-            }}
-          >
+        <div key={c.id} className="ct-chapter-row">
+          <span className="ct-chapter-name" style={{ opacity: c.status === 'done' ? 0.55 : 1 }}>
             {c.title}
-            {c.hasOutline ? '' : ' ·'}
           </span>
           {c.hasOutline ? null : (
             <Tooltip title="这一章还没写大纲">
-              <span style={{ fontSize: 10, opacity: 0.45 }}>无大纲</span>
+              <span className="ct-badge">无大纲</span>
             </Tooltip>
           )}
-          <span style={{ fontSize: 11, opacity: 0.55, flexShrink: 0 }}>
-            {c.words} 字
-          </span>
+          <span className="ct-chapter-words">{c.words} 字</span>
         </div>
       ))}
     </div>
   );
 
   return (
-    <div style={{ padding: '4px 8px' }}>
+    <div className="ct-panel">
       {target}
       {stats}
       {chart}

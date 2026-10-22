@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Typography, Button, Space, message, Modal, Input, Tooltip } from 'antd';
+import { Button, Space, message, Modal, Input, Tooltip } from 'antd';
 import { SaveOutlined, UndoOutlined, RedoOutlined, HistoryOutlined } from '@ant-design/icons';
 import { useWorkspace } from '../../store/workspace';
 import { createBlock } from './blocks';
@@ -10,8 +10,6 @@ import BlockToolbar from './BlockToolbar';
 import VersionHistoryPanel from './VersionHistoryPanel';
 import ExportButton from '../ExportButton';
 import { useIsMobile } from '../../hooks/useMediaQuery';
-
-const { Title, Text } = Typography;
 
 // 保存状态对应的提示文案。状态来自 store，与真实落库进度一致。
 const SAVE_LABEL = {
@@ -217,16 +215,11 @@ export default function ChapterEditor() {
 
   if (!chapter) {
     return (
-      <div
-        style={{
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          opacity: 0.5,
-        }}
-      >
-        <Text type="secondary">从左侧选择一个章节开始写作</Text>
+      <div className="ct-editor-empty">
+        <span className="ct-empty-mark font-serif" aria-hidden="true">
+          寻
+        </span>
+        <p className="ct-empty-text">从左侧选择一个章节开始写作</p>
       </div>
     );
   }
@@ -234,26 +227,13 @@ export default function ChapterEditor() {
   const wordCount = countBlockWords(blocks);
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div className="ct-editor">
       {/* 章节头 */}
-      <div
-        style={{
-          padding: isMobile ? '12px 12px 0' : '20px 40px 0',
-          borderBottom: '1px solid rgba(128,128,128,0.15)',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: 16,
-            marginBottom: 12,
-          }}
-        >
+      <header className="ct-editor-head">
+        <div className="ct-editor-head-row">
           <Input
             variant="borderless"
+            className="ct-chapter-title"
             defaultValue={chapter.title}
             key={chapter.id}
             onBlur={(e) => {
@@ -266,25 +246,22 @@ export default function ChapterEditor() {
                 body: JSON.stringify({ title }),
               });
             }}
-            style={{
-              fontSize: 20,
-              fontWeight: 600,
-              padding: 0,
-              fontFamily: 'Noto Serif SC, serif',
-              minWidth: 0,
-              flex: '1 1 160px',
-            }}
           />
 
-          <Space size={8} wrap>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {wordCount} 字
-              {wordCount >= 10000 ? `（${formatWords(wordCount)}）` : ''} ·{' '}
+          <Space size={6} wrap className="ct-editor-tools">
+            <span className="ct-wordcount">
+              <b className="ct-wordcount-num">{wordCount}</b>{' '}
+              <em>字</em>
+              {wordCount >= 10000 ? <em>（{formatWords(wordCount)}）</em> : null}
+            </span>
+            <span className={`ct-save-state is-${saveStatus || 'idle'}`}>
               {SAVE_LABEL[saveStatus] || SAVE_LABEL.idle}
-            </Text>
+            </span>
+            <span className="ct-tool-sep" />
             <Tooltip title="撤销（⌘Z）">
               <Button
                 size="small"
+                type="text"
                 icon={<UndoOutlined />}
                 disabled={!past.length}
                 onClick={undo}
@@ -293,6 +270,7 @@ export default function ChapterEditor() {
             <Tooltip title="重做（⌘⇧Z）">
               <Button
                 size="small"
+                type="text"
                 icon={<RedoOutlined />}
                 disabled={!future.length}
                 onClick={redo}
@@ -301,6 +279,7 @@ export default function ChapterEditor() {
             <Tooltip title="历史版本">
               <Button
                 size="small"
+                type="text"
                 icon={<HistoryOutlined />}
                 onClick={() => setHistoryOpen(true)}
               />
@@ -308,22 +287,14 @@ export default function ChapterEditor() {
             <Button size="small" icon={<SaveOutlined />} onClick={handleSaveNow}>
               保存
             </Button>
-            <ExportButton scope="chapter" id={chapter.id} />
+            <ExportButton scope="chapter" id={chapter.id} size="small" />
           </Space>
         </div>
-      </div>
+      </header>
 
       {/* 正文区 */}
-      <div
-        ref={editorRef}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          position: 'relative',
-          padding: isMobile ? '16px 12px 80px' : '24px 40px 80px',
-        }}
-      >
-        <div style={{ maxWidth: 760, margin: '0 auto' }}>
+      <div ref={editorRef} className="ct-editor-scroll ct-ruled">
+        <div className="ct-editor-body">
           {blocks.map((block, index) => (
             <Block
               key={block.id}
@@ -353,10 +324,7 @@ export default function ChapterEditor() {
         )}
       </div>
 
-      <VersionHistoryPanel
-        open={historyOpen}
-        onClose={() => setHistoryOpen(false)}
-      />
+      <VersionHistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </div>
   );
 }

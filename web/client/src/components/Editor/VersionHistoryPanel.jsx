@@ -6,7 +6,6 @@ import {
   Typography,
   Empty,
   Spin,
-  Tag,
   Input,
   Modal,
   message,
@@ -149,11 +148,11 @@ export default function VersionHistoryPanel({ open, onClose }) {
         </Button>
       }
     >
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 8, lineHeight: 1.7 }}>
+      <div className="ct-version-head">
+        <p className="ct-hint">
           每次保存都会把被覆盖掉的旧内容存一份。误删了段落，可以从这里回到任何一版。
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        </p>
+        <div className="ct-version-save">
           <Input
             size="small"
             placeholder="给这一版起个名字，如「第三章结尾定稿」"
@@ -174,7 +173,7 @@ export default function VersionHistoryPanel({ open, onClose }) {
       </div>
 
       {loading && versions.length === 0 ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}>
+        <div className="ct-loading">
           <Spin />
         </div>
       ) : versions.length === 0 ? (
@@ -190,14 +189,22 @@ export default function VersionHistoryPanel({ open, onClose }) {
             <List.Item
               actions={[
                 <Tooltip title="查看内容" key="view">
-                  <EyeOutlined
-                    style={{ cursor: 'pointer', opacity: 0.6 }}
+                  <button
+                    type="button"
+                    className="ct-item-act"
+                    title="查看内容"
+                    aria-label="查看内容"
                     onClick={() => openPreview(v)}
-                  />
+                  >
+                    <EyeOutlined />
+                  </button>
                 </Tooltip>,
                 <Tooltip title="回到这一版" key="restore">
-                  <RollbackOutlined
-                    style={{ cursor: 'pointer', opacity: 0.6 }}
+                  <button
+                    type="button"
+                    className="ct-item-act"
+                    title="回到这一版"
+                    aria-label="回到这一版"
                     onClick={() =>
                       Modal.confirm({
                         title: '回到这一版？',
@@ -208,30 +215,35 @@ export default function VersionHistoryPanel({ open, onClose }) {
                         onOk: () => restore(v),
                       })
                     }
-                  />
+                  >
+                    <RollbackOutlined />
+                  </button>
                 </Tooltip>,
                 <Popconfirm
                   key="del"
                   title="删除这一版？"
                   onConfirm={() => remove(v)}
                 >
-                  <DeleteOutlined style={{ cursor: 'pointer', opacity: 0.6 }} />
+                  <button
+                    type="button"
+                    className="ct-item-act is-danger"
+                    title="删除这一版"
+                    aria-label="删除这一版"
+                  >
+                    <DeleteOutlined />
+                  </button>
                 </Popconfirm>,
               ]}
             >
               <List.Item.Meta
                 title={
-                  <span style={{ fontSize: 13 }}>
+                  <span className="ct-version-title">
                     {v.label || '未命名版本'}
-                    {v.manual ? (
-                      <Tag color="blue" style={{ marginLeft: 6, fontSize: 11 }}>
-                        手动
-                      </Tag>
-                    ) : null}
+                    {v.manual ? <span className="ct-badge">手动</span> : null}
                   </span>
                 }
                 description={
-                  <div style={{ fontSize: 11, opacity: 0.55 }}>
+                  <div className="ct-version-meta">
                     {new Date(v.created_at).toLocaleString('zh-CN')}
                     {' · '}
                     {v.word_count || 0} 字
@@ -250,16 +262,7 @@ export default function VersionHistoryPanel({ open, onClose }) {
         width={720}
         onCancel={() => setPreview(null)}
       >
-        <div
-          style={{
-            whiteSpace: 'pre-wrap',
-            fontSize: 14,
-            lineHeight: 1.9,
-            maxHeight: 520,
-            overflow: 'auto',
-            fontFamily: 'Noto Serif SC, serif',
-          }}
-        >
+        <div className="ct-version-preview">
           {previewLoading ? (
             <Spin />
           ) : (

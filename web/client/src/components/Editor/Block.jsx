@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
-import { Typography, Upload, Button, Dropdown, message } from 'antd';
+import { Upload, Button, Dropdown, message } from 'antd';
 import {
   DeleteOutlined,
   ArrowUpOutlined,
@@ -9,8 +9,6 @@ import {
 } from '@ant-design/icons';
 import { BLOCK_TYPES, BLOCK_TYPE_MAP } from './blocks';
 import { useIsMobile } from '../../hooks/useMediaQuery';
-
-const { Text } = Typography;
 
 /**
  * 单个块。
@@ -96,39 +94,22 @@ export default function Block({
     switch (block.type) {
       case 'scene_break':
         return (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              padding: '14px 0',
-              cursor: 'default',
-            }}
-          >
-            <div style={{ flex: 1, height: 1, background: 'currentColor', opacity: 0.2 }} />
-            <Text style={{ letterSpacing: 6, opacity: 0.5, fontSize: 13 }}>※　※　※</Text>
-            <div style={{ flex: 1, height: 1, background: 'currentColor', opacity: 0.2 }} />
+          <div className="ct-scene-break">
+            <span className="ct-scene-break-line" />
+            <span className="ct-scene-break-mark">※　※　※</span>
+            <span className="ct-scene-break-line" />
           </div>
         );
 
       case 'dialogue':
         return (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <div className="ct-dialogue">
             <input
               value={block.speaker || ''}
               placeholder="说话人"
               onChange={(e) => onChange({ speaker: e.target.value })}
               onFocus={onFocus}
-              style={{
-                flex: '0 0 96px',
-                border: '1px solid rgba(128,128,128,0.25)',
-                borderRadius: 6,
-                padding: '8px 10px',
-                fontSize: 14,
-                background: 'transparent',
-                color: 'inherit',
-                outline: 'none',
-              }}
+              className="ct-speaker"
             />
             <textarea
               ref={textRef}
@@ -137,19 +118,7 @@ export default function Block({
               onFocus={onFocus}
               onSelect={handleSelect}
               placeholder="台词…"
-              style={{
-                flex: 1,
-                border: 'none',
-                background: 'transparent',
-                color: 'inherit',
-                outline: 'none',
-                resize: 'none',
-                fontSize: 16,
-                lineHeight: 1.9,
-                fontFamily: 'Noto Serif SC, serif',
-                minHeight: 32,
-                padding: 0,
-              }}
+              className="ct-block-text ct-block-dialogue"
             />
           </div>
         );
@@ -163,21 +132,7 @@ export default function Block({
             onFocus={onFocus}
             onSelect={handleSelect}
             placeholder="心理描写…"
-            style={{
-              width: '100%',
-              border: 'none',
-              background: 'transparent',
-              color: 'inherit',
-              outline: 'none',
-              resize: 'none',
-              fontSize: 15,
-              lineHeight: 1.9,
-              fontStyle: 'italic',
-              opacity: 0.92,
-              fontFamily: 'Noto Serif SC, serif',
-              minHeight: 32,
-              padding: 0,
-            }}
+            className="ct-block-text ct-block-inner"
           />
         );
 
@@ -185,18 +140,9 @@ export default function Block({
         return (
           <div>
             {block.url ? (
-              <div style={{ position: 'relative', display: 'inline-block' }}>
-                <img
-                  src={block.url}
-                  alt={block.content || block.fileName || '插图'}
-                  style={{
-                    maxWidth: '100%',
-                    borderRadius: 8,
-                    marginBottom: 8,
-                    display: 'block',
-                  }}
-                />
-                <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <div className="ct-figure">
+                <img src={block.url} alt={block.content || block.fileName || '插图'} className="ct-figure-img" />
+                <div className="ct-figure-actions">
                   <Upload
                     accept="image/*"
                     showUploadList={false}
@@ -237,7 +183,7 @@ export default function Block({
                     onError?.(e);
                   }
                 }}
-                style={{ padding: '16px 0', marginBottom: 8, background: 'transparent' }}
+                className="ct-upload-dragger"
               >
                 <PictureOutlined style={{ fontSize: 22, opacity: 0.45 }} />
                 <div style={{ fontSize: 13, opacity: 0.7, marginTop: 6 }}>
@@ -251,50 +197,21 @@ export default function Block({
               onChange={(e) => onChange({ content: e.target.value })}
               onFocus={onFocus}
               placeholder="图注…"
-              style={{
-                width: '100%',
-                border: 'none',
-                background: 'transparent',
-                color: 'inherit',
-                outline: 'none',
-                resize: 'none',
-                fontSize: 14,
-                lineHeight: 1.7,
-                minHeight: 28,
-                padding: 0,
-              }}
+              className="ct-block-text ct-block-caption"
             />
           </div>
         );
 
       case 'setting_ref':
         return (
-          <div
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '6px 12px',
-              borderRadius: 6,
-              border: '1px dashed rgba(128,128,128,0.4)',
-              fontSize: 14,
-            }}
-          >
-            <span style={{ opacity: 0.55 }}>设定</span>
+          <div className="ct-setting-ref">
+            <span className="ct-setting-ref-tag">设定</span>
             <input
               value={block.content}
               onChange={(e) => onChange({ content: e.target.value })}
               onFocus={onFocus}
               placeholder="引用的设定名"
-              style={{
-                border: 'none',
-                background: 'transparent',
-                color: 'inherit',
-                outline: 'none',
-                fontSize: 14,
-                flex: 1,
-                minWidth: 120,
-              }}
+              className="ct-setting-ref-input"
             />
           </div>
         );
@@ -308,19 +225,7 @@ export default function Block({
             onFocus={onFocus}
             onSelect={handleSelect}
             placeholder="正文…"
-            style={{
-              width: '100%',
-              border: 'none',
-              background: 'transparent',
-              color: 'inherit',
-              outline: 'none',
-              resize: 'none',
-              fontSize: 16,
-              lineHeight: 1.95,
-              fontFamily: 'Noto Serif SC, serif',
-              minHeight: 32,
-              padding: 0,
-            }}
+            className="ct-block-text ct-block-paragraph"
           />
         );
     }
@@ -339,7 +244,7 @@ export default function Block({
           })),
         }}
       >
-        <button title="转为其他块类型" style={{ ...iconButtonStyle(false), width: 30, fontSize: 11 }}>
+        <button title="转为其他块类型" className="ct-block-btn" style={{ width: 32, fontSize: 11 }}>
           {BLOCK_TYPE_MAP.get(block.type)?.label || '?'}
         </button>
       </Dropdown>
@@ -347,7 +252,7 @@ export default function Block({
         title="上移"
         disabled={index === 0}
         onClick={() => onMove(-1)}
-        style={iconButtonStyle(index === 0)}
+        className="ct-block-btn"
       >
         <ArrowUpOutlined style={{ fontSize: 12 }} />
       </button>
@@ -355,11 +260,11 @@ export default function Block({
         title="下移"
         disabled={index === total - 1}
         onClick={() => onMove(1)}
-        style={iconButtonStyle(index === total - 1)}
+        className="ct-block-btn"
       >
         <ArrowDownOutlined style={{ fontSize: 12 }} />
       </button>
-      <button title="删除" onClick={onDelete} style={iconButtonStyle(false)}>
+      <button title="删除" onClick={onDelete} className="ct-block-btn is-danger">
         <DeleteOutlined style={{ fontSize: 12 }} />
       </button>
     </>
@@ -368,66 +273,18 @@ export default function Block({
   return (
     <div
       data-block-id={block.id}
-      style={{
-        position: 'relative',
-        padding: '6px 0',
-        borderRadius: 6,
-        background: isActive ? 'rgba(59,110,165,0.05)' : 'transparent',
-        transition: 'background 0.15s ease',
-      }}
+      className={`ct-block${isActive ? ' is-active' : ''}`}
     >
       {renderBody()}
 
-      {/* 宽屏：悬停时在块右侧浮出管理按钮。窄屏浮出会超出视口，
-          改成块下方常驻一行。 */}
+      {/* 块操作按钮。
+          之前浮在正文右侧（right: -76px），会压到字、也会溢出到右栏。
+          现在固定在正文栏左侧的预留沟里：hover 整块才出现，不占正文宽度。 */}
       {isMobile ? (
-        <div
-          style={{
-            display: 'flex',
-            gap: 2,
-            alignItems: 'center',
-            justifyContent: 'flex-end',
-            paddingTop: 4,
-            opacity: 0.6,
-          }}
-        >
-          {actions}
-        </div>
+        <div className="ct-block-actions is-inline">{actions}</div>
       ) : (
-        <div
-          style={{
-            position: 'absolute',
-            top: 2,
-            right: -76,
-            display: 'flex',
-            gap: 2,
-            alignItems: 'center',
-            opacity: 0.35,
-            transition: 'opacity 0.15s ease',
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
-          onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.35)}
-        >
-          {actions}
-        </div>
+        <div className="ct-block-actions">{actions}</div>
       )}
     </div>
   );
-}
-
-function iconButtonStyle(disabled) {
-  return {
-    border: '1px solid rgba(128,128,128,0.25)',
-    background: 'transparent',
-    color: 'inherit',
-    borderRadius: 4,
-    width: 24,
-    height: 24,
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.3 : 1,
-    padding: 0,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  };
 }

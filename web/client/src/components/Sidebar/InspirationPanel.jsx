@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Input, Modal, Form, message, Empty, Tooltip, Tag } from 'antd';
+import { Input, Modal, Form, message, Empty, Tooltip } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined } from '@ant-design/icons';
 import api from '../../api/client';
 
@@ -81,73 +81,68 @@ export default function InspirationPanel() {
   const renderItem = (item) => (
     <div
       key={item.id}
-      style={{
-        padding: '7px 6px',
-        borderRadius: 6,
-        opacity: item.consumed ? 0.45 : 1,
-      }}
+      className={`ct-item${item.consumed ? ' is-consumed is-done' : ' is-pending'}`}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-        <span
-          onClick={() => openEditor(item)}
-          style={{ flex: 1, fontSize: 13, lineHeight: 1.7, cursor: 'pointer', whiteSpace: 'pre-wrap' }}
-        >
-          {item.text}
-          {item.tags ? (
-            <Tag style={{ marginLeft: 6, marginTop: 2 }}>{item.tags}</Tag>
-          ) : null}
-        </span>
+      <button
+        type="button"
+        className="ct-item-main"
+        onClick={() => openEditor(item)}
+        style={{ whiteSpace: 'pre-wrap' }}
+      >
+        <span className="ct-item-title">{item.text}</span>
+        {item.tags && <span className="ct-item-meta">{item.tags}</span>}
+      </button>
+      <div className="ct-item-actions">
         <Tooltip title={item.consumed ? '标记为未用' : '标记为已用'}>
-          <CheckOutlined
-            style={{
-              fontSize: 13,
-              marginTop: 3,
-              color: item.consumed ? '#10b981' : 'rgba(128,128,128,0.35)',
-              cursor: 'pointer',
-            }}
+          <button
+            type="button"
+            className={`ct-item-act${item.consumed ? ' is-on' : ''}`}
+            aria-label={item.consumed ? '标记为未用' : '标记为已用'}
             onClick={() => toggleConsumed(item)}
-          />
+          >
+            <CheckOutlined />
+          </button>
         </Tooltip>
-        <EditOutlined
-          style={{ fontSize: 12, opacity: 0.4, marginTop: 3, cursor: 'pointer' }}
+        <button
+          type="button"
+          className="ct-item-act"
+          title="编辑"
+          aria-label="编辑灵感"
           onClick={() => openEditor(item)}
-        />
-        <DeleteOutlined
-          style={{ fontSize: 12, opacity: 0.4, marginTop: 3, cursor: 'pointer' }}
+        >
+          <EditOutlined />
+        </button>
+        <button
+          type="button"
+          className="ct-item-act is-danger"
+          title="删除"
+          aria-label="删除灵感"
           onClick={() => remove(item)}
-        />
+        >
+          <DeleteOutlined />
+        </button>
       </div>
     </div>
   );
 
   return (
-    <div style={{ padding: '4px 8px' }}>
-      <Button
-        type="text"
-        size="small"
-        icon={<PlusOutlined />}
-        block
-        onClick={() => openEditor(null)}
-        style={{ textAlign: 'left', fontSize: 12, paddingLeft: 4 }}
-      >
+    <div className="ct-panel">
+      <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
+        <PlusOutlined />
         记一条灵感
-      </Button>
+      </button>
 
       {pending.map(renderItem)}
 
       {used.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 11, opacity: 0.4, padding: '4px 6px' }}>
-            已用（{used.length}）
-          </div>
+        <div>
+          <div className="ct-group-label">已用（{used.length}）</div>
           {used.map(renderItem)}
         </div>
       )}
 
       {items.length === 0 && (
-        <div style={{ fontSize: 12, opacity: 0.45, padding: '8px 6px', lineHeight: 1.7 }}>
-          还没有灵感。想到什么随手记一条，灵感师会用它来提方向。
-        </div>
+        <p className="ct-hint">还没有灵感。想到什么随手记一条，灵感师会用它来提方向。</p>
       )}
 
       <Modal

@@ -1,8 +1,6 @@
 import React from 'react';
-import { Button, Typography } from 'antd';
+import { Button } from 'antd';
 import { CheckOutlined, RollbackOutlined } from '@ant-design/icons';
-
-const { Text } = Typography;
 
 const ACTION_LABEL = {
   replace: '改写',
@@ -23,26 +21,10 @@ export default function ActionCard({ action, content, reason, applied, onApply, 
   const isTextAction = ['replace', 'append', 'insert'].includes(action);
 
   return (
-    <div
-      style={{
-        marginTop: 8,
-        border: '1px solid rgba(128,128,128,0.2)',
-        borderRadius: 8,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 10px',
-          background: 'rgba(128,128,128,0.08)',
-          fontSize: 12,
-        }}
-      >
-        <span style={{ fontWeight: 600 }}>{ACTION_LABEL[action] || '回复'}</span>
-        {reason && <Text type="secondary">{reason}</Text>}
+    <div className={`ct-action-card${applied ? ' is-applied' : ''}`}>
+      <div className="ct-action-head">
+        <span className="ct-action-label">{ACTION_LABEL[action] || '回复'}</span>
+        {reason && <span className="ct-action-reason">{reason}</span>}
         <span style={{ flex: 1 }} />
         {isTextAction && !applied && (
           <Button size="small" type="primary" icon={<CheckOutlined />} onClick={onApply}>
@@ -50,25 +32,16 @@ export default function ActionCard({ action, content, reason, applied, onApply, 
           </Button>
         )}
         {isTextAction && applied && (
-          <Button size="small" icon={<RollbackOutlined />} onClick={onRevert}>
-            撤销
-          </Button>
+          <>
+            <span className="ct-action-applied">已写入</span>
+            <Button size="small" icon={<RollbackOutlined />} onClick={onRevert}>
+              撤销
+            </Button>
+          </>
         )}
       </div>
 
-      <div
-        style={{
-          padding: '10px 12px',
-          fontSize: 14,
-          lineHeight: 1.85,
-          whiteSpace: 'pre-wrap',
-          maxHeight: 320,
-          overflowY: 'auto',
-          fontFamily: 'Noto Serif SC, serif',
-        }}
-      >
-        {content}
-      </div>
+      <div className="ct-action-body">{content}</div>
     </div>
   );
 }

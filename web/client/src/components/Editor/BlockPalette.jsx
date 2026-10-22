@@ -11,29 +11,15 @@ export default function BlockPalette({ onAdd }) {
 
   if (!open) {
     return (
-      <Button
-        type="dashed"
-        icon={<PlusOutlined />}
-        onClick={() => setOpen(true)}
-        style={{ marginTop: 12, width: '100%' }}
-      >
+      <button type="button" className="ct-palette-trigger" onClick={() => setOpen(true)}>
+        <PlusOutlined />
         添加内容块
-      </Button>
+      </button>
     );
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginTop: 12,
-        padding: 12,
-        border: '1px dashed rgba(128,128,128,0.35)',
-        borderRadius: 8,
-      }}
-    >
+    <div className="ct-palette">
       {BLOCK_TYPES.map((t) => (
         <Tooltip key={t.type} title={t.hint}>
           <Button size="small" onClick={() => onAdd(t.type)}>

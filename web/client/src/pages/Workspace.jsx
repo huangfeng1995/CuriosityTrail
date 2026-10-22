@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Tabs, Drawer, Button, Spin } from 'antd';
+import { Button, Spin } from 'antd';
+import { Menu, PanelRight } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../store/workspace';
 import ChapterEditor from '../components/Editor/ChapterEditor';
@@ -12,11 +13,12 @@ import InspirationPanel from '../components/Sidebar/InspirationPanel';
 import PlotCardPanel from '../components/Sidebar/PlotCardPanel';
 import ProgressPanel from '../components/Sidebar/ProgressPanel';
 import ConsistencyPanel from '../components/Sidebar/ConsistencyPanel';
+import PanelNav from '../components/Sidebar/PanelNav';
 
 /**
  * 三栏工作区。
  *
- * 左：作品章节树 + 人物卡 + 设定
+ * 左：作品章节树 + 资料面板（人物/设定/情节/进度/检查/作品/灵感）
  * 中：块编辑器
  * 右：AI 侧边栏
  */
@@ -26,6 +28,7 @@ export default function Workspace() {
   const { work, chapters, chapter, loadWork, loadChapter } = useWorkspace();
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
+  const [panelKey, setPanelKey] = useState('characters');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 992);
 
   useEffect(() => {
@@ -48,82 +51,37 @@ export default function Workspace() {
     }
   }, [workId, chapters, chapter, loadChapter]);
 
+  // 当前面板内容。key 变化时用 key 强制重挂载，配合 CSS 做淡入过渡。
+  const panelContent = {
+    characters: <CharacterPanel workId={work?.id} />,
+    settings: <SettingPanel workId={work?.id} />,
+    plot: <PlotCardPanel workId={work?.id} chapters={chapters} />,
+    progress: (
+      <ProgressPanel workId={work?.id} work={work} onWorkChanged={() => loadWork(work.id)} />
+    ),
+    check: <ConsistencyPanel workId={work?.id} />,
+    work: <WorkInfoPanel work={work} onSaved={() => loadWork(work.id)} />,
+    inspirations: <InspirationPanel />,
+  }[panelKey];
+
   const leftPanel = (
-    <>
-      <WorkTree
-        currentWorkId={work?.id}
-        currentChapterId={chapter?.id}
-      />
-      <div style={{ height: 1, background: 'rgba(128,128,128,0.15)', margin: '4px 0' }} />
-      <Tabs
-        size="small"
-        defaultActiveKey="characters"
-        items={[
-          {
-            key: 'characters',
-            label: '人物',
-            children: <CharacterPanel workId={work?.id} />,
-          },
-          {
-            key: 'settings',
-            label: '设定',
-            children: <SettingPanel workId={work?.id} />,
-          },
-          {
-            key: 'plot',
-            label: '情节',
-            children: <PlotCardPanel workId={work?.id} chapters={chapters} />,
-          },
-          {
-            key: 'progress',
-            label: '进度',
-            children: (
-              <ProgressPanel
-                workId={work?.id}
-                work={work}
-                onWorkChanged={() => loadWork(work.id)}
-              />
-            ),
-          },
-          {
-            key: 'check',
-            label: '检查',
-            children: <ConsistencyPanel workId={work?.id} />,
-          },
-          {
-            key: 'work',
-            label: '作品',
-            children: (
-              <WorkInfoPanel
-                work={work}
-                onSaved={() => loadWork(work.id)}
-              />
-            ),
-          },
-          {
-            key: 'inspirations',
-            label: '灵感',
-            children: <InspirationPanel />,
-          },
-        ]}
-      />
-    </>
+    <div className="ct-left-inner">
+      <WorkTree currentWorkId={work?.id} currentChapterId={chapter?.id} />
+      <div className="ct-divider" />
+      <PanelNav activeKey={panelKey} onChange={setPanelKey} />
+      <div className="ct-panel-body ct-panel-enter" key={panelKey}>
+        {panelContent}
+      </div>
+    </div>
   );
 
   if (!workId) {
     return (
-      <div
-        style={{
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 16,
-        }}
-      >
-        <span style={{ fontSize: 40, opacity: 0.3 }}>📖</span>
-        <span style={{ opacity: 0.6 }}>从左侧选一个作品，或新建一个开始写</span>
+      <div className="ct-empty-stage">
+        <span className="ct-empty-mark font-serif" aria-hidden="true">
+          寻
+        </span>
+        <p className="ct-empty-text">从左侧选一个作品，或新建一个开始写</p>
         <Button type="primary" onClick={() => navigate('/works')}>
           查看作品列表
         </Button>
@@ -133,7 +91,7 @@ export default function Workspace() {
 
   if (!work) {
     return (
-      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="ct-empty-stage">
         <Spin size="large" />
       </div>
     );
@@ -141,87 +99,66 @@ export default function Workspace() {
 
   if (isMobile) {
     return (
-      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '8px 12px',
-            borderBottom: '1px solid rgba(128,128,128,0.15)',
-          }}
-        >
-          <Button size="small" onClick={() => setLeftOpen(true)}>
+      <div className="ct-workspace-mobile">
+        <div className="ct-mobile-bar">
+          <Button size="small" icon={<Menu size={14} />} onClick={() => setLeftOpen(true)}>
             目录
           </Button>
-          <span style={{ flex: 1, fontSize: 13, opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span className="ct-mobile-title">
             {work.title}
             {chapter ? ` · ${chapter.title}` : ''}
           </span>
-          <Button size="small" onClick={() => setRightOpen(true)}>
+          <Button size="small" icon={<PanelRight size={14} />} onClick={() => setRightOpen(true)}>
             AI
           </Button>
         </div>
 
-        <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div className="ct-mobile-editor">
           <ChapterEditor />
         </div>
 
-        <Drawer
-          open={leftOpen}
-          onClose={() => setLeftOpen(false)}
-          placement="left"
-          width={280}
-          title="目录"
-        >
-          {leftPanel}
-        </Drawer>
+        <div className="ct-drawer-host" data-open={leftOpen}>
+          <div className="ct-drawer-scrim" onClick={() => setLeftOpen(false)} />
+          <aside className="ct-drawer ct-drawer-left">
+            <div className="ct-drawer-head">
+              <span>目录与资料</span>
+              <Button type="text" size="small" onClick={() => setLeftOpen(false)}>
+                关闭
+              </Button>
+            </div>
+            <div className="ct-drawer-body">{leftPanel}</div>
+          </aside>
+        </div>
 
-        <Drawer
-          open={rightOpen}
-          onClose={() => setRightOpen(false)}
-          placement="right"
-          width={340}
-          title="AI 助手"
-        >
-          <div style={{ height: '100%' }}>
-            <AssistantSidebar />
-          </div>
-        </Drawer>
+        <div className="ct-drawer-host" data-open={rightOpen}>
+          <div className="ct-drawer-scrim" onClick={() => setRightOpen(false)} />
+          <aside className="ct-drawer ct-drawer-right">
+            <div className="ct-drawer-head">
+              <span>AI 助手</span>
+              <Button type="text" size="small" onClick={() => setRightOpen(false)}>
+                关闭
+              </Button>
+            </div>
+            <div className="ct-drawer-body">
+              <AssistantSidebar />
+            </div>
+          </aside>
+        </div>
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        height: '100%',
-        display: 'grid',
-        gridTemplateColumns: '260px minmax(0, 1fr) 340px',
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          borderRight: '1px solid rgba(128,128,128,0.15)',
-          overflowY: 'auto',
-        }}
-      >
-        {leftPanel}
-      </div>
+    <div className="ct-workspace">
+      <aside className="ct-col-left">{leftPanel}</aside>
 
-      <div style={{ overflow: 'hidden', minWidth: 0 }}>
+      <main className="ct-col-center">
         <ChapterEditor />
-      </div>
+      </main>
 
-      <div
-        style={{
-          borderLeft: '1px solid rgba(128,128,128,0.15)',
-          overflow: 'hidden',
-        }}
-      >
+      <aside className="ct-col-right">
         <AssistantSidebar />
-      </div>
+      </aside>
     </div>
   );
 }

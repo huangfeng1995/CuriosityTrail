@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Empty, Spin, Tag, Typography, message, Alert } from 'antd';
+import { Button, Empty, Spin, Typography, message, Alert } from 'antd';
 import { SafetyCertificateOutlined, RobotOutlined } from '@ant-design/icons';
 import api from '../../api/client';
 
@@ -18,13 +18,6 @@ const { Text } = Typography;
  * 先跑规则层看免费的，再决定要不要花钱跑 AI。
  * AI 失败不会废掉规则层的结果。
  */
-
-/** 严重程度对应的颜色 */
-const SEVERITY_COLOR = {
-  high: 'red',
-  medium: 'orange',
-  low: 'default',
-};
 
 const SEVERITY_LABEL = {
   high: '严重',
@@ -79,20 +72,13 @@ export default function ConsistencyPanel({ workId }) {
   }
 
   return (
-    <div style={{ padding: '4px 8px' }}>
-      <div
-        style={{
-          display: 'flex',
-          gap: 6,
-          marginBottom: 10,
-        }}
-      >
+    <div className="ct-panel">
+      <div className="ct-check-actions">
         <Button
           size="small"
           icon={<SafetyCertificateOutlined />}
           loading={loading}
           onClick={runRules}
-          style={{ flex: 1 }}
         >
           规则检查
         </Button>
@@ -101,68 +87,36 @@ export default function ConsistencyPanel({ workId }) {
           icon={<RobotOutlined />}
           loading={aiLoading}
           onClick={runAi}
-          style={{ flex: 1 }}
         >
           AI 深度检查
         </Button>
       </div>
 
-      <div style={{ fontSize: 11, opacity: 0.5, lineHeight: 1.7, marginBottom: 10 }}>
+      <p className="ct-hint">
         规则检查比对人物卡、设定卡与正文，不花钱。AI 深度检查读全书找前后矛盾，会调用模型。
-      </div>
+      </p>
 
       {notices.map((n, i) => (
-        <Alert
-          key={i}
-          type="warning"
-          message={n}
-          style={{ marginBottom: 8, fontSize: 12 }}
-        />
+        <Alert key={i} type="warning" message={n} className="ct-alert" />
       ))}
 
       {loading && !issues && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
+        <div className="ct-loading">
           <Spin size="small" />
         </div>
       )}
 
       {issues && issues.length === 0 && (
-        <div style={{ fontSize: 12, opacity: 0.55, padding: '8px 6px', lineHeight: 1.7 }}>
-          没发现问题。人物卡、设定卡与正文对得上。
-        </div>
+        <p className="ct-hint">没发现问题。人物卡、设定卡与正文对得上。</p>
       )}
 
       {issues?.map((issue, i) => (
-        <div
-          key={i}
-          style={{
-            padding: '7px 8px',
-            marginBottom: 6,
-            borderRadius: 6,
-            background: 'rgba(128,128,128,0.06)',
-            borderLeft: `2px solid ${
-              issue.severity === 'high'
-                ? '#ef4444'
-                : issue.severity === 'medium'
-                ? '#d97706'
-                : 'rgba(128,128,128,0.35)'
-            }`,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-            <span style={{ flex: 1, fontSize: 13, lineHeight: 1.6 }}>{issue.title}</span>
-            <Tag
-              color={SEVERITY_COLOR[issue.severity] || 'default'}
-              style={{ fontSize: 10, lineHeight: '16px', marginRight: 0 }}
-            >
-              {SEVERITY_LABEL[issue.severity] || '一般'}
-            </Tag>
+        <div key={i} className={`ct-issue sev-${issue.severity || 'low'}`}>
+          <div className="ct-issue-head">
+            <span className="ct-issue-title">{issue.title}</span>
+            <span className="ct-badge">{SEVERITY_LABEL[issue.severity] || '一般'}</span>
           </div>
-          {issue.detail && (
-            <div style={{ fontSize: 11, opacity: 0.6, lineHeight: 1.7, marginTop: 3 }}>
-              {issue.detail}
-            </div>
-          )}
+          {issue.detail && <div className="ct-issue-detail">{issue.detail}</div>}
         </div>
       ))}
     </div>

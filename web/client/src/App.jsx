@@ -8,14 +8,7 @@ import {
   Spin,
   App as AntApp,
 } from 'antd';
-import {
-  Sun,
-  Moon,
-  Settings as SettingsIcon,
-  LogOut,
-  Library,
-  Feather,
-} from 'lucide-react';
+import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather } from 'lucide-react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './store/auth';
 import { WorkspaceProvider } from './store/workspace';
@@ -27,53 +20,51 @@ import Materials from './pages/Materials';
 import SettingsPage from './pages/SettingsPage';
 
 const { Header, Content } = Layout;
-const { Title } = Typography;
+const { Text } = Typography;
 
-const scholarlyLightTheme = {
+/**
+ * antd 主题 token。
+ *
+ * 颜色一律引用 theme.css 里的语义变量（CSS 变量能穿透 antd 的主题计算，
+ * 换肤时只改一处）。这里只定义 antd 特有的形状类 token。
+ */
+const baseTheme = {
   token: {
-    colorPrimary: '#3b6ea5',
-    colorPrimaryHover: '#4d80b7',
-    colorPrimaryActive: '#2d5888',
-    colorBgBase: '#fefefe',
-    colorBgContainer: '#ffffff',
-    colorBgElevated: '#ffffff',
-    colorBgLayout: '#f7f8fa',
-    colorText: '#111827',
-    colorTextSecondary: '#6b7280',
-    colorTextPlaceholder: '#9ca3af',
-    colorBorder: '#e5e7eb',
-    colorBorderSecondary: '#f3f4f6',
-    borderRadius: 8,
-    borderRadiusSM: 6,
-    borderRadiusLG: 12,
-    colorSuccess: '#10b981',
-    colorWarning: '#d97706',
-    colorError: '#ef4444',
-    colorInfo: '#3b82f6',
+    fontFamily:
+      "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif",
+    borderRadius: 6,
+    borderRadiusSM: 4,
+    borderRadiusLG: 8,
+    controlHeight: 32,
+    fontSize: 14,
+    wireframe: false,
   },
-};
-
-const scholarlyDarkTheme = {
-  token: {
-    colorPrimary: '#60a5fa',
-    colorPrimaryHover: '#93c5fd',
-    colorPrimaryActive: '#3b82f6',
-    colorBgBase: '#111827',
-    colorBgContainer: '#1f2937',
-    colorBgElevated: '#374151',
-    colorBgLayout: '#0f172a',
-    colorText: '#f9fafb',
-    colorTextSecondary: '#9ca3af',
-    colorTextPlaceholder: '#6b7280',
-    colorBorder: '#374151',
-    colorBorderSecondary: '#1f2937',
-    borderRadius: 8,
-    borderRadiusSM: 6,
-    borderRadiusLG: 12,
-    colorSuccess: '#34d399',
-    colorWarning: '#fbbf24',
-    colorError: '#f87171',
-    colorInfo: '#60a5fa',
+  components: {
+    Layout: {
+      headerBg: 'transparent',
+      bodyBg: 'transparent',
+      headerHeight: 52,
+      headerPadding: '0 16px',
+    },
+    Card: {
+      headerBg: 'transparent',
+    },
+    Tabs: {
+      titleFontSize: 13,
+      horizontalItemPadding: '8px 0',
+      horizontalItemGutter: 18,
+    },
+    Button: {
+      fontWeight: 500,
+      defaultShadow: 'none',
+      primaryShadow: 'none',
+    },
+    Modal: {
+      titleFontSize: 16,
+    },
+    Input: {
+      paddingBlock: 5,
+    },
   },
 };
 
@@ -95,25 +86,22 @@ function AppShell({ isDark, setIsDark }) {
   const isMobile = useIsMobile();
 
   const navItems = [
-    { key: '/works', icon: <Feather size={16} />, label: '作品' },
-    { key: '/materials', icon: <Library size={16} />, label: '素材库' },
-    { key: '/settings', icon: <SettingsIcon size={16} />, label: '设置' },
+    { key: '/works', icon: <Feather size={15} />, label: '作品' },
+    { key: '/materials', icon: <Library size={15} />, label: '素材库' },
+    { key: '/settings', icon: <SettingsIcon size={15} />, label: '设置' },
   ];
 
   // 工作区自己占满整屏，不需要顶部导航
   const isWorkspace = location.pathname.startsWith('/works/');
 
+  useEffect(() => {
+    // 主题写到 html 上，theme.css 里的变量才能切
+    document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+  }, [isDark]);
+
   if (checking) {
     return (
-      <div
-        style={{
-          minHeight: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: isDark ? '#0f172a' : '#f7f8fa',
-        }}
-      >
+      <div className="ct-boot">
         <Spin size="large" />
       </div>
     );
@@ -129,93 +117,62 @@ function AppShell({ isDark, setIsDark }) {
     );
   }
 
+  const active = navItems.find((n) => location.pathname === n.key);
+
   return (
-    <Layout style={{ minHeight: '100vh', background: isDark ? '#0f172a' : '#f7f8fa' }}>
-      <Header
-        style={{
-          padding: '0 20px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          background: isDark ? '#1f2937' : '#ffffff',
-          borderBottom: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-          height: 56,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            cursor: 'pointer',
-            flex: 1,
-            minWidth: 0,
-          }}
-          onClick={() => navigate('/works')}
-        >
-          <span style={{ fontSize: 20 }}>✍️</span>
-          <Title
-            level={4}
-            style={{
-              margin: 0,
-              color: isDark ? '#f9fafb' : '#111827',
-              fontSize: 17,
-              fontWeight: 700,
-              fontFamily: 'Noto Serif SC, serif',
-            }}
-          >
-            {isMobile ? 'CT' : 'Curiosity'}
-          </Title>
+    <Layout style={{ minHeight: '100vh', background: 'var(--bg-layout)' }}>
+      <Header className="ct-topbar">
+        <div className="ct-brand" onClick={() => navigate('/works')}>
+          <span className="ct-brand-mark" aria-hidden="true">
+            寻
+          </span>
+          {!isMobile && (
+            <span className="ct-brand-name font-serif">寻迹</span>
+          )}
         </div>
 
         {!isWorkspace && (
-          <div style={{ display: 'flex', gap: 4 }}>
+          <nav className="ct-nav">
             {navItems.map((item) => (
-              <Button
+              <button
                 key={item.key}
-                type="text"
-                size="small"
-                icon={item.icon}
+                className={`ct-nav-item${location.pathname === item.key ? ' is-active' : ''}`}
                 onClick={() => navigate(item.key)}
-                title={item.label}
-                style={{
-                  color:
-                    location.pathname === item.key
-                      ? isDark
-                        ? '#60a5fa'
-                        : '#3b6ea5'
-                      : isDark
-                        ? '#9ca3af'
-                        : '#6b7280',
-                }}
               >
-                {/* 窄屏只留图标，否则导航会把标题挤掉 */}
-                {!isMobile && item.label}
-              </Button>
+                {item.icon}
+                {!isMobile && <span>{item.label}</span>}
+              </button>
             ))}
-          </div>
+          </nav>
         )}
 
-        <Button
-          type="text"
-          icon={isDark ? <Sun size={16} /> : <Moon size={16} />}
-          onClick={() => setIsDark(!isDark)}
-          style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
-        />
-        <Button
-          type="text"
-          icon={<LogOut size={16} />}
-          onClick={logout}
-          style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
-        />
+        <div className="ct-topbar-right">
+          {active && !isMobile && (
+            <Text className="ct-topbar-current">{active.label}</Text>
+          )}
+          <Button
+            type="text"
+            className="ct-icon-btn"
+            icon={isDark ? <Sun size={16} /> : <Moon size={16} />}
+            onClick={() => setIsDark(!isDark)}
+            title={isDark ? '切到日间' : '切到夜间'}
+          />
+          <Button
+            type="text"
+            className="ct-icon-btn"
+            icon={<LogOut size={16} />}
+            onClick={logout}
+            title="退出登录"
+          />
+        </div>
       </Header>
 
-      <Content style={{ height: 'calc(100vh - 56px)', overflow: 'auto' }}>
+      <Content style={{ height: 'calc(100vh - 52px)', overflow: 'auto' }}>
         <Routes>
           <Route
             path="/works"
             element={
-              <div style={{ padding: isMobile ? '16px 12px' : '28px 24px' }}>
+              <div className="ct-page">
                 <Works />
               </div>
             }
@@ -231,7 +188,7 @@ function AppShell({ isDark, setIsDark }) {
           <Route
             path="/materials"
             element={
-              <div style={{ padding: isMobile ? '16px 12px' : '28px 24px' }}>
+              <div className="ct-page">
                 <Materials />
               </div>
             }
@@ -239,7 +196,7 @@ function AppShell({ isDark, setIsDark }) {
           <Route
             path="/settings"
             element={
-              <div style={{ padding: isMobile ? '16px 12px' : '28px 24px' }}>
+              <div className="ct-page">
                 <SettingsPage />
               </div>
             }
@@ -252,6 +209,7 @@ function AppShell({ isDark, setIsDark }) {
 }
 
 function App() {
+  // 默认宣纸浅色：长时间写作浅底更省眼
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
@@ -265,10 +223,10 @@ function App() {
 
   return (
     <ConfigProvider
-      theme={{
-        algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        ...(isDark ? scholarlyDarkTheme : scholarlyLightTheme),
-      }}
+      // 关掉 antd 的「两字按钮自动插空格」：它会把「保存」渲染成「保 存」，
+      // 中文字体里这个空格让字距突变，视觉上像两个字挤在一起。
+      button={{ autoInsertSpace: false }}
+      theme={{ ...baseTheme, algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}
     >
       <AntApp>
         <BrowserRouter>

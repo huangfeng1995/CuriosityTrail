@@ -82,20 +82,16 @@ export default function WorkTree({ currentWorkId, currentChapterId }) {
   };
 
   return (
-    <div style={{ padding: '10px 8px' }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 4px 8px',
-        }}
-      >
-        <span style={{ fontSize: 12, opacity: 0.6 }}>我的作品</span>
+    <div className="ct-tree">
+      <div className="ct-tree-head">
+        <span className="ct-stat-label" style={{ marginBottom: 0 }}>
+          我的作品
+        </span>
         <Button
           type="text"
           size="small"
           icon={<PlusOutlined />}
+          title="新建作品"
           onClick={() => setCreating(true)}
         />
       </div>
@@ -103,38 +99,21 @@ export default function WorkTree({ currentWorkId, currentChapterId }) {
       {works.map((work) => {
         const expanded = work.id === currentWorkId;
         return (
-          <div key={work.id} style={{ marginBottom: 2 }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 8px',
-                borderRadius: 6,
-                background: expanded ? 'rgba(59,110,165,0.12)' : 'transparent',
-              }}
-            >
-              <BookOutlined style={{ opacity: 0.6, fontSize: 13 }} />
-              <span
+          <div key={work.id} className="ct-tree-node">
+            <div className={`ct-tree-row${expanded ? ' is-active' : ''}`}>
+              <BookOutlined className="ct-tree-icon" />
+              <button
+                type="button"
+                className="ct-tree-label"
                 onClick={() => {
                   navigate(`/works/${work.id}`);
                   loadWork(work.id);
                 }}
-                style={{
-                  flex: 1,
-                  fontSize: 13,
-                  cursor: 'pointer',
-                  fontWeight: expanded ? 600 : 400,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
+                title={work.title}
               >
                 {work.title}
-              </span>
-              <span style={{ fontSize: 11, opacity: 0.45 }}>
-                {work.chapter_count}
-              </span>
+              </button>
+              <span className="ct-tree-count">{work.chapter_count}</span>
               <Dropdown
                 menu={{
                   items: [
@@ -155,7 +134,9 @@ export default function WorkTree({ currentWorkId, currentChapterId }) {
                 }}
                 trigger={['click']}
               >
-                <MoreOutlined style={{ fontSize: 14, opacity: 0.5, cursor: 'pointer' }} />
+                <button type="button" className="ct-item-act" title="更多操作" aria-label="更多操作">
+                  <MoreOutlined />
+                </button>
               </Dropdown>
             </div>
 
@@ -192,34 +173,21 @@ function ChapterList({ workId, currentChapterId }) {
   const list = chapters.filter((c) => c.work_id === workId);
 
   return (
-    <div style={{ paddingLeft: 14 }}>
+    <div className="ct-tree-children">
       {list.map((chapter) => (
         <div
           key={chapter.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '5px 8px',
-            borderRadius: 6,
-            background:
-              chapter.id === currentChapterId ? 'rgba(59,110,165,0.2)' : 'transparent',
-          }}
+          className={`ct-tree-row${chapter.id === currentChapterId ? ' is-active' : ''}`}
         >
-          <FileTextOutlined style={{ opacity: 0.5, fontSize: 12 }} />
-          <span
+          <FileTextOutlined className="ct-tree-icon" />
+          <button
+            type="button"
+            className="ct-tree-label"
             onClick={() => loadChapter(chapter.id)}
-            style={{
-              flex: 1,
-              fontSize: 13,
-              cursor: 'pointer',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
+            title={chapter.title}
           >
             {chapter.title}
-          </span>
+          </button>
           <Dropdown
             menu={{
               items: [
@@ -261,25 +229,25 @@ function ChapterList({ workId, currentChapterId }) {
             }}
             trigger={['click']}
           >
-            <MoreOutlined style={{ fontSize: 12, opacity: 0.45, cursor: 'pointer' }} />
+            <button type="button" className="ct-item-act" title="更多操作" aria-label="更多操作">
+              <MoreOutlined />
+            </button>
           </Dropdown>
         </div>
       ))}
 
-      <Button
-        type="text"
-        size="small"
-        icon={<PlusOutlined />}
-        block
+      <button
+        type="button"
+        className="ct-tree-add"
         onClick={async () => {
           const res = await api.post(`/works/${workId}/chapters`, {});
           await loadWork(workId);
           await loadChapter(res.data.id);
         }}
-        style={{ fontSize: 12, textAlign: 'left', paddingLeft: 8 }}
       >
+        <PlusOutlined />
         新建章节
-      </Button>
+      </button>
     </div>
   );
 }

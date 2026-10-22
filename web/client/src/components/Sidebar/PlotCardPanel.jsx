@@ -1,13 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Button,
   Input,
   Modal,
   Form,
   Select,
   message,
   Empty,
-  Tag,
   Segmented,
   Tooltip,
   Popconfirm,
@@ -35,26 +33,11 @@ const KIND_OPTIONS = [
 
 const KIND_LABEL = Object.fromEntries(KIND_OPTIONS.map((o) => [o.value, o.label]));
 
-/** 类型对应的颜色，让卡片列表一眼能分辨 */
-const KIND_COLOR = {
-  plot: 'blue',
-  character: 'purple',
-  setting: 'cyan',
-  conflict: 'red',
-  foreshadow: 'gold',
-};
-
 const STATUS_OPTIONS = [
   { value: 'todo', label: '待写' },
   { value: 'doing', label: '进行中' },
   { value: 'done', label: '已完成' },
 ];
-
-const STATUS_COLOR = {
-  todo: 'default',
-  doing: 'processing',
-  done: 'success',
-};
 
 export default function PlotCardPanel({ workId, chapters = [] }) {
   const [cards, setCards] = useState([]);
@@ -147,7 +130,7 @@ export default function PlotCardPanel({ workId, chapters = [] }) {
     scope === 'chapter' ? groups : [{ key: '__flat__', title: '全部', cards }];
 
   return (
-    <div style={{ padding: '4px 8px' }}>
+    <div className="ct-panel">
       <Segmented
         size="small"
         block
@@ -157,89 +140,75 @@ export default function PlotCardPanel({ workId, chapters = [] }) {
           { value: 'chapter', label: '按章节' },
           { value: 'all', label: '全部' },
         ]}
-        style={{ marginBottom: 8 }}
+        style={{ marginBottom: 10 }}
       />
 
-      <Button
-        type="text"
-        size="small"
-        icon={<PlusOutlined />}
-        block
-        onClick={() => openEditor(null)}
-        style={{ textAlign: 'left', fontSize: 12, paddingLeft: 4 }}
-      >
+      <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
+        <PlusOutlined />
         新建情节卡
-      </Button>
+      </button>
 
       {shown.map((group) => (
-        <div key={group.key} style={{ marginTop: 6 }}>
-          <div style={{ fontSize: 11, opacity: 0.45, padding: '4px 6px' }}>
+        <div key={group.key}>
+          <div className="ct-group-label">
             {group.title}（{group.cards.length}）
           </div>
           {group.cards.map((card) => (
             <div
               key={card.id}
-              style={{
-                padding: '6px 6px',
-                borderRadius: 6,
-                borderLeft: `2px solid ${
-                  card.status === 'done' ? '#10b981' : 'rgba(128,128,128,0.3)'
-                }`,
-                marginBottom: 4,
-              }}
+              className={`ct-item${
+                card.status === 'done' ? ' is-done' : ' is-pending'
+              }`}
             >
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                <span
-                  onClick={() => openEditor(card)}
-                  style={{ flex: 1, fontSize: 13, cursor: 'pointer', lineHeight: 1.6 }}
-                >
-                  {card.title}
-                  <Tag
-                    color={KIND_COLOR[card.kind] || 'default'}
-                    style={{ marginLeft: 6, fontSize: 10, lineHeight: '16px' }}
-                  >
-                    {KIND_LABEL[card.kind] || '情节'}
-                  </Tag>
-                </span>
+              <button
+                type="button"
+                className="ct-item-main"
+                onClick={() => openEditor(card)}
+                title={`编辑「${card.title}」`}
+              >
+                <span className="ct-item-title">{card.title}</span>
+                <span className="ct-badge">{KIND_LABEL[card.kind] || '情节'}</span>
+                {card.content && <div className="ct-item-note">{card.content}</div>}
+              </button>
+              <div className="ct-item-actions">
                 <Tooltip title="点击切换状态">
-                  <Tag
-                    color={STATUS_COLOR[card.status] || 'default'}
-                    style={{ fontSize: 10, lineHeight: '16px', marginRight: 0, cursor: 'pointer' }}
+                  <button
+                    type="button"
+                    className={`ct-item-act ct-status status-${card.status}`}
                     onClick={() => cycleStatus(card)}
                   >
                     {STATUS_OPTIONS.find((s) => s.value === card.status)?.label || '待写'}
-                  </Tag>
+                  </button>
                 </Tooltip>
-                <EditOutlined
-                  style={{ fontSize: 12, opacity: 0.4, cursor: 'pointer' }}
+                <button
+                  type="button"
+                  className="ct-item-act"
+                  title="编辑"
+                  aria-label={`编辑 ${card.title}`}
                   onClick={() => openEditor(card)}
-                />
+                >
+                  <EditOutlined />
+                </button>
                 <Popconfirm title="删除这张卡片？" onConfirm={() => remove(card)}>
-                  <DeleteOutlined style={{ fontSize: 12, opacity: 0.4, cursor: 'pointer' }} />
+                  <button
+                    type="button"
+                    className="ct-item-act is-danger"
+                    title="删除"
+                    aria-label={`删除 ${card.title}`}
+                  >
+                    <DeleteOutlined />
+                  </button>
                 </Popconfirm>
               </div>
-              {card.content && (
-                <div
-                  style={{
-                    fontSize: 11,
-                    opacity: 0.55,
-                    lineHeight: 1.6,
-                    marginTop: 2,
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  {card.content}
-                </div>
-              )}
             </div>
           ))}
         </div>
       ))}
 
       {cards.length === 0 && (
-        <div style={{ fontSize: 12, opacity: 0.45, padding: '8px 6px', lineHeight: 1.7 }}>
+        <p className="ct-hint">
           还没有情节卡。动笔前先把关键节点列出来，写着写着就不会忘了自己埋过什么。
-        </div>
+        </p>
       )}
 
       <Modal

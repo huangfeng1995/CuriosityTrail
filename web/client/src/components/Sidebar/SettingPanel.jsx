@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Input, Modal, Form, message, Select, Empty } from 'antd';
+import { Input, Modal, Form, message, Select, Empty } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import api from '../../api/client';
 
@@ -71,67 +71,49 @@ export default function SettingPanel({ workId }) {
   }
 
   return (
-    <div style={{ padding: '4px 8px' }}>
-      <Button
-        type="text"
-        size="small"
-        icon={<PlusOutlined />}
-        block
-        onClick={() => openEditor(null)}
-        style={{ textAlign: 'left', fontSize: 12, paddingLeft: 4 }}
-      >
+    <div className="ct-panel">
+      <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
+        <PlusOutlined />
         新建设定
-      </Button>
+      </button>
 
       {settings.map((s) => (
-        <div
-          key={s.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '6px 6px',
-            borderRadius: 6,
-          }}
-        >
-          <span
+        <div key={s.id} className="ct-item">
+          <button
+            type="button"
+            className="ct-item-main"
             onClick={() => openEditor(s)}
-            style={{ flex: 1, fontSize: 13, cursor: 'pointer' }}
+            title={`编辑「${s.name}」`}
           >
-            {s.name}
-            <span style={{ fontSize: 11, opacity: 0.5, marginLeft: 6 }}>
-              {s.category}
-            </span>
-            {s.importance >= 3 && (
-              <span
-                style={{
-                  fontSize: 10,
-                  opacity: 0.6,
-                  marginLeft: 4,
-                  padding: '0 4px',
-                  border: '1px solid currentColor',
-                  borderRadius: 4,
-                }}
-              >
-                常驻
-              </span>
-            )}
-          </span>
-          <EditOutlined
-            style={{ fontSize: 12, opacity: 0.45, cursor: 'pointer' }}
-            onClick={() => openEditor(s)}
-          />
-          <DeleteOutlined
-            style={{ fontSize: 12, opacity: 0.45, cursor: 'pointer' }}
-            onClick={() => remove(s)}
-          />
+            <span className="ct-item-title">{s.name}</span>
+            <span className="ct-item-meta">{s.category}</span>
+            {s.importance >= 3 && <span className="ct-badge">常驻</span>}
+          </button>
+          <div className="ct-item-actions">
+            <button
+              type="button"
+              className="ct-item-act"
+              title="编辑"
+              aria-label={`编辑 ${s.name}`}
+              onClick={() => openEditor(s)}
+            >
+              <EditOutlined />
+            </button>
+            <button
+              type="button"
+              className="ct-item-act is-danger"
+              title="删除"
+              aria-label={`删除 ${s.name}`}
+              onClick={() => remove(s)}
+            >
+              <DeleteOutlined />
+            </button>
+          </div>
         </div>
       ))}
 
       {settings.length === 0 && (
-        <div style={{ fontSize: 12, opacity: 0.45, padding: '8px 6px', lineHeight: 1.7 }}>
-          还没有设定。地理、规则、组织——这些是 AI 不写崩的前提。
-        </div>
+        <p className="ct-hint">还没有设定。地理、规则、组织——这些是 AI 不写崩的前提。</p>
       )}
 
       <Modal

@@ -1,22 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import {
   Tabs,
-  Form,
   Input,
-  InputNumber,
   Select,
-  Switch,
   Button,
   Card,
   message,
-  Tag,
   Space,
   Alert,
   Typography,
   Slider,
   Tooltip,
 } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  SaveOutlined,
+  UndoOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import api from '../api/client';
 import { useIsMobile } from '../hooks/useMediaQuery';
 
@@ -34,15 +36,19 @@ const MODEL_OPTIONS = [
 ];
 
 /**
- * 设置页：AI 供应商配置 + 角色提示词编辑。
+ * 设置页。
+ *
+ * 原本有「AI 供应商」标签页让用户填 API Key。这是部署期的运维动作，
+ * 不是写作期该操心的事——密钥由服务器环境变量提供，所以整页拿掉。
+ * 用户仍然需要知道「AI 现在能不能用」，所以保留一张只读状态卡。
  */
 export default function SettingsPage() {
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
+      <AiStatusCard />
       <Tabs
-        defaultActiveKey="provider"
+        defaultActiveKey="prompts"
         items={[
-          { key: 'provider', label: 'AI 供应商', children: <ProviderConfig /> },
           { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
           { key: 'backup', label: '备份', children: <BackupConfig /> },
         ]}
@@ -51,32 +57,25 @@ export default function SettingsPage() {
   );
 }
 
-function ProviderConfig() {
-  const isMobile = useIsMobile();
-  const [form] = Form.useForm();
+/**
+ * AI 连接状态（只读）。
+ *
+ * 想知道 AI 能不能用、当前跑的是哪个模型、额度还剩多少，
+ * 看这里就够了。改配置是部署的事，不在这里暴露。
+ */
+function AiStatusCard() {
   const [status, setStatus] = useState(null);
-  const [testing, setTesting] = useState('');
-
-  // 深度思考开关开着时，DeepSeek 会忽略温度（官方明确说明），
-  // 所以温度滑块要置灰并说明原因，免得调了没反应还以为坏了。
-  const deepseekThinking = Form.useWatch(['deepseek', 'thinking'], form);
+  const [loading, setLoading] = useState(false);
 
   const load = async () => {
-    try {
-      const res = await api.get('/config/ai');
-      form.setFieldsValue(res.data);
-    } catch (e) {
-      message.error('配置加载失败');
-    }
-    loadStatus();
-  };
-
-  const loadStatus = async () => {
+    setLoading(true);
     try {
       const res = await api.get('/ai/status');
       setStatus(res.data);
     } catch (e) {
       setStatus(null);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -84,246 +83,50 @@ function ProviderConfig() {
     load();
   }, []);
 
-  const save = async (values) => {
-    try {
-      // key 留空表示不改，避免把掩码写回去
-      await api.put('/config/ai', {
-        provider: values.provider,
-        deepseek: {
-          apiKey: values.deepseek?.apiKey || undefined,
-          baseUrl: values.deepseek?.baseUrl,
-          model: values.deepseek?.model,
-          temperature: values.deepseek?.temperature,
-          maxTokens: values.deepseek?.maxTokens,
-          reasoningEffort: values.deepseek?.reasoningEffort,
-          thinking: values.deepseek?.thinking,
-        },
-        openaiCompat: {
-          apiKey: values.openaiCompat?.apiKey || undefined,
-          baseUrl: values.openaiCompat?.baseUrl,
-          model: values.openaiCompat?.model,
-          temperature: values.openaiCompat?.temperature,
-          maxTokens: values.openaiCompat?.maxTokens,
-        },
-        ollama: {
-          baseUrl: values.ollama?.baseUrl,
-          model: values.ollama?.model,
-          temperature: values.ollama?.temperature,
-          maxTokens: values.ollama?.maxTokens,
-        },
-      });
-      message.success('已保存');
-      loadStatus();
-    } catch (e) {
-      message.error(e.response?.data?.error || '保存失败');
-    }
-  };
-
-  const test = async (provider) => {
-    setTesting(provider);
-    try {
-      const res = await api.post('/config/ai/test', { provider });
-      if (res.data.ok) message.success(res.data.detail || '连接正常');
-      else message.warning(res.data.detail || '连接失败');
-    } catch (e) {
-      message.error(e.message);
-    } finally {
-      setTesting('');
-    }
-  };
-
   return (
-    <div>
-      {status && (
-        <Card size="small" style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <Text strong>连接状态</Text>
-            {status.active?.name ? (
-              <Tag color="green">
-                当前使用：{status.active.name}
-                {status.active.degraded ? '（降级）' : ''}
-              </Tag>
-            ) : (
-              <Tag color="red">无可用供应商</Tag>
-            )}
-            <Button size="small" onClick={loadStatus}>
-              刷新
-            </Button>
-          </div>
-          {status.providers?.map((p) => (
-            <div
-              key={p.name}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                fontSize: 13,
-                padding: '3px 0',
-              }}
-            >
-              {p.ok ? (
-                <CheckCircleOutlined style={{ color: '#10b981' }} />
-              ) : (
-                <CloseCircleOutlined style={{ color: '#9ca3af' }} />
-              )}
-              <Text style={{ width: 110 }}>{p.name}</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {p.detail}
-              </Text>
-            </div>
-          ))}
-          {status.active?.reason && !status.active?.name && (
-            <Alert type="warning" message={status.active.reason} style={{ marginTop: 8 }} />
+    <Card size="small" title="AI 状态" style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        {status?.active?.name ? (
+          <Text style={{ color: 'var(--bamboo)', fontWeight: 600 }}>
+            {status.active.name}
+            {status.active.degraded ? '（降级运行）' : ''}
+          </Text>
+        ) : (
+          <Text style={{ color: 'var(--cinnabar)', fontWeight: 600 }}>暂不可用</Text>
+        )}
+        <span style={{ flex: 1 }} />
+        <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={load}>
+          刷新
+        </Button>
+      </div>
+
+      {status?.providers?.map((p) => (
+        <div
+          key={p.name}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 13,
+            padding: '3px 0',
+          }}
+        >
+          {p.ok ? (
+            <CheckCircleOutlined style={{ color: 'var(--bamboo)' }} />
+          ) : (
+            <CloseCircleOutlined style={{ color: 'var(--text-quaternary)' }} />
           )}
-        </Card>
+          <Text style={{ width: 110 }}>{p.name}</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {p.detail}
+          </Text>
+        </div>
+      ))}
+
+      {status?.active?.reason && !status?.active?.name && (
+        <Alert type="warning" message={status.active.reason} style={{ marginTop: 8 }} />
       )}
-
-      <Card size="small" title="AI 供应商">
-        <Form form={form} layout="vertical" size="small" onFinish={save}>
-          <Form.Item
-            name="provider"
-            label="默认供应商"
-            help="首选不可用时平台会自动降级到其他已配置的供应商。"
-          >
-            <Select
-              options={[
-                { value: 'deepseek', label: 'DeepSeek' },
-                { value: 'openaiCompat', label: '其他 OpenAI 兼容服务' },
-                { value: 'ollama', label: '本地 Ollama' },
-              ]}
-            />
-          </Form.Item>
-
-          <Form.Item label="DeepSeek">
-            <div style={{ border: '1px solid rgba(128,128,128,0.2)', borderRadius: 8, padding: 12 }}>
-              <Form.Item name={['deepseek', 'apiKey']} label="API Key" help="留空表示不修改已保存的 Key。">
-                <Input.Password placeholder="sk-…" autoComplete="off" />
-              </Form.Item>
-              <Form.Item name={['deepseek', 'baseUrl']} label="接口地址">
-                <Input />
-              </Form.Item>
-              <Form.Item name={['deepseek', 'model']} label="模型">
-                <Select options={MODEL_OPTIONS} />
-              </Form.Item>
-              <Space size={16} wrap>
-                <Form.Item
-                  name={['deepseek', 'temperature']}
-                  label="温度"
-                  style={{ marginBottom: 0 }}
-                  help={
-                    deepseekThinking
-                      ? '深度思考开启时温度不生效（DeepSeek 官方限制）'
-                      : undefined
-                  }
-                >
-                  <Slider
-                    min={0}
-                    max={1.5}
-                    step={0.05}
-                    disabled={deepseekThinking}
-                    style={{ width: isMobile ? '100%' : 140 }}
-                  />
-                </Form.Item>
-                <Form.Item name={['deepseek', 'maxTokens']} label="最大输出" style={{ marginBottom: 0 }}>
-                  <InputNumber min={1024} max={32768} step={1024} />
-                </Form.Item>
-                <Form.Item name={['deepseek', 'reasoningEffort']} label="思考档位" style={{ marginBottom: 0 }}>
-                  <Select
-                    style={{ width: 100 }}
-                    disabled={!deepseekThinking}
-                    options={[
-                      { value: 'high', label: '高' },
-                      { value: 'max', label: '最高' },
-                    ]}
-                  />
-                </Form.Item>
-              </Space>
-              <div style={{ marginTop: 12 }}>
-                <Form.Item
-                  name={['deepseek', 'thinking']}
-                  label="深度思考"
-                  valuePropName="checked"
-                  help="开启后模型先推理再作答，更准但更慢也更贵。注意：此时温度不生效。日常写作建议关闭。"
-                  style={{ marginBottom: 0 }}
-                >
-                  <Switch />
-                </Form.Item>
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <Button size="small" loading={testing === 'deepseek'} onClick={() => test('deepseek')}>
-                  测试连接
-                </Button>
-              </div>
-            </div>
-          </Form.Item>
-
-          <Form.Item label="其他 OpenAI 兼容服务（兜底）">
-            <div style={{ border: '1px solid rgba(128,128,128,0.2)', borderRadius: 8, padding: 12 }}>
-              <Form.Item name={['openaiCompat', 'baseUrl']} label="接口地址">
-                <Input placeholder="https://api.example.com/v1" />
-              </Form.Item>
-              <Form.Item name={['openaiCompat', 'apiKey']} label="API Key">
-                <Input.Password autoComplete="off" />
-              </Form.Item>
-              <Form.Item name={['openaiCompat', 'model']} label="模型">
-                <Input placeholder="gpt-4o-mini" />
-              </Form.Item>
-              <Space size={16} wrap>
-                <Form.Item name={['openaiCompat', 'temperature']} label="温度" style={{ marginBottom: 0 }}>
-                  <Slider
-                    min={0}
-                    max={1.5}
-                    step={0.05}
-                    style={{ width: isMobile ? '100%' : 140 }}
-                  />
-                </Form.Item>
-                <Form.Item name={['openaiCompat', 'maxTokens']} label="最大输出" style={{ marginBottom: 0 }}>
-                  <InputNumber min={1024} max={32768} step={1024} />
-                </Form.Item>
-              </Space>
-              <div style={{ marginTop: 12 }}>
-                <Button size="small" loading={testing === 'openaiCompat'} onClick={() => test('openaiCompat')}>
-                  测试连接
-                </Button>
-              </div>
-            </div>
-          </Form.Item>
-
-          <Form.Item label="本地 Ollama（离线兜底）">
-            <div style={{ border: '1px solid rgba(128,128,128,0.2)', borderRadius: 8, padding: 12 }}>
-              <Form.Item name={['ollama', 'baseUrl']} label="地址">
-                <Input />
-              </Form.Item>
-              <Form.Item name={['ollama', 'model']} label="模型">
-                <Input placeholder="qwen2.5:7b" />
-              </Form.Item>
-              <Space size={16} wrap>
-                <Form.Item name={['ollama', 'temperature']} label="温度" style={{ marginBottom: 0 }}>
-                  <Slider
-                    min={0}
-                    max={1.5}
-                    step={0.05}
-                    style={{ width: isMobile ? '100%' : 140 }}
-                  />
-                </Form.Item>
-                <Form.Item name={['ollama', 'maxTokens']} label="最大输出" style={{ marginBottom: 0 }}>
-                  <InputNumber min={1024} max={32768} step={1024} />
-                </Form.Item>
-              </Space>
-              <div style={{ marginTop: 12 }}>
-                <Button size="small" loading={testing === 'ollama'} onClick={() => test('ollama')}>
-                  测试连接
-                </Button>
-              </div>
-            </div>
-          </Form.Item>
-
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存配置
-          </Button>
-        </Form>
-      </Card>
-    </div>
+    </Card>
   );
 }
 
@@ -415,17 +218,20 @@ function PromptConfig() {
 
   return (
     <Card size="small">
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+      <div className="ct-role-picker">
         {roles.map((r) => (
-          <Button
+          <button
             key={r.key}
-            size="small"
-            type={r.key === activeKey ? 'primary' : 'default'}
+            type="button"
+            className={`ct-role-pick${r.key === activeKey ? ' is-active' : ''}`}
             onClick={() => select(r.key)}
           >
-            {r.icon} {r.name}
-            {r.overridden ? ' ·已改' : ''}
-          </Button>
+            <span className="ct-role-pick-icon" aria-hidden="true">
+              {r.icon}
+            </span>
+            <span className="ct-role-pick-name">{r.name}</span>
+            {r.overridden ? <span className="ct-role-pick-dot" title="已自定义" /> : null}
+          </button>
         ))}
       </div>
 
@@ -435,66 +241,58 @@ function PromptConfig() {
         </Paragraph>
       )}
 
-      <Space size={16} wrap style={{ marginBottom: 12 }}>
-        <div>
-          <Text style={{ fontSize: 13 }}>
+      <div className="ct-params">
+        <div className="ct-param">
+          <div className="ct-param-label">
             温度 {followGlobalTemp ? '（跟随全局）' : temperature.toFixed(2)}
-          </Text>
-          <div>
-            <Tooltip
-              title={
-                temperatureDead
-                  ? 'DeepSeek 思考模式下温度不生效（官方限制）。关闭深度思考后温度才会起作用。'
-                  : ''
-              }
-            >
-              <Slider
-                min={0}
-                max={1.5}
-                step={0.05}
-                value={temperature}
-                disabled={followGlobalTemp || temperatureDead}
-                onChange={setTemperature}
-                style={{ margin: 0, width: isMobile ? '100%' : 180 }}
-              />
-            </Tooltip>
           </div>
+          <Tooltip
+            title={
+              temperatureDead
+                ? 'DeepSeek 思考模式下温度不生效（官方限制）。关闭深度思考后温度才会起作用。'
+                : ''
+            }
+          >
+            <Slider
+              min={0}
+              max={1.5}
+              step={0.05}
+              value={temperature}
+              disabled={followGlobalTemp || temperatureDead}
+              onChange={setTemperature}
+              style={{ margin: 0, width: '100%' }}
+            />
+          </Tooltip>
         </div>
 
-        <div>
-          <Text style={{ fontSize: 13 }}>模型</Text>
-          <div>
-            <Select
-              value={model || '__inherit__'}
-              onChange={(v) => setModel(v === '__inherit__' ? '' : v)}
-              options={[
-                { value: '__inherit__', label: '跟随全局设置' },
-                ...MODEL_OPTIONS,
-              ]}
-              style={{ width: isMobile ? '100%' : 240 }}
-            />
-          </div>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            实际使用：{effectiveModel}
-          </Text>
+        <div className="ct-param">
+          <div className="ct-param-label">模型</div>
+          <Select
+            value={model || '__inherit__'}
+            onChange={(v) => setModel(v === '__inherit__' ? '' : v)}
+            options={[
+              { value: '__inherit__', label: '跟随全局设置' },
+              ...MODEL_OPTIONS,
+            ]}
+            style={{ width: '100%' }}
+          />
+          <div className="ct-param-hint">实际使用：{effectiveModel || '未指定'}</div>
         </div>
 
-        <div>
-          <Text style={{ fontSize: 13 }}>深度思考</Text>
-          <div>
-            <Select
-              value={thinking}
-              onChange={setThinking}
-              options={[
-                { value: 'inherit', label: '跟随全局设置' },
-                { value: 'on', label: '开启' },
-                { value: 'off', label: '关闭' },
-              ]}
-              style={{ width: isMobile ? '100%' : 140 }}
-            />
-          </div>
+        <div className="ct-param">
+          <div className="ct-param-label">深度思考</div>
+          <Select
+            value={thinking}
+            onChange={setThinking}
+            options={[
+              { value: 'inherit', label: '跟随全局设置' },
+              { value: 'on', label: '开启' },
+              { value: 'off', label: '关闭' },
+            ]}
+            style={{ width: '100%' }}
+          />
         </div>
-      </Space>
+      </div>
 
       {temperatureDead && (
         <Alert
@@ -507,7 +305,7 @@ function PromptConfig() {
       )}
 
       <Space size={16} wrap style={{ marginBottom: 12 }}>
-        <Tooltip title="勾上则用「AI 供应商」里设的全局温度，不单独指定">
+        <Tooltip title="勾上则用服务端配置的全局温度，不单独指定">
           <label style={{ fontSize: 13 }}>
             <input
               type="checkbox"
@@ -615,7 +413,7 @@ function BackupConfig() {
                 flexWrap: 'wrap',
                 gap: 8,
                 padding: '5px 0',
-                borderBottom: '1px solid rgba(128,128,128,0.1)',
+                borderBottom: '1px solid var(--border-faint)',
               }}
             >
               <Text style={{ flex: 1, minWidth: 0, wordBreak: 'break-all' }}>{b.name}</Text>

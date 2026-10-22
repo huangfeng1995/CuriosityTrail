@@ -769,10 +769,11 @@ web/client/src/
 │   ├── Works.jsx           作品列表页（新增）
 │   ├── Workspace.jsx       三栏工作区（新增）
 │   ├── Materials.jsx       素材库页（新增）
-│   └── SettingsPage.jsx    设置页：AI 供应商 / 角色提示词 / 备份（新增）
+│   └── SettingsPage.jsx    设置页：AI 状态 / 角色提示词 / 备份（新增）
 ├── components/
 │   ├── Sidebar/
 │   │   ├── WorkTree.jsx       作品章节树
+│   │   ├── PanelNav.jsx       左栏 7 个资料面板的纵向分段导航（新增，见 §5.4）
 │   │   ├── CharacterPanel.jsx 人物卡列表 + 编辑抽屉
 │   │   ├── SettingPanel.jsx   设定列表 + 编辑抽屉
 │   │   ├── WorkInfoPanel.jsx  作品信息（题材/简介/大纲）
@@ -794,11 +795,13 @@ web/client/src/
 │   │   ├── ActionCard.jsx     结构化输出卡片（comment 类）
 │   │   └── CitationBadge.jsx  来源角标
 │   └── ExportButton.jsx    导出格式下拉（Word / Markdown / 纯文本）
+├── styles/
+│   └── theme.css          「墨·书房」设计系统：语义色变量 + 全部组件样式（新增，见 §5.4）
 └── utils/
     └── wordCount.js        字数统计，与服务端 services/wordCount.js 同口径（新增）
 ```
 
-**设置页没有拆成 `components/Settings/`**：三个标签页（AI 供应商、角色提示词、备份）逻辑上都只服务于设置页，拆成独立目录反而要跨目录传状态，所以留在 `pages/SettingsPage.jsx` 内部组件里。
+**设置页没有拆成 `components/Settings/`**：三个标签页（AI 状态、角色提示词、备份）逻辑上都只服务于设置页，拆成独立目录反而要跨目录传状态，所以留在 `pages/SettingsPage.jsx` 内部组件里。
 
 **整个删除**：`KnowledgeGraph.jsx`、`TranslationModal.jsx`、`DocumentTranslationModal.jsx`、`TranslationSettings.jsx`、`AIConfig.jsx`、`SearchBar.jsx`、`Documents.jsx`、`Settings.jsx`、`Reports.jsx`、`AgentAssistant.jsx`。
 
@@ -846,6 +849,53 @@ web/client/src/
 | 口语化 | selection | 把书面语改自然 |
 
 实现：监听编辑器 `selectionchange`，有非空选区时在选区矩形上方定位浮层。点击动作 → `POST /api/ai/inline` → 收到 `replace`/`append` 后原位更新块 → 展示"撤销"提示。
+
+### 5.4 「墨·书房」设计系统（2026-10 落地）
+
+在功能跑通之后做的一轮整体换肤。目标不是好看，是**长时间写作不累**，以及**功能一个都不能藏**。
+
+#### 5.4.1 语义色变量
+
+所有颜色收敛到 `web/client/src/styles/theme.css` 的 CSS 变量，组件里一律不写死色值：
+
+| 组 | 变量 | 浅色（宣纸） | 深色（暮墨） |
+|---|---|---|---|
+| 底色 | `--bg-base` / `--bg-layout` / `--bg-container` / `--bg-elevated` / `--bg-hover` / `--bg-sunken` | 米白纸色系 | 暖调深褐（非死黑） |
+| 文字 | `--text-primary` / `--text-secondary` / `--text-tertiary` / `--text-quaternary` | 墨黑渐淡 | 宣纸白渐淡 |
+| 描边 | `--border` / `--border-strong` / `--border-faint` | 淡墨线 | 暖褐线 |
+| 主色 | `--accent`（朱砂）/`--gold`/`--bamboo`/`--amber` | 朱砂红为主 | 提亮一档 |
+
+深色主题通过 `html[data-theme='dark']` 覆盖同名变量实现。**深色刻意不做得更黑**：底色带暖调（深褐而非纯黑），长时间看不容易被冷色硬光刺眼。
+
+antd 组件的颜色全部映射到这些变量（`App.jsx` 的 `baseTheme`），组件内部浅色硬编码的部分再用 `.ant-*` 覆盖层兜底。换肤只改 theme.css 一处。
+
+#### 5.4.2 三个关键决策
+
+**决策一：删除「AI 供应商」设置页。** 供应商配置属于部署参数，不是作者要每天面对的东西。页面删除，改成设置页里的只读「AI 状态」卡：显示 deepseek 是否已连接、openAICompat 是否未配置、ollama 的 HTTP 状态。看得见状态、但改不了配置。
+
+**决策二：左栏 7 个面板改用自研 `PanelNav`，不用 antd Tabs。** 原来 7 个面板用 antd Tabs 承载，左栏只有 288px 宽，Tabs 溢出后 antd 会把「检查/作品/灵感」塞进「更多」下拉里——**功能就这么被藏起来了**，用户根本不知道它们存在。`PanelNav` 改成一行 7 个图标+文字（每个 38px），全部露出，一眼扫完。右栏 5 个 AI 角色同理，从 `overflow-x: auto` 的横排改成 5 列 grid。
+
+**决策三：两字按钮关掉 antd 的自动插空格。** antd 默认会把「保存」渲染成「保 存」（`antd/lib/button/buttonHelpers.js` 的 `splitCNCharsBySpace`），中文字体里这个空格让字距突变，视觉上像两个字挤在一起。用 `ConfigProvider button={{ autoInsertSpace: false }}` 关掉。
+
+#### 5.4.3 class 驱动的换肤方式
+
+原代码大量用内联 `style={{}}` 写死颜色。换肤时统一改成语义化 class（`.ct-item`、`.ct-badge`、`.ct-issue.sev-high`、`.ct-tree-row`、`.ct-chapter-row`、`.ct-role-tab`、`.ct-params` 等），样式全部落在 theme.css。
+
+换完后跑了一轮语义错配排查：把 JSX 里引用的 `ct-*` 类和 theme.css 里定义的类做差集，找出定义了但没用上的、以及引用了但没定义的（后者会导致样式静默失效）。同时排查了三类错配——`color` 误用背景变量、`background` 误用文字变量、剩余硬编码色值。
+
+#### 5.4.4 过渡动效
+
+动效基调是「顺缓」，统一用 `cubic-bezier(0.22, 1, 0.36, 1)`：
+
+| 场景 | 实现 |
+|---|---|
+| 左栏面板切换 | `.ct-panel-enter` 淡入 + 上移 4px（260ms） |
+| 右栏换角色 | 建议气泡整组 `.ct-suggest-in` 淡入上移（240ms） |
+| AI 消息上屏 | `.ct-msg-in` 淡入 + 上移 8px（280ms） |
+| 浮层弹出 | `.ct-pop-in` 淡入 + 轻微放大（160ms） |
+| 角色 tab 切换 | 底部朱砂线 `scaleX` 横向展开（240ms），像笔锋划过 |
+
+另外修了右栏和设置页的两处布局事故：设置页的温度/模型/深度思考三块原来用 antd `Space` 并排，基线不齐导致「实际使用」那行文字串到温度滑块上，改成 `.ct-params` grid 每块独占一行。
 
 ---
 
@@ -1075,6 +1125,9 @@ web/client/src/
 | 8 | 登录密码 | 实施时生成 192 位随机串（`crypto.randomBytes(24)`），单独告知用户，不写入任何文件或 Git |
 | 9 | 全局默认开不开深度思考 | **默认关闭**。官方文档明确思考模式下 `temperature` 完全不生效，开着思考等于把温度调参变成摆设；默认走非思考模式，快、便宜、温度真起作用。审稿人这类需要推理的角色在角色级单独开启 |
 | 10 | 角色参数如何分配 | **创作靠温度、分析靠思考**。写手 0.85 / 编辑 0.60 / 灵感师 0.95 / 资料员 0.30 走非思考模式；审稿人走 `deepseek-v4-pro` + 思考，放弃温度控制换推理深度 |
+| 11 | 「AI 供应商」是否暴露给用户 | **删除该设置页**。供应商配置属于部署参数，改成设置页里的只读「AI 状态」卡（见 §5.4.2） |
+| 12 | 界面风格方向 | **墨·书房**。浅色宣纸为主调（长时间写作浅底省眼），深色为暖调「暮墨」备用，不做纯黑 |
+| 13 | 7 个左栏面板用 antd Tabs 还是自研 | **自研 `PanelNav`**。antd Tabs 溢出后会把面板藏进「更多」下拉，功能等于不存在（见 §5.4.2） |
 
 ---
 

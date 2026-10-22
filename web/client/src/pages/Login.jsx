@@ -4,7 +4,7 @@ import { LockOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 /**
  * 登录页。
@@ -37,63 +37,15 @@ export default function Login({ isDark = false }) {
     }
   };
 
-  const bg = isDark ? '#0f172a' : '#f8f9fa';
-  const card = isDark ? '#1f2937' : '#ffffff';
-  const border = isDark ? '#374151' : '#e5e7eb';
-  const primary = isDark ? '#60a5fa' : '#1e3a5f';
-
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: bg,
-        padding: 16,
-      }}
-    >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 400,
-          background: card,
-          borderRadius: 12,
-          border: `1px solid ${border}`,
-          padding: '40px 32px',
-          boxShadow: isDark
-            ? '0 8px 24px rgba(0,0,0,0.4)'
-            : '0 4px 16px rgba(0,0,0,0.06)',
-        }}
-      >
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div
-            style={{
-              width: 52,
-              height: 52,
-              borderRadius: 14,
-              background: isDark ? '#1e3a5f' : '#eef2ff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: '0 auto 16px',
-            }}
-          >
-            <span style={{ fontSize: 26 }}>✍️</span>
-          </div>
-          <Title
-            level={3}
-            style={{
-              margin: 0,
-              color: isDark ? '#f9fafb' : '#111827',
-              fontFamily: 'Noto Serif SC, serif',
-            }}
-          >
-            Curiosity
-          </Title>
-          <Text style={{ color: isDark ? '#9ca3af' : '#6b7280', fontSize: 13 }}>
-            AI 辅助小说创作平台
-          </Text>
+    <div className="ct-login">
+      <div className="ct-login-card ct-fade-in">
+        <div className="ct-login-head">
+          <span className="ct-login-mark" aria-hidden="true">
+            寻
+          </span>
+          <h1 className="ct-login-title font-serif">寻迹</h1>
+          <p className="ct-login-sub">Curiosity Trail · AI 辅助小说创作</p>
         </div>
 
         {error && (
@@ -109,6 +61,7 @@ export default function Login({ isDark = false }) {
           <Form.Item
             name="password"
             rules={[{ required: true, message: '请输入密码' }]}
+            style={{ marginBottom: 16 }}
           >
             <Input.Password
               size="large"
@@ -118,21 +71,16 @@ export default function Login({ isDark = false }) {
             />
           </Form.Item>
 
-          <Form.Item name="remember" valuePropName="checked" style={{ marginBottom: 20 }}>
+          <Form.Item name="remember" valuePropName="checked" style={{ marginBottom: 22 }}>
             <Checkbox>在此设备上保持登录（90 天）</Checkbox>
           </Form.Item>
 
-          <Button
-            type="primary"
-            htmlType="submit"
-            size="large"
-            block
-            loading={loading}
-            style={{ background: primary, borderColor: primary }}
-          >
-            登录
+          <Button type="primary" htmlType="submit" size="large" block loading={loading}>
+            进入书房
           </Button>
         </Form>
+
+        <Text className="ct-login-foot">全部稿件只保存在你自己的服务器上</Text>
       </div>
     </div>
   );

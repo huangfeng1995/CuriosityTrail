@@ -3,39 +3,29 @@ import { Tooltip } from 'antd';
 
 /**
  * 五个 AI 角色的切换标签。
+ *
+ * 之前激活态用 role.color 当背景配白字，那套颜色是后端给的固定色，
+ * 和主题的墨/朱砂体系完全打架。这里统一走主题色，只用角色图标做区分。
  */
 export default function RoleTabs({ roles, activeKey, onChange }) {
   if (!roles?.length) return null;
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 4,
-        padding: '8px 10px',
-        borderBottom: '1px solid rgba(128,128,128,0.15)',
-        overflowX: 'auto',
-      }}
-    >
+    <div className="ct-role-tabs" role="tablist" aria-label="AI 角色">
       {roles.map((role) => {
         const active = role.key === activeKey;
         return (
           <Tooltip key={role.key} title={role.description}>
             <button
+              role="tab"
+              aria-selected={active}
               onClick={() => onChange(role.key)}
-              style={{
-                border: active ? '1px solid transparent' : '1px solid rgba(128,128,128,0.25)',
-                background: active ? role.color : 'transparent',
-                color: active ? '#fff' : 'inherit',
-                borderRadius: 16,
-                padding: '4px 12px',
-                fontSize: 13,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                opacity: active ? 1 : 0.7,
-              }}
+              className={`ct-role-tab${active ? ' is-active' : ''}`}
             >
-              {role.icon} {role.name}
+              <span className="ct-role-icon" aria-hidden="true">
+                {role.icon}
+              </span>
+              <span className="ct-role-name">{role.name}</span>
             </button>
           </Tooltip>
         );

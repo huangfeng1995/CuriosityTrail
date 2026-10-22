@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Input, Modal, Form, message, Empty } from 'antd';
+import { Input, Modal, Form, message, Empty } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import api from '../../api/client';
 
@@ -79,53 +79,48 @@ export default function CharacterPanel({ workId }) {
   }
 
   return (
-    <div style={{ padding: '4px 8px' }}>
-      <Button
-        type="text"
-        size="small"
-        icon={<PlusOutlined />}
-        block
-        onClick={() => openEditor(null)}
-        style={{ textAlign: 'left', fontSize: 12, paddingLeft: 4 }}
-      >
+    <div className="ct-panel">
+      <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
+        <PlusOutlined />
         新建人物卡
-      </Button>
+      </button>
 
       {characters.map((c) => (
-        <div
-          key={c.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '6px 6px',
-            borderRadius: 6,
-          }}
-        >
-          <span
+        <div key={c.id} className="ct-item">
+          <button
+            type="button"
+            className="ct-item-main"
             onClick={() => openEditor(c)}
-            style={{ flex: 1, fontSize: 13, cursor: 'pointer' }}
+            title={`编辑「${c.name}」`}
           >
-            {c.name}
-            {c.role && (
-              <span style={{ fontSize: 11, opacity: 0.5, marginLeft: 6 }}>{c.role}</span>
-            )}
-          </span>
-          <EditOutlined
-            style={{ fontSize: 12, opacity: 0.45, cursor: 'pointer' }}
-            onClick={() => openEditor(c)}
-          />
-          <DeleteOutlined
-            style={{ fontSize: 12, opacity: 0.45, cursor: 'pointer' }}
-            onClick={() => remove(c)}
-          />
+            <span className="ct-item-title">{c.name}</span>
+            {c.role && <span className="ct-item-meta">{c.role}</span>}
+          </button>
+          <div className="ct-item-actions">
+            <button
+              type="button"
+              className="ct-item-act"
+              title="编辑"
+              aria-label={`编辑 ${c.name}`}
+              onClick={() => openEditor(c)}
+            >
+              <EditOutlined />
+            </button>
+            <button
+              type="button"
+              className="ct-item-act is-danger"
+              title="删除"
+              aria-label={`删除 ${c.name}`}
+              onClick={() => remove(c)}
+            >
+              <DeleteOutlined />
+            </button>
+          </div>
         </div>
       ))}
 
       {characters.length === 0 && (
-        <div style={{ fontSize: 12, opacity: 0.45, padding: '8px 6px', lineHeight: 1.7 }}>
-          还没有人物卡。AI 写对白时靠它区分说话人。
-        </div>
+        <p className="ct-hint">还没有人物卡。AI 写对白时靠它区分说话人。</p>
       )}
 
       <Modal

@@ -11,7 +11,6 @@ import {
   Typography,
   Popconfirm,
   Drawer,
-  Tag,
   Spin,
 } from 'antd';
 import {
@@ -264,43 +263,20 @@ export default function Materials() {
             >
               <List.Item.Meta
                 title={
-                  <span>
+                  <span className="ct-material-title">
                     {item.title}
-                    <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-                      {item.source}
-                    </Text>
+                    <span className="ct-material-source">{item.source}</span>
                   </span>
                 }
                 description={
                   <div>
                     {hits ? (
                       // 检索模式：只展示命中片段
-                      <div
-                        style={{
-                          fontSize: 13,
-                          lineHeight: 1.8,
-                          background: 'rgba(59,110,165,0.06)',
-                          padding: '6px 10px',
-                          borderRadius: 6,
-                        }}
-                      >
-                        {item.snippet || '（正文为空）'}
-                      </div>
+                      <div className="ct-material-snippet">{item.snippet || '（正文为空）'}</div>
                     ) : (
-                      <div
-                        style={{
-                          fontSize: 13,
-                          opacity: 0.75,
-                          lineHeight: 1.7,
-                          maxHeight: 90,
-                          overflow: 'hidden',
-                          whiteSpace: 'pre-wrap',
-                        }}
-                      >
-                        {item.preview || '（无正文）'}
-                      </div>
+                      <div className="ct-material-preview">{item.preview || '（无正文）'}</div>
                     )}
-                    <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4 }}>
+                    <div className="ct-material-meta">
                       {item.char_count || 0} 字
                       {item.page_count ? ` · ${item.page_count} 页` : ''}
                       {item.tags ? ` · ${item.tags}` : ''}
@@ -319,18 +295,14 @@ export default function Materials() {
           <span>
             <AimOutlined style={{ marginRight: 8 }} />
             引用出处
-            {locate?.page ? (
-              <Tag color="blue" style={{ marginLeft: 8 }}>
-                第 {locate.page} 页
-              </Tag>
-            ) : null}
+            {locate?.page ? <span className="ct-badge">第 {locate.page} 页</span> : null}
           </span>
         }
         width={620}
         onClose={() => setLocate(null)}
       >
         {locateLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}>
+          <div className="ct-loading">
             <Spin />
           </div>
         ) : locate?.found ? (
@@ -338,21 +310,12 @@ export default function Materials() {
             <Text type="secondary" style={{ fontSize: 12 }}>
               在《{locate.title}》中定位到：
             </Text>
-            <div
-              style={{
-                marginTop: 10,
-                padding: '12px 14px',
-                borderRadius: 8,
-                background: 'rgba(128,128,128,0.06)',
-                fontSize: 14,
-                lineHeight: 1.9,
-                fontFamily: 'Noto Serif SC, serif',
-              }}
-            >
+            <div className="ct-locate-body">
               {locate.before && <span style={{ opacity: 0.55 }}>{locate.before}</span>}
               <mark
                 style={{
-                  background: 'rgba(250, 204, 21, 0.45)',
+                  background: 'var(--mark-bg)',
+                  color: 'var(--mark-text)',
                   padding: '1px 2px',
                   borderRadius: 2,
                 }}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Empty, Input, message, Spin, Modal } from 'antd';
+import { Button, Empty, Input, message, Spin, Modal } from 'antd';
 import { PlusOutlined, BookOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
@@ -54,21 +54,11 @@ export default function Works() {
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto' }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 12,
-          marginBottom: 24,
-        }}
-      >
+    <div style={{ maxWidth: 980, margin: '0 auto' }}>
+      <div className="ct-page-head">
         <div>
-          <h2 style={{ margin: 0, fontFamily: 'Noto Serif SC, serif' }}>我的作品</h2>
-          <div style={{ fontSize: 13, opacity: 0.6, marginTop: 4 }}>
-            选择一部作品开始写作
-          </div>
+          <h2 className="ct-page-title font-serif">我的作品</h2>
+          <p className="ct-page-sub">选择一部作品开始写作</p>
         </div>
         <span style={{ flex: 1 }} />
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
@@ -77,62 +67,50 @@ export default function Works() {
       </div>
 
       {works.length === 0 ? (
-        <Empty description="还没有作品。点右上角新建一个。" />
+        <div className="ct-empty-stage" style={{ height: 'auto', paddingTop: 72 }}>
+          <span className="ct-empty-mark font-serif" aria-hidden="true">
+            寻
+          </span>
+          <p className="ct-empty-text">还没有作品。点右上角新建一个，开始你的第一本书。</p>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
+            新建作品
+          </Button>
+        </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: isMobile
-              ? '1fr'
-              : 'repeat(auto-fill, minmax(260px, 1fr))',
-            gap: 16,
-          }}
-        >
+        <div className="ct-shelf">
           {works.map((work) => (
-            <Card
+            <article
               key={work.id}
-              hoverable
+              className="ct-book"
               onClick={() => navigate(`/works/${work.id}`)}
-              styles={{ body: { padding: 18 } }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  navigate(`/works/${work.id}`);
+                }
+              }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                <BookOutlined style={{ fontSize: 18, opacity: 0.5 }} />
-                <span style={{ fontSize: 16, fontWeight: 600, fontFamily: 'Noto Serif SC, serif' }}>
-                  {work.title}
-                </span>
-              </div>
-              {work.synopsis && (
-                <div
-                  style={{
-                    fontSize: 13,
-                    opacity: 0.7,
-                    lineHeight: 1.7,
-                    marginBottom: 10,
-                    display: '-webkit-box',
-                    WebkitLineClamp: 3,
-                    WebkitBoxOrient: 'vertical',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {work.synopsis}
+              {/* 书脊 */}
+              <span className="ct-book-spine" aria-hidden="true" />
+
+              <div className="ct-book-body">
+                <div className="ct-book-title font-serif">{work.title}</div>
+                {work.synopsis && (
+                  <p className="ct-book-synopsis">{work.synopsis}</p>
+                )}
+                <div className="ct-book-meta">
+                  <BookOutlined aria-hidden="true" />
+                  <span>{work.chapter_count} 章</span>
+                  {work.genre && <span>· {work.genre}</span>}
+                  <span style={{ flex: 1 }} />
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <ExportButton scope="work" id={work.id} size="small" />
+                  </span>
                 </div>
-              )}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  fontSize: 12,
-                  opacity: 0.5,
-                }}
-              >
-                {work.chapter_count} 章
-                {work.genre ? ` · ${work.genre}` : ''}
-                <span style={{ flex: 1 }} />
-                <span onClick={(e) => e.stopPropagation()}>
-                  <ExportButton scope="work" id={work.id} size="small" />
-                </span>
               </div>
-            </Card>
+            </article>
           ))}
         </div>
       )}

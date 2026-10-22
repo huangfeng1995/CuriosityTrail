@@ -1,21 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Input, Button, Spin, Tooltip, Typography, App as AntApp } from 'antd';
-import { SendOutlined, ClearOutlined, SettingOutlined } from '@ant-design/icons';
+import { Input, Button, Spin, Tooltip, App as AntApp } from 'antd';
+import { SendOutlined, ClearOutlined } from '@ant-design/icons';
+import { Square } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
 
-const { Text } = Typography;
-
 /**
  * AI 侧边栏。
  *
  * 与 AI 的对话走 SSE：token 实时上屏，模型给出结构化 action 后，
- * 由用户在 ActionCard 上点"应用到正文"才真的写进稿子——AI 不该擅自改稿。
+ * 由用户在 ActionCard 上点「应用到正文」才真的写进稿子——AI 不该擅自改稿。
  */
-export default function AssistantSidebar({ onOpenSettings }) {
+export default function AssistantSidebar() {
   const {
     work,
     chapter,
@@ -196,9 +195,7 @@ export default function AssistantSidebar({ onOpenSettings }) {
       } else if (msg.action === 'append') {
         // 没有明确目标就追加到最后一个有内容的块
         const target =
-          index >= 0
-            ? blocks[index]
-            : [...blocks].reverse().find((b) => b.content);
+          index >= 0 ? blocks[index] : [...blocks].reverse().find((b) => b.content);
 
         if (!target) {
           toast.warning('当前章节还没有正文');
@@ -242,29 +239,23 @@ export default function AssistantSidebar({ onOpenSettings }) {
     dispatch({ type: 'message/clear' });
   };
 
+  const stop = () => {
+    abortRef.current?.abort();
+  };
+
   if (!chapter) {
     return (
-      <div
-        style={{
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 24,
-          textAlign: 'center',
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.9 }}>
-          选中一个章节后，
-          <br />
-          AI 才能知道你在写什么。
-        </Text>
+      <div className="ct-ai-idle">
+        <span className="ct-empty-mark font-serif" aria-hidden="true">
+          寻
+        </span>
+        <p className="ct-empty-text">选中一个章节后，AI 才能知道你在写什么</p>
       </div>
     );
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div className="ct-ai">
       <RoleTabs
         roles={roles}
         activeKey={roleKey}
@@ -272,30 +263,13 @@ export default function AssistantSidebar({ onOpenSettings }) {
       />
 
       {activeRole?.suggestions?.length > 0 && (
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 6,
-            padding: '8px 12px',
-            borderBottom: '1px solid rgba(128,128,128,0.12)',
-          }}
-        >
+        <div className="ct-ai-suggestions">
           {activeRole.suggestions.map((s) => (
             <button
               key={s}
               onClick={() => send(s)}
               disabled={sending}
-              style={{
-                border: '1px solid rgba(128,128,128,0.25)',
-                background: 'transparent',
-                color: 'inherit',
-                borderRadius: 12,
-                padding: '2px 10px',
-                fontSize: 12,
-                cursor: 'pointer',
-                opacity: 0.75,
-              }}
+              className="ct-chip"
             >
               {s}
             </button>
@@ -303,20 +277,9 @@ export default function AssistantSidebar({ onOpenSettings }) {
         </div>
       )}
 
-      {notice && (
-        <div
-          style={{
-            padding: '6px 12px',
-            fontSize: 12,
-            background: 'rgba(217,119,6,0.12)',
-            borderBottom: '1px solid rgba(128,128,128,0.12)',
-          }}
-        >
-          {notice}
-        </div>
-      )}
+      {notice && <div className="ct-ai-notice">{notice}</div>}
 
-      <div ref={listRef} style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <div ref={listRef} className="ct-ai-scroll">
         <MessageList
           messages={messages}
           streaming={streaming}
@@ -326,15 +289,7 @@ export default function AssistantSidebar({ onOpenSettings }) {
         />
       </div>
 
-      <div
-        style={{
-          borderTop: '1px solid rgba(128,128,128,0.15)',
-          padding: 10,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-        }}
-      >
+      <div className="ct-ai-input">
         <Input.TextArea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -347,28 +302,38 @@ export default function AssistantSidebar({ onOpenSettings }) {
           placeholder={`以${activeRole?.name || 'AI'}的身份提问…（Enter 发送，Shift+Enter 换行）`}
           autoSize={{ minRows: 2, maxRows: 6 }}
           disabled={sending}
+          className="ct-ai-textarea"
         />
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <div className="ct-ai-actions">
           <Tooltip title="清空当前对话">
             <Button
               size="small"
+              type="text"
               icon={<ClearOutlined />}
               onClick={clearChat}
               disabled={sending || !messages.length}
             />
           </Tooltip>
-          <Tooltip title="AI 配置">
-            <Button size="small" icon={<SettingOutlined />} onClick={onOpenSettings} />
-          </Tooltip>
-          <Button
-            type="primary"
-            size="small"
-            icon={sending ? <Spin size="small" /> : <SendOutlined />}
-            onClick={() => send()}
-            disabled={sending || !input.trim()}
-          >
-            发送
-          </Button>
+          <span style={{ flex: 1 }} />
+          {sending ? (
+            <Button
+              size="small"
+              icon={<Square style={{ fontSize: 9 }} />}
+              onClick={stop}
+            >
+              停止
+            </Button>
+          ) : (
+            <Button
+              type="primary"
+              size="small"
+              icon={<SendOutlined />}
+              onClick={() => send()}
+              disabled={!input.trim()}
+            >
+              发送
+            </Button>
+          )}
         </div>
       </div>
     </div>

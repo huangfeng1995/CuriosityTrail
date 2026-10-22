@@ -55,34 +55,22 @@ export default function CitationBadge({ citations }) {
   };
 
   return (
-    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div className="ct-citations">
       {citations.map((c, i) => (
-        <div
-          key={c.materialId || c.url || i}
-          style={{
-            fontSize: 12,
-            padding: '6px 8px',
-            borderRadius: 6,
-            background: 'rgba(128,128,128,0.08)',
-            borderLeft: '2px solid rgba(128,128,128,0.35)',
-          }}
-        >
-          <div style={{ opacity: 0.7, marginBottom: 2 }}>
+        <div key={c.materialId || c.url || i} className="ct-citation">
+          <div className="ct-citation-head">
             [{i + 1}] {c.source || '来源'}
             {c.title ? ` · ${c.title}` : ''}
             {c.page ? ` · 第 ${c.page} 页` : ''}
           </div>
-          {c.snippet && (
-            <div style={{ opacity: 0.85, lineHeight: 1.6 }}>{c.snippet}</div>
-          )}
+          {c.snippet && <div className="ct-citation-snippet">{c.snippet}</div>}
           {c.materialId ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+            <span className="ct-citation-actions">
               <Button
                 type="link"
                 size="small"
                 icon={<FileTextOutlined />}
                 onClick={() => goToMaterial(c)}
-                style={{ fontSize: 12, padding: 0, height: 'auto' }}
               >
                 查看素材
               </Button>
@@ -92,20 +80,14 @@ export default function CitationBadge({ citations }) {
                   size="small"
                   icon={<AimOutlined />}
                   onClick={() => goToMaterial(c)}
-                  style={{ fontSize: 12, padding: 0, height: 'auto' }}
                 >
                   定位到原文
                 </Button>
               )}
             </span>
           ) : c.url ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <a
-                href={c.url}
-                target="_blank"
-                rel="noreferrer"
-                style={{ fontSize: 12, display: 'inline-block', marginTop: 2 }}
-              >
+            <span className="ct-citation-actions">
+              <a href={c.url} target="_blank" rel="noreferrer" className="ct-citation-link">
                 <LinkOutlined style={{ marginRight: 4 }} />
                 查看原文
               </a>
@@ -115,7 +97,6 @@ export default function CitationBadge({ citations }) {
                 icon={<ImportOutlined />}
                 loading={saving === c.url}
                 onClick={() => saveAsMaterial(c)}
-                style={{ fontSize: 12, padding: 0, height: 'auto' }}
               >
                 存入素材库
               </Button>

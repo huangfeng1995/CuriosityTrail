@@ -45,7 +45,7 @@ export default function WorkInfoPanel({ work, onSaved }) {
   }
 
   return (
-    <div style={{ padding: '4px 8px' }}>
+    <div className="ct-panel">
       <Form form={form} layout="vertical" size="small" requiredMark={false}>
         <Form.Item name="title" label="书名" rules={[{ required: true, message: '书名不能为空' }]}>
           <Input placeholder="书名" />

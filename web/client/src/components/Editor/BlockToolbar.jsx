@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Button, Tooltip, Spin } from 'antd';
+import { Tooltip, Spin } from 'antd';
+import { X } from 'lucide-react';
 
 /**
  * 行内 AI 工具条。
@@ -17,6 +18,16 @@ const ACTIONS = [
   { key: 'critique', label: '找茬' },
   { key: 'colloquialize', label: '口语化' },
 ];
+
+const TIP = {
+  rewrite: '换一种表达，意思不变',
+  expand: '增加细节与描写',
+  shorten: '精简表达，保留要点',
+  tone: '改变语气',
+  continue: '在选区后接一句',
+  critique: '审稿人视角挑问题，只给建议',
+  colloquialize: '把书面语改自然',
+};
 
 export default function BlockToolbar({ selection, onRun, onClose, position }) {
   const [busy, setBusy] = useState('');
@@ -37,19 +48,10 @@ export default function BlockToolbar({ selection, onRun, onClose, position }) {
 
   return (
     <div
+      className="ct-inline-toolbar"
       style={{
-        position: 'absolute',
         top: position?.top ?? 0,
         left: position?.left ?? 0,
-        zIndex: 20,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 4,
-        padding: '4px 6px',
-        borderRadius: 8,
-        background: '#1f2937',
-        boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
-        whiteSpace: 'nowrap',
       }}
     >
       {ACTIONS.map((a) => {
@@ -59,29 +61,17 @@ export default function BlockToolbar({ selection, onRun, onClose, position }) {
               <button
                 onClick={() => setToneOpen((v) => !v)}
                 disabled={!!busy}
-                style={toolStyle}
+                className="ct-inline-btn"
               >
                 {busy === 'tone' ? <Spin size="small" /> : a.label}
               </button>
               {toneOpen && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '110%',
-                    left: 0,
-                    background: '#111827',
-                    borderRadius: 6,
-                    padding: 4,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    minWidth: 96,
-                  }}
-                >
+                <div className="ct-tone-menu">
                   {['正式', '口语', '冷峻', '温暖', '悬疑'].map((tone) => (
                     <button
                       key={tone}
                       onClick={() => run('tone', `改成${tone}的语气`)}
-                      style={{ ...toolStyle, width: '100%', justifyContent: 'flex-start' }}
+                      className="ct-inline-btn"
                     >
                       {tone}
                     </button>
@@ -97,7 +87,7 @@ export default function BlockToolbar({ selection, onRun, onClose, position }) {
             <button
               onClick={() => run(a.key)}
               disabled={!!busy}
-              style={toolStyle}
+              className="ct-inline-btn"
             >
               {busy === a.key ? <Spin size="small" /> : a.label}
             </button>
@@ -105,39 +95,9 @@ export default function BlockToolbar({ selection, onRun, onClose, position }) {
         );
       })}
 
-      <Button
-        type="text"
-        size="small"
-        onClick={onClose}
-        style={{ color: '#9ca3af', height: 22, padding: '0 4px' }}
-      >
-        ✕
-      </Button>
+      <button onClick={onClose} className="ct-inline-btn is-close" title="关闭">
+        <X size={13} />
+      </button>
     </div>
   );
 }
-
-const TIP = {
-  rewrite: '换一种表达，意思不变',
-  expand: '增加细节与描写',
-  shorten: '精简表达，保留要点',
-  tone: '改变语气',
-  continue: '在选区后接一句',
-  critique: '审稿人视角挑问题，只给建议',
-  colloquialize: '把书面语改自然',
-};
-
-const toolStyle = {
-  border: 'none',
-  background: 'transparent',
-  color: '#f3f4f6',
-  fontSize: 13,
-  padding: '4px 8px',
-  borderRadius: 4,
-  cursor: 'pointer',
-  minWidth: 24,
-  height: 22,
-  lineHeight: '22px',
-};
-
-toolStyle[':hover'] = { background: 'rgba(255,255,255,0.12)' };

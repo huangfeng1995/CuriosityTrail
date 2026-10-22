@@ -23,18 +23,18 @@ function button(root, text) {
   return root.locator('button', { hasText: spaced(text) });
 }
 
-// 左栏 antd Tabs 溢出后真实点击无效（被 ant-tabs-nav-more 遮挡 / 被 overflow 裁切），
-// 必须用 dispatchEvent('click') 切换。
+// 左栏面板导航。
+//
+// 早期版本这里用的是 antd Tabs，但 7 个标签塞在 260px 宽的左栏里会被 antd
+// 挤进「更多」下拉（功能被藏起来），现已换成自研的纵向分段导航 PanelNav。
+// 这里按 data-panel 定位切换后的面板容器。
 async function openTab(page, label) {
-  await page
-    .locator('.ant-tabs-tab-btn', { hasText: label })
-    .first()
-    .dispatchEvent('click');
-  await page.locator('.ant-tabs-tabpane-active').first().waitFor();
+  await page.locator(`.ct-panel-tab:has-text("${label}")`).first().click();
+  await page.locator('.ct-panel-body').first().waitFor();
 }
 
 function activePane(page) {
-  return page.locator('.ant-tabs-tabpane-active').first();
+  return page.locator('.ct-panel-body').first();
 }
 
 module.exports = { fixture, spaced, button, openTab, activePane };
