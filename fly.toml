@@ -7,6 +7,13 @@
 app = "curiosity-trail"
 primary_region = "hkg"
 
+# 注意：Fly 控制台网页表单里的 App name / Region 必须与这里一致，
+# 否则网页流程会用表单值建出另一个应用，卷挂不上。
+#   App name: curiosity-trail
+#   Region:   hkg (Hong Kong)
+# 首次部署前必须先建卷（卷必须在 hkg）：
+#   fly volumes create curiosity_trail_data --size 1 --region hkg
+
 [build]
   dockerfile = "Dockerfile"
 
@@ -16,6 +23,9 @@ primary_region = "hkg"
   DATA_DIR = "/app/data"
   # 每天凌晨 3 点自动备份到卷上（-1 关闭）
   BACKUP_HOUR = "3"
+  # 异地备份目录，指向第二个卷。备份会额外复制一份过去并保留 30 份。
+  BACKUP_OFFSITE_DIR = "/app/offsite"
+  BACKUP_OFFSITE_KEEP = "30"
 
 [http_service]
   internal_port = 8080
@@ -34,10 +44,26 @@ primary_region = "hkg"
     method = "GET"
     path = "/api/health"
 
+# 机器规格：256MB 对 Node + SQLite 偏紧，备份时 zip 压缩容易 OOM。
+# 单人使用固定 1 台，不用弹性伸缩。
+[vm]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
 # 数据持久化：SQLite 库、素材文件、AI 配置都挂在这块卷上
-[mounts]
+# 异地备份：同一应用的第二个卷（必须在 hkg，与主卷同区）。
+# 作用是主卷整个坏了以后，备份还在另一块卷上。
+# 建卷：
+#   fly volumes create curiosity_trail_data    --size 1 --region hkg
+#   fly volumes create curiosity_trail_offsite --size 1 --region hkg
+[[mounts]]
   source = "curiosity_trail_data"
   destination = "/app/data"
+
+[[mounts]]
+  source = "curiosity_trail_offsite"
+  destination = "/app/offsite"
 
 # 下面的 secrets 通过 `fly secrets set` 注入，不要写进本文件：
 #   fly secrets set APP_PASSWORD=... JWT_SECRET=... DEEPSEEK_API_KEY=...

@@ -50,9 +50,31 @@ DEEPSEEK_API_KEY='sk-xxxxxxxx'
 fly apps create curiosity-trail
 ```
 
+> 没有 `flyctl` 时先装（无需 brew）：
+>
+> ```bash
+> curl -L https://fly.io/install.sh | sh
+> fly auth login
+> ```
+
 > ⚠️ **不要用 `fly launch --copy-config`**：它会用模板覆盖掉仓库里已经写好的
 > `fly.toml`（区域、数据卷、强制 HTTPS 都会丢）。应用建好后直接编辑仓库里的
 > `fly.toml` 即可，它已经配好了 `hkg` 区域、`curiosity_trail_data` 卷和强制 HTTPS。
+>
+> ⚠️ **控制台网页表单（Launch an App from GitHub）同样不要直接用**：
+> 它会按表单里的值另建一个应用，与仓库 `fly.toml` 对不上号（App 名、区域），
+> 结果是卷挂不上、机器反复重启。正确做法是：**网页表单只用来连 GitHub 仓库**，
+> App name 填 `curiosity-trail`、Region 填 `hkg`，真正建应用/建卷/部署走下面的 CLI。
+>
+> 网页表单里的其它项这样填：
+> - Internal port：`8080`（与 `fly.toml` 一致）
+> - Machine：`shared-cpu-1x` + `512MB`（与 `fly.toml` 的 `[vm]` 一致）
+> - Database：**留空**——本项目用 SQLite + Fly 卷，不用 Managed Postgres
+> - Environment Variables：**留空**——密码和 key 走 `fly secrets set`，不要写进表单
+> - Working directory / Config path：`./`（用仓库根目录的 `fly.toml`）
+>
+> 首次部署还会要求「Verify a card」（加一张卡做小于 $10 的临时预授权，不实际扣款），
+> 这是 Fly 的风控要求，加完卡才能部署。
 
 建完后确认一下：
 
@@ -68,7 +90,21 @@ SQLite 库和图片必须落在卷上，容器重建才不会丢：
 fly volumes create curiosity_trail_data --size 1 --region hkg
 ```
 
-卷名和 `fly.toml` 里 `[mounts]` 段的 `source` 必须一致（已经是 `curiosity_trail_data`）。
+第二个卷用来放异地备份（主卷整个坏了以后，备份还在另一块卷上）：
+
+```bash
+fly volumes create curiosity_trail_offsite --size 1 --region hkg
+```
+
+卷名和 `fly.toml` 里 `[[mounts]]` 段的 `source` 必须一一对应
+（`curiosity_trail_data` → `/app/data`，`curiosity_trail_offsite` → `/app/offsite`）。
+**卷必须和机器同区（hkg）**，否则挂不上。
+
+> ⚠️ 两个卷都要在 `fly deploy` **之前**建好。缺卷会导致机器反复重启，
+> 日志里是「volume not found」之类的报错。
+>
+> 不想开第二个卷的话，把 `fly.toml` 里 `BACKUP_OFFSITE_DIR` 那一行删掉即可，
+> 备份会只留在主卷上。
 
 ### 3. 注入 secret
 
@@ -111,6 +147,33 @@ fly open
 
 用 `APP_PASSWORD` 里设的密码登录。进去后先去「设置 → AI 供应商」点一次「测试连接」，
 确认 key 生效；再去「设置 → 备份」手动备份一次，确认卷上的东西都对。
+
+---
+
+## 二之二、CI 自动部署（可选，推荐）
+
+仓库根目录已有 `.github/workflows/deploy.yml`：`push` 到 `main` 时自动
+`flyctl deploy --remote-only`。配好 secret 后，日常更新只要 `git push` 即可，
+不用在本地装 flyctl。
+
+1. 在 Fly 控制台生成 Personal Access Token：
+   [Personal access tokens](https://fly.io/apps/personal_tokens) → 勾选 `Deploy` 权限。
+2. 把它写进 GitHub 仓库 secret：
+   `Settings → Secrets and variables → Actions → New repository secret`
+   - Name：`FLY_API_TOKEN`
+   - Value：粘贴上一步的 token
+3. 确认应用、卷、secret 都已按上面步骤建好，然后：
+
+```bash
+git push origin main
+```
+
+Actions 页面就能看到部署结果。
+
+> **注意**：`deploy.yml` 只管部署，测试由另一个 `ci.yml` 负责（单测 + 构建 + E2E + Docker 构建）。
+> 两条流水线互不依赖，CI 绿灯不代表已经部署，要看 `Deploy to Fly.io` 那个 workflow。
+>
+> 首次部署仍建议先在本地跑一次 `fly deploy`，确认镜像能构建成功——CI 里失败同样要回滚。
 
 ---
 
@@ -235,6 +298,12 @@ docker run -d \
 **启动就退出**
 - `fly logs` 看报错。常见是卷没挂上导致 SQLite 打不开
 - 单实例保护会拒绝第二个进程：`Multiple instances` 之类。要么停掉另一个，要么设 `ALLOW_MULTI_INSTANCE=1`（不建议，SQLite 并发写会损坏数据）
+
+**机器起来又挂（Crash loop）**
+- 先看是不是缺卷：`fly volumes list`，两个卷都要在，且都在 `hkg`
+- 再看是不是内存不够：`fly logs` 里出现 `JavaScript heap out of memory` 就是 OOM，
+  用 `fly scale vm shared-cpu-1x --vm-memory=512` 调大（仓库 `fly.toml` 里已锁 512MB）
+- 查看崩溃原因：`fly status` 看退出码，`fly logs` 看最后几行
 
 **构建失败（`fly deploy` 阶段）**
 - `sqlite3` 装不上：Dockerfile 的依赖层已装 python3/make/g++ 兜底，若仍失败说明是

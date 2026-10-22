@@ -57,7 +57,8 @@ COPY --from=client-builder /app/web/client/dist ./web/server/public
 
 # 数据目录：SQLite 库、上传素材、备份都落在这里
 # 生产环境这块由 Fly.io volume 挂载覆盖
-RUN mkdir -p /app/data/uploads /app/data/documents /app/data/temp
+RUN mkdir -p /app/data/uploads /app/data/documents /app/data/temp \
+    && mkdir -p /app/offsite
 
 ENV NODE_ENV=production
 ENV PORT=8080
