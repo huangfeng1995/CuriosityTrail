@@ -1,0 +1,65 @@
+# 单机生产部署（香港轻量服务器 / 任何一台有持久磁盘的 Linux）
+#
+# 与 Fly.io 方案的差别：Fly 用 volume 挂载，这里用宿主机目录。
+# SQLite 是单文件数据库，必须落在宿主机磁盘上，容器重建不丢稿。
+#
+# 用法：
+#   docker compose up -d --build
+#
+# 端口：
+#   127.0.0.1:8080  容器，只对本机可见
+#   80/443          由 Caddy 反代对外（见 deploy/Caddyfile）
+#
+# 要求：Docker Compose >= 2.24（env_file 的 required 字段需要）。
+# 阿里云/腾讯云轻量预装镜像均为 2.2x+，如报错请先升级：
+#   sudo apt-get install -y docker-compose-plugin && docker compose version
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: curiosity-trail:latest
+    container_name: curiosity-trail
+    restart: unless-stopped
+    # 固定 hostname。单实例锁靠 hostname 区分"是不是同一个实例"，
+    # 而 Docker 每次重建容器的 hostname 都会变（默认是容器 ID）。
+    # 若上一实例被强杀（锁文件残留、心跳还在 45 秒 TTL 内），新实例会误判成
+    # "另一台机器在用同一数据目录"而拒绝启动，配合 restart 策略形成崩溃循环。
+    # 固定 hostname 后走同主机分支，按 PID 判断残留锁，能正常接管。
+    hostname: curiosity-trail
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      DATA_DIR: /app/data
+      # 每天凌晨 3 点自动备份到本地目录
+      BACKUP_HOUR: "3"
+      # 异地备份：应用先把备份复制到这里，再由 sync-offsite.sh 推到对象存储。
+      # 不配这一行的话备份只留在 data/ 里（与数据库同盘，不算异地）。
+      BACKUP_OFFSITE_DIR: /app/offsite
+      BACKUP_OFFSITE_KEEP: "30"
+    env_file:
+      # 存放 APP_PASSWORD / JWT_SECRET / DEEPSEEK_API_KEY，不进版本库。
+      # required: false —— 文件不存在时不报错，容器照常起（只是没有登录密码和 AI key）。
+      # deploy.sh 会在启动前生成这个文件。
+      - path: deploy/.env.production
+        required: false
+    volumes:
+      # SQLite 库、上传素材、AI 配置、备份
+      - ./data:/app/data
+      # 异地备份的本地中转目录（由 sync-offsite.sh 推到对象存储）
+      - ./data-offsite:/app/offsite
+    # 只监听回环地址，公网流量必须经过 Caddy（强制 HTTPS + 证书）
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,56 @@
+# Caddy 反向代理配置
+#
+# 作用：自动申请并续期 Let's Encrypt 证书，把 443 的 HTTPS 流量转给容器。
+# 没有这一层的话，浏览器访问会是明文 HTTP，登录密码和 DeepSeek key 都在裸奔。
+#
+# 部署位置：/etc/caddy/Caddyfile
+# 改完执行：systemctl reload caddy
+#
+# 注意：域名必须先解析到这台服务器的公网 IP，否则证书签发会失败。
+
+{
+	# 全局：启用 ACME 协议的 HTTP-01 挑战（需要 80 端口对外可达）
+	email admin@example.com
+}
+
+# 换成你自己的域名。用 IP 访问时把下面这行换成：
+#   :80 { ... }        （仅 HTTP，无法自动签发证书）
+your-domain.example.com {
+	encode zstd gzip
+
+	# 上传素材走大文件（PDF 等），别让默认限制卡住
+	request_body {
+		max_size 100MB
+	}
+
+	# 反代到容器。容器只监听 127.0.0.1:8080，不直接对外。
+	reverse_proxy 127.0.0.1:8080 {
+		# AI 对话是 SSE 流式输出，必须关闭缓冲，否则前端要等全部生成完才显示
+		flush_interval -1
+
+		# 长对话可能超过默认超时
+		transport http {
+			read_timeout 600s
+			write_timeout 600s
+		}
+	}
+
+	# 静态资源指纹文件名，可以放心长缓存
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	# 基础安全响应头（后端也会设一份，这里是双保险）
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}

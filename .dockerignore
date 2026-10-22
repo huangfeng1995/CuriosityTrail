@@ -10,6 +10,7 @@ node_modules
 **/node_modules
 
 data
+data-offsite
 web/server/data
 web/server/public
 web/client/dist
@@ -23,6 +24,7 @@ pdf_workbench
 
 .env
 .env.*
+deploy/.env.production
 *.log
 *.db
 *.zip

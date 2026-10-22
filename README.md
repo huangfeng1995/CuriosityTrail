@@ -52,8 +52,14 @@ AI 辅助长篇小说创作平台。
 ```
 CuriosityTrail/
 ├── Dockerfile              # 多阶段构建：前端构建 → 后端依赖 → 运行时
+├── docker-compose.yml      # 单机生产部署编排（香港轻量服务器方案）
 ├── .dockerignore          # 排除 node_modules 与 data/
-├── fly.toml                # Fly.io 部署配置
+├── fly.toml                # Fly.io 部署配置（备选路径）
+├── deploy/                 # 一键部署资产
+│   ├── deploy.sh           # 装 Docker→克隆→生成密码→构建→启动→配 Caddy
+│   ├── Caddyfile           # 自动 HTTPS 反代（关缓冲以支持 SSE）
+│   ├── sync-offsite.sh     # 备份同步到对象存储
+│   └── README.md           # 国内服务器部署完整指南
 ├── data/                   # 运行时数据（SQLite、图片、备份），不入库
 ├── docs/superpowers/specs/ # 设计文档
 └── web/
@@ -113,7 +119,22 @@ DeepSeek 的对话端点和搜索端点（`/v1/tools/search`、`/v1/tools/fetch`
 
 ## 部署
 
-见 [web/DEPLOY.md](web/DEPLOY.md)。默认走 Fly.io，数据挂卷持久化，密码和 key 走平台 secret。
+**主路径：香港轻量服务器 + Docker Compose（国内厂商，免备案）**
+
+见 [deploy/README.md](deploy/README.md)。买台阿里云/腾讯云的香港轻量服务器，
+SSH 上去粘一条命令就上线：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huangfeng1995/CuriosityTrail/main/deploy/deploy.sh | bash
+```
+
+脚本会自己装 Docker、克隆代码、生成随机登录密码、构建镜像、启动容器，
+打印访问地址和密码。配了域名就顺带开 HTTPS。
+
+> 为什么选香港节点：大陆节点对外用 80/443 必须先 ICP 备案（1-3 周），
+> 香港节点免备案，买完就能上线。
+
+**备选路径：Fly.io**，见 [web/DEPLOY.md](web/DEPLOY.md)（配置在 `fly.toml`）。
 
 ---
 

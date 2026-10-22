@@ -2,7 +2,15 @@
 
 单用户部署。目标是：太太在公司用浏览器就能打开平台写稿，稿子、素材、备份都持久化不丢。
 
-默认方案是 **Fly.io**（配置见仓库根目录的 `fly.toml` 与 `Dockerfile`）。
+## 两条路，选一条
+
+| 方案 | 文档 | 适合 |
+|---|---|---|
+| **香港轻量服务器 + Docker**（推荐） | [deploy/README.md](../deploy/README.md) | 买台国内厂商的香港机器，免备案，一条命令上线 |
+| Fly.io | 本文件 | 想用海外 PaaS、愿意绑卡 |
+
+本文档写的是 **Fly.io** 方案（配置在仓库根目录的 `fly.toml` 与 `Dockerfile`）。
+单机方案见 [deploy/README.md](../deploy/README.md)。
 
 ---
 
@@ -257,7 +265,12 @@ fly ssh console -C 'ls -la /app/data'
 
 ## 五、单机自建（不用 Fly.io）
 
-如果更想跑在自己的 VPS 上：
+如果更想跑在自己的 VPS 上，仓库里已经备好了完整的单机方案：
+一键脚本 + compose 编排 + Caddy 自动 HTTPS + 异地备份同步。
+
+见 [deploy/README.md](../deploy/README.md)。
+
+最简版本：
 
 ```bash
 # 构建镜像

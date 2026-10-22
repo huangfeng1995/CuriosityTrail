@@ -1070,7 +1070,7 @@ web/client/src/
 | 3 | DeepSeek 对话与搜索是否需要两把 key | **一把**。三个端点（Chat / Search / Fetch）共用同一 Bearer Key，环境变量 `DEEPSEEK_API_KEY` |
 | 4 | 模型选择 | 按官方最新文档：日常 `deepseek-flash`，深度思考 `deepseek-v4-pro`（思考强度只有 high/max 两档有效） |
 | 5 | 访问方式 | **公网可达**。用户本人与太太各自从家里 / 公司浏览器访问。鉴权用密码登录 + JWT 会话 Cookie |
-| 6 | 部署平台 | **沿用 Fly.io**（`fly.toml` 已配好：hkg 区域 + 数据卷 + 强制 HTTPS + 免费层）。不引入 Nginx / 域名 |
+| 6 | 部署平台 | **改为香港轻量服务器 + Docker Compose 自建**（见 §12）。原定 Fly.io，原因是：① 大陆节点对外用 80/443 需 ICP 备案（1-3 周），香港节点免备案；② 用户对 Serverless 路线（TRAE × IGA Pages、Vercel）明确排除——官方文档写明不适合常驻服务 / 定时任务 / SQLite 持久化，稿子必丢；③ 用户选择「最省心、我做完你只需买机器」，故交付物必须完整到一条命令上线。`fly.toml` 保留作为备选路径 |
 | 7 | 鉴权优先级 | **P0-a 最高优先级**，是公网部署的硬性前置，不可后置到 P1 |
 | 8 | 登录密码 | 实施时生成 192 位随机串（`crypto.randomBytes(24)`），单独告知用户，不写入任何文件或 Git |
 | 9 | 全局默认开不开深度思考 | **默认关闭**。官方文档明确思考模式下 `temperature` 完全不生效，开着思考等于把温度调参变成摆设；默认走非思考模式，快、便宜、温度真起作用。审稿人这类需要推理的角色在角色级单独开启 |
@@ -1124,3 +1124,76 @@ web/e2e/
 | `docker-build` Docker 构建 | 根目录多阶段 Dockerfile 构建校验 |
 
 另有 `.github/workflows/deploy.yml`：push `main` 后 `flyctl deploy --remote-only` 发 Fly.io（依赖仓库 secrets）。
+
+---
+
+## 12. 部署方案（实际落地）
+
+### 12.1 选型过程与结论
+
+| 方案 | 结论 | 原因 |
+|---|---|---|
+| TRAE × IGA Pages（Serverless） | **排除** | 官方文档明确「不适合：需要常驻后台服务、定时任务、数据库常连接等超出 Serverless 能力边界的场景」；本项目的 SQLite + 每日 03:00 定时备份两条都踩中，稿子必丢。TRAE 中国版也不提供一键部署 |
+| TRAE 内置 Vercel 部署 | **排除** | 同上，Serverless 无持久磁盘 |
+| Fly.io | 备选 | 技术上可行（`fly.toml` 已配好 hkg + 双卷），但要绑卡做风控预授权，流程对用户是额外负担 |
+| 本机 + Cloudflare Tunnel | 排除 | 用户明确「感觉这样也不好」；且本机在 NAT 后（192.168.101.165/24），穿透工具一个都没装，还要电脑常开 |
+| **香港轻量服务器 + Docker Compose** | **采用** | 阿里云/腾讯云官方说明「海外或中国香港节点无需 ICP 备案」，买完即用；一次性成本 ≈ 300 元/年；机器是自己的，数据完全可控 |
+
+选香港而非大陆节点的代价是国内访问延迟 30-80ms，对写小说完全无感。
+
+### 12.2 资产清单
+
+```
+docker-compose.yml      单机生产编排
+deploy/
+├── deploy.sh           一键部署（装 Docker→克隆→生成密码→构建→启动→配 Caddy→健康检查）
+├── Caddyfile           自动 HTTPS 反代
+├── sync-offsite.sh     备份同步到对象存储
+└── README.md           面向用户的中文全流程文档
+```
+
+**`docker-compose.yml` 关键决策**
+
+- `hostname: curiosity-trail` 固定值。单实例锁靠 hostname 判断「是不是同一个实例」，而 Docker 每次重建容器 hostname 都会变（默认容器 ID）。若上一实例被 `kill -9` 强杀（锁残留、心跳还在 45 秒 TTL 内），新实例会判定「另一台机器在用同一数据目录」而 `process.exit(1)`，配合 `restart: unless-stopped` 形成无限重启循环。固定 hostname 后走同主机分支、按 PID 判断残留锁。
+- 端口只映射 `127.0.0.1:8080:8080`，不对公网暴露，HTTPS 由 Caddy 终结。
+- `env_file` 用 `path:` + `required: false` 语法（需 Compose ≥ 2.24），文件不存在时不报错。
+- `BACKUP_OFFSITE_DIR=/app/offsite` + `BACKUP_OFFSITE_KEEP=30`，备份额外复制一份到独立卷。
+- `healthcheck` 打 `/api/health`，`start_period: 20s` 给 SQLite 初始化留时间。
+
+**`deploy.sh` 关键决策**
+
+- 域名与邮箱用**位置参数**而非环境变量：`sudo` 默认 `env_reset` 会清空环境变量，`sudo DOMAIN=x bash deploy.sh` 里的 DOMAIN 会**静默丢失**，Caddy 配置直接跳过且无报错。改用 `DOMAIN="${1:-${DOMAIN:-}}"`，文档给出 `bash -s -- 域名 邮箱` 写法。
+- `.env.production` 权限 600，密码用 `tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 | tr -d '0O1l'`（实测长度 15-20），JWT 密钥用 `openssl rand -base64 48`。
+- 环境变量文件已存在则**保留原值**，重复执行不会把已改的密码冲掉。
+- git clone 失败时退化为下载 tar 包，不因没装 git 就中断。
+
+**`Caddyfile` 关键决策**
+
+- `reverse_proxy` 里 `flush_interval -1`：AI 对话是 SSE 流式输出，默认缓冲会让前端等全部生成完才显示。
+- `read_timeout/write_timeout 600s`：长对话可能超过默认超时。
+- `request_body { max_size 100MB }`：素材上传走 PDF 等大文件。
+- `@immutable path /assets/*` 长缓存；`/var/log/caddy/access.log` 按 10MB 滚动。
+
+### 12.3 验证结果
+
+本机无 Docker，用等价手段验证：
+
+| 项 | 方法 | 结果 |
+|---|---|---|
+| compose 结构与 `env_file` 语义 | YAML 解析 + 契约断言 | 通过 |
+| 服务可跑通 | 用 compose 声明的环境变量真实启动服务 | `{"status":"ok"}`，日志显示「定时备份: 每天 03:00」「异地备份目录: /app/offsite」 |
+| 异地备份链路 | `POST /api/export/backups` | `{"ok":true,...,"offsite":{"ok":true,"file":.../offsite/curiosity-backup-manual-....zip}}`，`data/backups/` 与 `offsite/` 两个目录都出现 zip |
+| 脚本语法 | `bash -n` | 两个脚本均通过 |
+| 参数优先级 | 位置参数 / 环境变量 / 两者都无 | 三种路径均符合预期 |
+| 同步脚本行为 | mock ossutil 跑 35 个假备份 | 上传 35 → 保留最近 30 → 删 5；无新文件时正确跳过；总数 < KEEP 时不删 |
+
+**同步脚本修掉的两个真 bug**
+
+1. 清理远端旧档时用 `awk '{print $2}'` 取 key，但 `s5cmd ls` / `ossutil ls` 输出的第 2 列是大小不是路径 → 删不到东西。改用 `$NF`（最后一列才是完整 URI）。
+2. `head -n -N`（保留除末 N 行外的全部）只有 GNU head 支持，BSD head（macOS）报 `illegal line count`。改为先数出 `total`，再用 `head -n $((total - KEEP))`。
+
+### 12.4 待办
+
+- 本机无 docker / brew / flyctl / gh，compose 与 `docker build` 未本地实测，需到服务器或 CI 验证
+- `.env.example` 原内容过时（仍在讲 Ollama / LlamaCpp / MiniMax，缺 `APP_PASSWORD` / `JWT_SECRET` / `DEEPSEEK_API_KEY`），已按 `config.js` 实际读取的变量重写
+- `deploy/.env.production` 含密码与 JWT 密钥，已加入 `.gitignore` 与 `.dockerignore`
