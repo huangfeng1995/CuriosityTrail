@@ -13,11 +13,8 @@ import {
   Tooltip,
 } from 'antd';
 import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
   SaveOutlined,
   UndoOutlined,
-  ReloadOutlined,
 } from '@ant-design/icons';
 import api from '../api/client';
 import { useIsMobile } from '../hooks/useMediaQuery';
@@ -40,12 +37,11 @@ const MODEL_OPTIONS = [
  *
  * 原本有「AI 供应商」标签页让用户填 API Key。这是部署期的运维动作，
  * 不是写作期该操心的事——密钥由服务器环境变量提供，所以整页拿掉。
- * 用户仍然需要知道「AI 现在能不能用」，所以保留一张只读状态卡。
+ * 供应商连接状态也不展示：读者只需要安心写作，AI 出问题由服务端日志诊断。
  */
 export default function SettingsPage() {
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
-      <AiStatusCard />
       <Tabs
         defaultActiveKey="prompts"
         items={[
@@ -54,79 +50,6 @@ export default function SettingsPage() {
         ]}
       />
     </div>
-  );
-}
-
-/**
- * AI 连接状态（只读）。
- *
- * 想知道 AI 能不能用、当前跑的是哪个模型、额度还剩多少，
- * 看这里就够了。改配置是部署的事，不在这里暴露。
- */
-function AiStatusCard() {
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const res = await api.get('/ai/status');
-      setStatus(res.data);
-    } catch (e) {
-      setStatus(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  return (
-    <Card size="small" title="AI 状态" style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        {status?.active?.name ? (
-          <Text style={{ color: 'var(--bamboo)', fontWeight: 600 }}>
-            {status.active.name}
-            {status.active.degraded ? '（降级运行）' : ''}
-          </Text>
-        ) : (
-          <Text style={{ color: 'var(--cinnabar)', fontWeight: 600 }}>暂不可用</Text>
-        )}
-        <span style={{ flex: 1 }} />
-        <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={load}>
-          刷新
-        </Button>
-      </div>
-
-      {status?.providers?.map((p) => (
-        <div
-          key={p.name}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 13,
-            padding: '3px 0',
-          }}
-        >
-          {p.ok ? (
-            <CheckCircleOutlined style={{ color: 'var(--bamboo)' }} />
-          ) : (
-            <CloseCircleOutlined style={{ color: 'var(--text-quaternary)' }} />
-          )}
-          <Text style={{ width: 110 }}>{p.name}</Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {p.detail}
-          </Text>
-        </div>
-      ))}
-
-      {status?.active?.reason && !status?.active?.name && (
-        <Alert type="warning" message={status.active.reason} style={{ marginTop: 8 }} />
-      )}
-    </Card>
   );
 }
 
