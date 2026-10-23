@@ -64,6 +64,13 @@ if [ -n "$PWSH" ]; then
   [ -f "app/web/.env" ] && ok ".env 已生成" || bad ".env 未生成"
   PW=$(grep '^APP_PASSWORD=' app/web/.env | cut -d= -f2)
   [ -n "$PW" ] && ok "登录密码已写入（${#PW} 位）" || bad "登录密码缺失"
+  # 打包时预置的 AI 密钥必须被保留（不能被配置生成覆盖掉）
+  KEY=$(grep '^DEEPSEEK_API_KEY=' app/web/.env | cut -d= -f2-)
+  if [ -n "$KEY" ]; then
+    ok "AI 密钥保留在配置中（${KEY:0:6}****）"
+  else
+    echo "  [跳过] 本次打包未预置密钥（web/.env 里没有 DEEPSEEK_API_KEY）"
+  fi
 else
   PW="testpass123"
   printf 'APP_PASSWORD=%s\nPORT=%s\nBACKUP_HOUR=3\nDEEPSEEK_API_KEY=\n' "$PW" "$PORT" > app/web/.env
@@ -89,6 +96,7 @@ fi
 ok "服务为本轮新实例"
 grep -q "数据目录: $WORK/寻迹/data" "$WORK/server.log" && ok "数据目录指向正确位置" || bad "数据目录不对"
 grep -q "环境: production" "$WORK/server.log" && ok "NODE_ENV 生效" || bad "NODE_ENV 未生效"
+grep -q "DEEPSEEK_API_KEY: 已加载" "$WORK/server.log" && ok "服务已读到 AI 密钥" || bad "服务未读到 AI 密钥"
 
 step "5. 首页与静态资源"
 [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/)" = "200" ] && ok "首页 200" || bad "首页异常"

@@ -45,13 +45,14 @@ if not exist "%SERVER_DIR%\node_modules" (
   )
 )
 
-if not exist "%ENV_FILE%" (
-  echo.
-  echo   首次运行：正在生成配置...
-  echo.
-  call :make_env
-  if errorlevel 1 exit /b 1
-)
+rem 生成/补全配置。
+rem .env 可能已由打包时预置（含 AI 密钥），但登录密码还得现场生成——
+rem 判断逻辑放在 make-config.ps1 里：已有值就保留，空的才补。
+echo.
+echo   正在准备配置...
+echo.
+call :make_env
+if errorlevel 1 exit /b 1
 
 rem ---------- 启动服务 ----------
 rem  DATA_DIR 与 PORT 用环境变量注入：.env 里虽然也写了，
@@ -108,9 +109,9 @@ rem ============================================================
 rem  生成 .env：随机登录密码 + 端口 + 本地 cookie 设置
 rem ============================================================
 :make_env
-rem 整个 .env 交给 PowerShell 生成。
+rem 整个 .env 交给 PowerShell 处理。
 rem 在 cmd 里手写多行重定向块容易踩到括号与变量展开的坑，
-rem 交给 PowerShell 处理更稳，也顺便把随机密码一起做了。
+rem 交给 PowerShell 更稳，也顺便把随机密码一起做了。
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0make-config.ps1" -EnvFile "%ENV_FILE%" -DataDir "%DATA_DIR%" -Port "%PORT%"
 if errorlevel 1 (
   echo   [失败] 无法写入配置文件，请确认解压后的文件夹不是只读的。

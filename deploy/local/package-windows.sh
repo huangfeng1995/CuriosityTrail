@@ -47,6 +47,37 @@ cp "deploy/local/windows/启动寻迹.cmd" "$STAGE/"
 cp "deploy/local/windows/停止寻迹.cmd" "$STAGE/"
 cp deploy/local/windows/使用说明.txt "$STAGE/"
 
+# ---------- 预置 AI 密钥 ----------
+# 密钥从本机的 web/.env 读，读不到就留空。
+# 密钥不进版本库（.env 已被 gitignore），只在打包时注入到 zip 里，
+# 所以对方解压就能用 AI 写作，不用自己申请。
+API_KEY=""
+if [ -f "$ROOT/web/.env" ]; then
+  API_KEY="$(grep -E '^DEEPSEEK_API_KEY=' "$ROOT/web/.env" | head -1 | cut -d= -f2- | tr -d '\r' | xargs)"
+fi
+if [ -z "$API_KEY" ] && [ -f "$ROOT/.env" ]; then
+  API_KEY="$(grep -E '^DEEPSEEK_API_KEY=' "$ROOT/.env" | head -1 | cut -d= -f2- | tr -d '\r' | xargs)"
+fi
+if [ -n "$API_KEY" ]; then
+  echo "    已预置 DeepSeek 密钥（${API_KEY:0:6}****${API_KEY: -4}）"
+else
+  echo "    未找到 DeepSeek 密钥，打出的包需要手动填 app\\web\\.env"
+fi
+
+# 预先写好 .env：这样她第一次打开就有配置，不必等脚本生成。
+# 启动脚本发现 .env 已存在就不会覆盖。
+if [ -n "$API_KEY" ]; then
+  mkdir -p "$STAGE/app/web"
+  {
+    echo '# 寻迹 本地版配置'
+    echo '# 登录密码由首次启动时生成，或在此自行设置'
+    echo 'APP_PASSWORD='
+    echo 'PORT=3001'
+    echo 'BACKUP_HOUR=3'
+    echo "DEEPSEEK_API_KEY=$API_KEY"
+  } > "$STAGE/app/web/.env"
+fi
+
 # data 目录里放一个说明，解释数据在哪
 cat > "$STAGE/data/数据说明.txt" <<'TXT'
 你的小说、人物卡、素材、备份都在这个文件夹里。
@@ -78,5 +109,5 @@ echo "    2. 她解压后双击「启动寻迹.cmd」"
 echo "    3. 第一次会提示下载运行环境，需要联网，约 2-4 分钟"
 echo "    4. 之后每次双击都是秒开"
 echo
-echo "  提醒：别忘了在 app\\web\\.env 里填 DEEPSEEK_API_KEY，否则 AI 写作用不了。"
+echo "  提醒：AI 密钥已预置，对方解压即可直接用 AI 写作。"
 echo
