@@ -25,6 +25,9 @@ data/
 documents/
 *.db
 
+# 本地版打包产物（给非技术用户用的 zip）
+dist-local/
+
 # Environment variables - 敏感配置不要提交
 .env
 .env.local

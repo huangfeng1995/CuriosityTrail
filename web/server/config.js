@@ -116,6 +116,19 @@ const backupOffsiteKeep = Number(process.env.BACKUP_OFFSITE_KEEP || 30);
 const appOrigin = (process.env.APP_ORIGIN || 'http://localhost:3000').replace(/\/$/, '');
 const enableCors = !isProd;
 
+// Cookie 的 secure 标记。
+//
+// secure cookie 只在 HTTPS 下才会被浏览器存下。但本地版跑的是 http://127.0.0.1,
+// 照样得能记住登录——所以做成可覆盖的开关，而不是死绑 NODE_ENV。
+//
+// 用「显式设置才生效」而不是「非 production 就为 false」：
+// 服务器部署（走 Caddy 反代到 HTTPS）必须保持 secure，
+// 只有明确写了 COOKIE_SECURE=false 的本地场景才关掉。
+const cookieSecure =
+  process.env.COOKIE_SECURE !== undefined
+    ? process.env.COOKIE_SECURE !== 'false' && process.env.COOKIE_SECURE !== '0'
+    : isProd;
+
 module.exports = {
   // 路径
   dataDir,
@@ -134,6 +147,7 @@ module.exports = {
   sessionTtlDays,
   sessionRememberTtlDays,
   sessionCookieName,
+  cookieSecure,
   // AI
   deepseekApiKey,
   ollamaBaseUrl,

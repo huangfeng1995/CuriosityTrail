@@ -73,7 +73,7 @@ function cookieOptions(remember = false) {
   return {
     httpOnly: true,
     sameSite: 'strict',
-    secure: config.isProd,
+    secure: config.cookieSecure,
     maxAge,
     path: '/',
   };
