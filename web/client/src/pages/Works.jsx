@@ -1,17 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Empty, Input, message, Spin, Modal } from 'antd';
+import { Button, Input, message, Spin, Modal } from 'antd';
 import { PlusOutlined, BookOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import ExportButton from '../components/ExportButton';
-import { useIsMobile } from '../hooks/useMediaQuery';
+import EmptyState from '../components/EmptyState';
 
 /**
  * 作品列表页。
  */
 export default function Works() {
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
   const [works, setWorks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -61,21 +60,23 @@ export default function Works() {
           <p className="ct-page-sub">选择一部作品开始写作</p>
         </div>
         <span style={{ flex: 1 }} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
-          新建作品
-        </Button>
-      </div>
-
-      {works.length === 0 ? (
-        <div className="ct-empty-stage" style={{ height: 'auto', paddingTop: 72 }}>
-          <span className="ct-empty-mark font-serif" aria-hidden="true">
-            寻
-          </span>
-          <p className="ct-empty-text">还没有作品。点右上角新建一个，开始你的第一本书。</p>
+        {works.length > 0 && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
             新建作品
           </Button>
-        </div>
+        )}
+      </div>
+
+      {works.length === 0 ? (
+        <EmptyState
+          className="ct-empty-top"
+          text="还没有作品。新建一本，开始你的第一本书。"
+          action={
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
+              新建作品
+            </Button>
+          }
+        />
       ) : (
         <div className="ct-shelf">
           {works.map((work) => (

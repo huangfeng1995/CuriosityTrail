@@ -7,6 +7,7 @@ import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
+import EmptyState from '../EmptyState';
 
 /**
  * AI 侧边栏。
@@ -245,12 +246,7 @@ export default function AssistantSidebar() {
 
   if (!chapter) {
     return (
-      <div className="ct-ai-idle">
-        <span className="ct-empty-mark font-serif" aria-hidden="true">
-          寻
-        </span>
-        <p className="ct-empty-text">选中一个章节后，AI 才能知道你在写什么</p>
-      </div>
+      <EmptyState className="ct-empty-fill" text="选中一个章节后，AI 才能知道你在写什么" />
     );
   }
 

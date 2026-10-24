@@ -2,6 +2,7 @@ import React from 'react';
 import { Spin } from 'antd';
 import ActionCard from './ActionCard';
 import CitationBadge from './CitationBadge';
+import EmptyState from '../EmptyState';
 
 /**
  * 消息流。
@@ -9,16 +10,16 @@ import CitationBadge from './CitationBadge';
 export default function MessageList({ messages, streaming, sending, onApply, onRevert }) {
   if (!messages.length && !streaming) {
     return (
-      <div className="ct-ai-welcome">
-        <span className="ct-ai-welcome-mark font-serif" aria-hidden="true">
-          寻
-        </span>
-        <p className="ct-ai-welcome-text">
-          选一个角色开始对话。
-          <br />
-          AI 会知道你正在写哪一章、涉及哪些人物与设定。
-        </p>
-      </div>
+      <EmptyState
+        className="ct-empty-welcome"
+        text={
+          <>
+            选一个角色开始对话。
+            <br />
+            AI 会知道你正在写哪一章、涉及哪些人物与设定。
+          </>
+        }
+      />
     );
   }
 

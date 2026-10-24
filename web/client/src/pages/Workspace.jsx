@@ -5,6 +5,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../store/workspace';
 import ChapterEditor from '../components/Editor/ChapterEditor';
 import AssistantSidebar from '../components/Assistant/Sidebar';
+import EmptyState from '../components/EmptyState';
+import Resizer from '../components/Resizer';
+import useColumnWidths, { LIMITS } from '../hooks/useColumnWidths';
 import WorkTree from '../components/Sidebar/WorkTree';
 import CharacterPanel from '../components/Sidebar/CharacterPanel';
 import SettingPanel from '../components/Sidebar/SettingPanel';
@@ -30,6 +33,7 @@ export default function Workspace() {
   const [rightOpen, setRightOpen] = useState(false);
   const [panelKey, setPanelKey] = useState('characters');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 992);
+  const { widths, setLeft, setRight, reset } = useColumnWidths();
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 992);
@@ -77,15 +81,15 @@ export default function Workspace() {
 
   if (!workId) {
     return (
-      <div className="ct-empty-stage">
-        <span className="ct-empty-mark font-serif" aria-hidden="true">
-          寻
-        </span>
-        <p className="ct-empty-text">从左侧选一个作品，或新建一个开始写</p>
-        <Button type="primary" onClick={() => navigate('/works')}>
-          查看作品列表
-        </Button>
-      </div>
+      <EmptyState
+        className="ct-empty-fill"
+        text="从左侧选一个作品，或新建一个开始写"
+        action={
+          <Button type="primary" onClick={() => navigate('/works')}>
+            查看作品列表
+          </Button>
+        }
+      />
     );
   }
 
@@ -150,13 +154,36 @@ export default function Workspace() {
 
   return (
     <div className="ct-workspace">
-      <aside className="ct-col-left">{leftPanel}</aside>
+      <aside className="ct-col-left" style={{ width: widths.left }}>
+        {leftPanel}
+      </aside>
+
+      <Resizer
+        side="left"
+        value={widths.left}
+        min={LIMITS.left.min}
+        max={LIMITS.left.max}
+        onChange={setLeft}
+        onReset={() => reset('left')}
+      />
 
       <main className="ct-col-center">
         <ChapterEditor />
       </main>
 
-      <aside className="ct-col-right">
+      <Resizer
+        side="right"
+        value={widths.right}
+        min={LIMITS.right.min}
+        max={LIMITS.right.max}
+        onChange={setRight}
+        onReset={() => reset('right')}
+      />
+
+      <aside
+        className={`ct-col-right${widths.right < 344 ? ' is-narrow' : ''}`}
+        style={{ width: widths.right }}
+      >
         <AssistantSidebar />
       </aside>
     </div>

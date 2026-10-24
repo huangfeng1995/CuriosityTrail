@@ -7,7 +7,6 @@ import {
   message,
   Upload,
   List,
-  Empty,
   Typography,
   Popconfirm,
   Drawer,
@@ -23,6 +22,7 @@ import {
 } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
+import EmptyState from '../components/EmptyState';
 import { useIsMobile } from '../hooks/useMediaQuery';
 
 const { Text } = Typography;
@@ -242,7 +242,10 @@ export default function Materials() {
       </div>
 
       {list.length === 0 ? (
-        <Empty description="素材库还是空的。导入一些参考材料，AI 检索时会用到它们。" />
+        <EmptyState
+          className="ct-empty-top"
+          text="素材库还是空的。导入一些参考材料，AI 检索时会用到它们。"
+        />
       ) : (
         <List
           bordered
@@ -336,9 +339,9 @@ export default function Materials() {
             )}
           </div>
         ) : (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="没能在这条素材里定位到引用的片段。可能是 AI 转述了原文而不是照抄。"
+          <EmptyState
+            className="ct-empty-pad"
+            text="没能在这条素材里定位到引用的片段。可能是 AI 转述了原文而不是照抄。"
           />
         )}
       </Drawer>

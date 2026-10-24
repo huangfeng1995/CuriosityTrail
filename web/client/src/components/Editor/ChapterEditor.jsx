@@ -9,6 +9,7 @@ import BlockPalette from './BlockPalette';
 import BlockToolbar from './BlockToolbar';
 import VersionHistoryPanel from './VersionHistoryPanel';
 import ExportButton from '../ExportButton';
+import EmptyState from '../EmptyState';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 
 // 保存状态对应的提示文案。状态来自 store，与真实落库进度一致。
@@ -215,12 +216,7 @@ export default function ChapterEditor() {
 
   if (!chapter) {
     return (
-      <div className="ct-editor-empty">
-        <span className="ct-empty-mark font-serif" aria-hidden="true">
-          寻
-        </span>
-        <p className="ct-empty-text">从左侧选择一个章节开始写作</p>
-      </div>
+      <EmptyState className="ct-empty-fill" text="从左侧选择一个章节开始写作" />
     );
   }
 
