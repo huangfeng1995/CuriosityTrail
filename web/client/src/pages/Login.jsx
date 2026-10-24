@@ -1,10 +1,8 @@
 import React, { useState } from 'react';
-import { Button, Input, Form, Checkbox, Alert, Typography } from 'antd';
+import { Button, Input, Form, Checkbox, Alert } from 'antd';
 import { LockOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
-
-const { Text } = Typography;
 
 /**
  * 登录页。
@@ -41,11 +39,7 @@ export default function Login({ isDark = false }) {
     <div className="ct-login">
       <div className="ct-login-card ct-fade-in">
         <div className="ct-login-head">
-          <span className="ct-login-mark" aria-hidden="true">
-            寻
-          </span>
           <h1 className="ct-login-title font-serif">寻迹</h1>
-          <p className="ct-login-sub">Curiosity Trail · AI 辅助小说创作</p>
         </div>
 
         {error && (
@@ -79,8 +73,6 @@ export default function Login({ isDark = false }) {
             进入书房
           </Button>
         </Form>
-
-        <Text className="ct-login-foot">全部稿件只保存在你自己的服务器上</Text>
       </div>
     </div>
   );
