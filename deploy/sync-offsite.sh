@@ -28,9 +28,9 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 SYNC_DIR="${SYNC_DIR:-/opt/curiosity-trail/data-offsite}"
 # 目标：阿里云 OSS 用 oss://，S3 兼容用 s3://
-REMOTE="${REMOTE:-}"
+REMOTE="${REMOTE:-oss://}"
 # 用 ossutil 时填 bucket 名，用 s5cmd 时留空
-BUCKET="${BUCKET:-}"
+BUCKET="${BUCKET:-curiosity-trail-backup}"
 PREFIX="${PREFIX:-curiosity-backups/}"
 # 保留份数（对象存储侧）
 KEEP="${KEEP:-30}"
@@ -68,10 +68,21 @@ s5cmd)
 	;;
 ossutil|ossutil64)
 	if [[ "$REMOTE" == oss://* ]]; then
-		# ossutil 的 cp 语法：cp src oss://bucket/prefix/
-		"$TOOL" cp "$SYNC_DIR"/*.zip "oss://${BUCKET}/${PREFIX}" --update
+		# ossutil 2.x 不支持一次上传多个源文件（cp a.zip b.zip oss://... 会报
+		# "multiple source url in upload operation"），所以用 sync 整个目录。
+		# 1.x 没有 sync 命令，失败时回退到逐个上传。
+		if ossutil sync "$SYNC_DIR/" "oss://${BUCKET}/${PREFIX}" 2>&1 | tail -3; then
+			:
+		else
+			log "sync 失败，逐个上传"
+			for f in "${files[@]}"; do
+				"$TOOL" cp "$f" "oss://${BUCKET}/${PREFIX}" --update
+			done
+		fi
 	elif [[ "$REMOTE" == s3://* ]]; then
-		"$TOOL" cp "$SYNC_DIR"/*.zip "s3://${BUCKET}/${PREFIX}" --update
+		for f in "${files[@]}"; do
+			"$TOOL" cp "$f" "s3://${BUCKET}/${PREFIX}" --update
+		done
 	else
 		die "REMOTE 格式不认识：$REMOTE"
 	fi
