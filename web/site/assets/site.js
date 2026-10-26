@@ -92,57 +92,58 @@
   }
 
   /* ---------- 五个角色 ----------
-     每个角色的温度 / 模型 / 思考档位都不同——
-     这不是装饰，是产品里真实的参数分配。 */
+     每个角色有自己的脾气和分工。
+     这里只说它「擅长什么、什么语气、什么时候找它」——
+     参数是产品内部的事，客户不需要看见。 */
   var ROLES = {
     writer: {
       name: '作家',
       desc: '起稿、续写场景、扩写描写。文学性优先，重视画面与节奏。',
-      temp: '0.85',
-      model: '跟随全局',
-      think: '关闭',
-      note: '温度最高——它靠发散吃饭，开思考就等于把温度调参变成摆设。',
+      good: '起稿 · 续写 · 扩写',
+      voice: '画面优先，先给感觉',
+      when: '卡住了，或者想一次写完一段',
+      note: '发散最狠的那个。给它一句话，它能还你三种开头。',
     },
     editor: {
       name: '编辑',
       desc: '改写、润色、删冗余、调节奏。克制，会解释改了哪里、为什么这么改。',
-      temp: '0.60',
-      model: '跟随全局',
-      think: '关闭',
-      note: '中温。编辑要的是准，不是野——但也得留一口气给句子。',
+      good: '改写 · 润色 · 精简',
+      voice: '克制，改完会说明理由',
+      when: '写完了，但读着还差点意思',
+      note: '它不推翻你的句子，只让它站得更稳。改完会告诉你动过哪几处。',
     },
     critic: {
       name: '审稿人',
       desc: '找逻辑漏洞、找设定冲突、找重复表达。直率，列条目，不客气。',
-      temp: '0.40',
-      model: 'deepseek-v4-pro',
-      think: '开启',
-      note: '唯一钉住模型与思考的角色：要在整章里追线索、查矛盾，靠的是推理深度而不是随机性。',
+      good: '找漏洞 · 找冲突 · 找重复',
+      voice: '直率，一条条列，不绕弯',
+      when: '准备发出去之前',
+      note: '唯一会跟你唱反调的角色。列出来的问题，都指向具体的某一句。',
     },
     inspiler: {
       name: '灵感师',
       desc: '情节走向、人物动机、冲突设计、反转。发散，给多个方向而不是单一答案。',
-      temp: '0.95',
-      model: '跟随全局',
-      think: '关闭',
-      note: '温度拉满。速记本里那些半句话，就等着它长成情节。',
+      good: '情节走向 · 人物动机 · 反转',
+      voice: '发散，一次给你几个方向',
+      when: '不知道下一场该怎么写',
+      note: '你给它半个想法，它还你三个故事。挑一个，或者都不要。',
     },
     researcher: {
       name: '资料员',
       desc: '搜站内素材、搜网络、汇总并标注来源。只讲有来源的，没来源就直说。',
-      temp: '0.30',
-      model: '跟随全局',
-      think: '关闭',
-      note: '温度压到最低。它的工作是核实，不是创作——一添油加醋就废了。',
+      good: '搜素材 · 标来源',
+      voice: '只讲有出处的',
+      when: '需要一件真事来撑起细节',
+      note: '它不创作，只核实。没有来源它会说没有，不拿编的充数。',
     },
   };
 
   var roleRow = document.getElementById('roleRow');
   var rdName = document.getElementById('rdName');
   var rdDesc = document.getElementById('rdDesc');
-  var rdTemp = document.getElementById('rdTemp');
-  var rdModel = document.getElementById('rdModel');
-  var rdThink = document.getElementById('rdThink');
+  var rdGood = document.getElementById('rdGood');
+  var rdVoice = document.getElementById('rdVoice');
+  var rdWhen = document.getElementById('rdWhen');
   var rdNote = document.getElementById('rdNote');
 
   if (roleRow) {
@@ -168,9 +169,9 @@
       window.setTimeout(function () {
         rdName.textContent = r.name;
         rdDesc.textContent = r.desc;
-        rdTemp.textContent = r.temp;
-        rdModel.textContent = r.model;
-        rdThink.textContent = r.think;
+        rdGood.textContent = r.good;
+        rdVoice.textContent = r.voice;
+        rdWhen.textContent = r.when;
         rdNote.textContent = r.note;
         if (detail) {
           detail.style.opacity = '1';
