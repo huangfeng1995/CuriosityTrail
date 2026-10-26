@@ -63,9 +63,9 @@ www.your-domain.example.com {
 	root * /opt/curiosity-trail/web/site
 	file_server
 
-	# 静态资源指纹文件名，可以放心长缓存
-	@immutable path /assets/*
-	header @immutable Cache-Control "public, max-age=31536000, immutable"
+	# 官网的 CSS/JS 改版频繁（文件名不带指纹），用 ETag 协商而不是长缓存，
+	# 否则改了内容老用户会一直拿到旧版本。
+	header Cache-Control "public, max-age=0, must-revalidate"
 
 	header {
 		X-Content-Type-Options nosniff
