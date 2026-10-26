@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>寻迹 · 写长篇的人，需要一个记得住前文的 AI</title>
+    <meta
+      name="description"
+      content="寻迹是给自己用的 AI 小说写作台。五个 AI 角色、一份自动装配的上下文、站内素材可溯源检索，长篇的一致性、版本与进度都有人看着。你的全部稿件只存在自己的服务器上。"
+    />
+    <meta name="theme-color" content="#f3efe4" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="寻迹 · 写长篇的人，需要一个记得住前文的 AI" />
+    <meta
+      property="og:description"
+      content="五个 AI 角色，一份自动装配的上下文。稿件只存在自己的服务器上。"
+    />
+    <meta property="og:locale" content="zh_CN" />
+
+    <link rel="preconnect" href="https://fonts.loli.net" crossorigin />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.loli.net/css2?family=Noto+Serif+SC:wght@400;500;600;700&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/style.css"
+    />
+    <link rel="stylesheet" href="./assets/site.css" />
+
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b0402f'/%3E%3Cpath d='M9 21.5c3.2-1 5-3.6 5.6-7.8.2-1.4.3-2.6.3-3.7 1.9.9 3.6 2.3 5 4.3-1.6.2-2.9.7-3.9 1.5 1.6 1.6 2.4 3.4 2.6 5.4-2-.5-3.7-1.3-5-2.4-1 1.3-2.4 2.3-4.6 2.7z' fill='%23faf7f0'/%3E%3C/svg%3E"
+    />
+  </head>
+
+  <body>
+    <!-- ================= 顶栏 ================= -->
+    <header class="topbar" id="topbar">
+      <div class="wrap topbar-inner">
+        <a class="brand" href="#top">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">寻迹</span>
+          <span class="brand-sub">AI 辅助小说写作</span>
+        </a>
+
+        <nav class="topnav" id="topnav" aria-label="主导航">
+          <a href="#roles">角色</a>
+          <a href="#channels">双通道</a>
+          <a href="#materials">素材</a>
+          <a href="#longform">长篇</a>
+          <a href="#private">私有</a>
+        </nav>
+
+        <div class="topbar-actions">
+          <button class="icon-btn" id="themeBtn" type="button" aria-label="切换深浅主题" title="切换深浅主题">
+            <svg class="ico-sun" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4.2" />
+              <g stroke-linecap="round">
+                <path d="M12 2.6v2.4M12 19v2.4M2.6 12H5M19 12h2.4" />
+                <path d="M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7" />
+              </g>
+            </svg>
+            <svg class="ico-moon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 14.2A8.4 8.4 0 0 1 9.8 4a8.4 8.4 0 1 0 10.2 10.2z" />
+            </svg>
+          </button>
+          <a class="btn btn-primary btn-sm" href="https://curiositytrail.xyz/" target="_blank" rel="noopener">
+            进入书房
+          </a>
+          <button class="icon-btn menu-btn" id="menuBtn" type="button" aria-label="展开导航" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <g stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16" /></g>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- ================= Hero ================= -->
+      <section class="hero">
+        <div class="wrap hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow reveal">AI 辅助小说写作 · 自建部署</p>
+            <h1 class="hero-title reveal" style="--d: 0.06s">
+              写长篇的人，<br />
+              需要一个<em>记得住前文</em>的 AI
+            </h1>
+            <p class="hero-lede reveal" style="--d: 0.12s">
+              寻迹把「上下文」做成了基础设施。人物卡、世界观、大纲、上一场的结尾，
+              由装配器按需注入——不必每次把整本书塞给模型，也不必每次重新解释自己是谁。
+            </p>
+            <div class="hero-cta reveal" style="--d: 0.18s">
+              <a class="btn btn-primary" href="https://curiositytrail.xyz/" target="_blank" rel="noopener">
+                进入书房
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="btn-arrow">
+                  <g stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6" /></g>
+                </svg>
+              </a>
+              <a class="btn btn-ghost" href="#roles">先看看它怎么工作</a>
+            </div>
+          </div>
+
+          <!-- 手稿 + 朱批 -->
+          <figure class="hero-figure reveal" style="--d: 0.24s">
+            <div class="ms-window">
+              <div class="ms-bar">
+                <span class="ms-dot"></span><span class="ms-dot"></span><span class="ms-dot"></span>
+                <span class="ms-title">第三章 · 雨夜</span>
+                <span class="ms-save">已保存</span>
+              </div>
+              <div class="ms-body">
+                <div class="ms-editor">
+                  <p class="ms-p">
+                    巷子尽头的灯忽明忽暗，林晚把伞收了收，雨水顺着伞骨滑下来。
+                    <span class="ms-sel" id="msSel"
+                      >她没有立刻往前走，只是站在原地，看着那盏灯，像在等什么人先开口。<span
+                        class="ms-mark"
+                        aria-hidden="true"
+                        >壹</span
+                      ></span
+                    >
+                  </p>
+                  <p class="ms-p ms-p-dim">
+                    伞面上的水已经积了半寸。她想，这雨大概下不到天亮——就像有些话，说出口之前，
+                    就已经在心里下过一遍了。
+                  </p>
+                  <div class="ms-toolbar" id="msToolbar" role="group" aria-label="行内改写工具条">
+                    <button type="button" data-act="rewrite">改写</button>
+                    <button type="button" data-act="expand">扩写</button>
+                    <button type="button" data-act="shrink">缩写</button>
+                    <button type="button" data-act="critic">找茬</button>
+                  </div>
+                </div>
+                <aside class="ms-side">
+                  <div class="ms-roles">
+                    <span class="ms-role is-on">编辑</span>
+                    <span class="ms-role">审稿人</span>
+                    <span class="ms-role">资料员</span>
+                  </div>
+                  <div class="ms-msg" id="msMsg">
+                    <p class="ms-msg-who">编辑</p>
+                    <p class="ms-msg-body" id="msMsgBody">
+                      这句「看着那盏灯」和上一场「盯着巷口」撞词了。换成具体动作试试？
+                    </p>
+                  </div>
+                  <div class="ms-input">
+                    <span>和 AI 说点什么…</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <g stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6" /></g>
+                    </svg>
+                  </div>
+                </aside>
+              </div>
+              <div class="ms-foot">
+                <span>1,284 字</span><span class="ms-dotsep"></span><span>自动保存 2s</span>
+                <span class="ms-foot-right">DeepSeek · 1M 上下文</span>
+              </div>
+            </div>
+
+            <!-- 朱批：占了稿纸右边的一条天头，像中式校注 -->
+            <figcaption class="zhu" data-side="right">
+              <span class="zhu-line" aria-hidden="true"></span>
+              「等」字太轻，撑不住雨夜。让她做点事。
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <!-- ================= 事实条 ================= -->
+      <section class="facts">
+        <div class="wrap facts-grid">
+          <div class="fact reveal">
+            <b class="fact-num">5</b>
+            <span class="fact-label">AI 角色</span>
+            <span class="fact-desc">作家 / 编辑 / 审稿人 / 灵感师 / 资料员</span>
+          </div>
+          <div class="fact reveal" style="--d: 0.06s">
+            <b class="fact-num">2</b>
+            <span class="fact-label">条协作通道</span>
+            <span class="fact-desc">行内改一个选区 · 侧边栏管整章</span>
+          </div>
+          <div class="fact reveal" style="--d: 0.12s">
+            <b class="fact-num">1M</b>
+            <span class="fact-label">上下文上限</span>
+            <span class="fact-desc">长篇不必分批丢给模型</span>
+          </div>
+          <div class="fact reveal" style="--d: 0.18s">
+            <b class="fact-num">0</b>
+            <span class="fact-label">稿件离机</span>
+            <span class="fact-desc">库存在你自己的服务器</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 壹 · 五个角色 ================= -->
+      <section class="sec" id="roles">
+        <div class="wrap">
+          <div class="sec-head">
+            <span class="sec-mark reveal" aria-hidden="true">壹</span>
+            <div>
+              <h2 class="sec-title reveal" style="--d: 0.05s">五个角色，一支写作班子</h2>
+              <p class="sec-lede reveal" style="--d: 0.1s">
+                不是一把万能的 AI 键。每个角色有自己的性格参数与职责边界——
+                该发散的让它发散，该较真的让它较真。
+              </p>
+            </div>
+          </div>
+
+          <div class="role-row" id="roleRow" role="tablist" aria-label="AI 角色">
+            <button class="role-card is-on" type="button" role="tab" data-role="writer" aria-selected="true">
+              <span class="role-vert">作家</span>
+              <span class="role-duty">生成新内容</span>
+            </button>
+            <button class="role-card" type="button" role="tab" data-role="editor" aria-selected="false">
+              <span class="role-vert">编辑</span>
+              <span class="role-duty">修改已有内容</span>
+            </button>
+            <button class="role-card" type="button" role="tab" data-role="critic" aria-selected="false">
+              <span class="role-vert">审稿人</span>
+              <span class="role-duty">挑出问题</span>
+            </button>
+            <button class="role-card" type="button" role="tab" data-role="inspiler" aria-selected="false">
+              <span class="role-vert">灵感师</span>
+              <span class="role-duty">提供点子</span>
+            </button>
+            <button class="role-card" type="button" role="tab" data-role="researcher" aria-selected="false">
+              <span class="role-vert">资料员</span>
+              <span class="role-duty">找信息</span>
+            </button>
+          </div>
+
+          <div class="role-detail reveal" id="roleDetail" aria-live="polite">
+            <div class="role-detail-inner">
+              <p class="role-detail-name" id="rdName">作家</p>
+              <p class="role-detail-desc" id="rdDesc">
+                起稿、续写场景、扩写描写。文学性优先，重视画面与节奏。
+              </p>
+              <dl class="role-params">
+                <div><dt>温度</dt><dd id="rdTemp">0.85</dd></div>
+                <div><dt>模型</dt><dd id="rdModel">跟随全局</dd></div>
+                <div><dt>深度思考</dt><dd id="rdThink">关闭</dd></div>
+              </dl>
+            </div>
+            <p class="zhu zhu-inline" id="rdNote">
+              温度就是角色的性格。思考模式会吃掉温度，所以每个角色只能二选一。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 貳 · 双通道 ================= -->
+      <section class="sec sec-alt" id="channels">
+        <div class="wrap">
+          <div class="sec-head">
+            <span class="sec-mark reveal" aria-hidden="true">貳</span>
+            <div>
+              <h2 class="sec-title reveal" style="--d: 0.05s">两个通道，各管一摊</h2>
+              <p class="sec-lede reveal" style="--d: 0.1s">
+                同一个 AI，同一条链路，区别只在装配多少上下文。
+                改一句话别惊动整本书；重写整章也别只给一句话。
+              </p>
+            </div>
+          </div>
+
+          <div class="duo">
+            <article class="duo-card reveal">
+              <header class="duo-head">
+                <span class="duo-tag">行内</span>
+                <h3>一个选区</h3>
+                <p>选中文字，上方浮出工具条。</p>
+              </header>
+              <ul class="duo-list">
+                <li><b>改写</b>换一种表达，意思不变</li>
+                <li><b>扩写</b>补细节与描写</li>
+                <li><b>缩写</b>精简，保留要点</li>
+                <li><b>换语气</b>正式 / 口语 / 冷峻 / 悬疑</li>
+                <li><b>续写</b>接住这一句往下写</li>
+                <li><b>找茬</b>审稿人视角挑毛病</li>
+              </ul>
+              <p class="duo-scope">上下文 = 选区 + 邻接块 + 相关人物卡 + 设定</p>
+            </article>
+
+            <article class="duo-card reveal" style="--d: 0.08s">
+              <header class="duo-head">
+                <span class="duo-tag">侧边栏</span>
+                <h3>整章 / 整部</h3>
+                <p>宏观的事，交给能看全书的角色。</p>
+              </header>
+              <ul class="duo-list">
+                <li><b>重写整章</b>按大纲重新组织</li>
+                <li><b>生成大纲</b>接上一章的结尾往下排</li>
+                <li><b>梳理人物</b>理清关系网与成长弧</li>
+                <li><b>查资料</b>站内 + 联网，带来源</li>
+                <li><b>一致性</b>设定冲突逐条列出</li>
+                <li><b>要灵感</b>从速记本里长出情节</li>
+              </ul>
+              <p class="duo-scope">上下文 = 作品大纲 + 当前章全文 + 人物卡全集 + 设定全集 + 检索片段</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 叁 · 素材与检索 ================= -->
+      <section class="sec" id="materials">
+        <div class="wrap">
+          <div class="sec-head">
+            <span class="sec-mark reveal" aria-hidden="true">叁</span>
+            <div>
+              <h2 class="sec-title reveal" style="--d: 0.05s">你的资料，AI 自己去翻</h2>
+              <p class="sec-lede reveal" style="--d: 0.1s">
+                把手记、书摘、网页和 PDF 丢进素材库。AI 会主动去搜，
+                而且每一条引用都指得回原文的第几页。
+              </p>
+            </div>
+          </div>
+
+          <div class="mat-grid">
+            <div class="mat-flow reveal">
+              <ol class="flow">
+                <li><b>入库</b><span>PDF 自动解析正文，按页打点</span></li>
+                <li><b>切词</b><span>中文按 bigram 建索引，不引分词库</span></li>
+                <li><b>检索</b><span>站内 FTS5 全文命中，联网搜索补缺</span></li>
+                <li><b>溯源</b><span>角标点开，跳回原文并高亮</span></li>
+              </ol>
+            </div>
+
+            <div class="mat-demo reveal" style="--d: 0.08s">
+              <div class="chat">
+                <div class="chat-q">有没有适合写这场雨夜追逐的环境描写？</div>
+                <div class="chat-a">
+                  <p>
+                    站内命中 2 段，联网补充 1 条。建议用下面这段处理脚步声——
+                    雨把脚步声吃掉了，人只能靠水花判断距离。
+                  </p>
+                  <div class="cites">
+                    <button class="cite" type="button">
+                      <span class="cite-tag">手记</span>《江南雨巷》<span class="cite-page">第 12 页</span>
+                    </button>
+                    <button class="cite" type="button">
+                      <span class="cite-tag cite-tag-pdf">PDF</span>《水乡旧闻》<span class="cite-page">第 42 页</span>
+                    </button>
+                    <button class="cite" type="button">
+                      <span class="cite-tag cite-tag-web">网</span>雨夜声景描写<span class="cite-page">来源</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p class="zhu zhu-inline">
+                没有来源的，AI 会直说没有——不拿编的充数。
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 肆 · 长篇工程 ================= -->
+      <section class="sec sec-alt" id="longform">
+        <div class="wrap">
+          <div class="sec-head">
+            <span class="sec-mark reveal" aria-hidden="true">肆</span>
+            <div>
+              <h2 class="sec-title reveal" style="--d: 0.05s">写到第两百章，靠的不是记性</h2>
+              <p class="sec-lede reveal" style="--d: 0.1s">
+                长篇真正的敌人是失控：设定崩了、伏笔忘了、进度不明。
+                这些交给机器盯着，你只管写。
+              </p>
+            </div>
+          </div>
+
+          <div class="lf-grid">
+            <article class="lf-card reveal">
+              <h3>一致性检查</h3>
+              <p>规则层先跑一遍，再交给 AI 逐条核。</p>
+              <ul class="issues">
+                <li><span class="sev sev-hi">高</span>第四章称伞为红，前文是黑伞</li>
+                <li><span class="sev sev-mid">中</span>门铃在雨夜不该响</li>
+                <li><span class="sev sev-lo">低</span>时间线比第一章晚了两小时</li>
+              </ul>
+            </article>
+
+            <article class="lf-card reveal" style="--d: 0.06s">
+              <h3>版本快照</h3>
+              <p>每次保存留一份，还能手动存档、随时回滚。</p>
+              <ul class="vers">
+                <li class="is-now"><b>当前</b><span>雨夜 · 修改于 2 分钟前</span></li>
+                <li><b>自动</b><span>雨夜 · 昨天 23:41</span></li>
+                <li><b>手动</b><span>林晚初登场那版</span></li>
+              </ul>
+            </article>
+
+            <article class="lf-card reveal" style="--d: 0.12s">
+              <h3>写作进度</h3>
+              <p>每日增量单独记，不从版本反推——回滚不会算出负数。</p>
+              <svg class="spark" viewBox="0 0 240 72" role="img" aria-label="近 14 天每日新增字数曲线">
+                <defs>
+                  <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="var(--cinnabar)" stop-opacity="0.22" />
+                    <stop offset="100%" stop-color="var(--cinnabar)" stop-opacity="0" />
+                  </linearGradient>
+                </defs>
+                <path
+                  class="spark-fill"
+                  d="M0 60 L17 55 L34 58 L51 44 L68 49 L85 33 L102 38 L119 26 L136 31 L153 41 L170 22 L187 28 L204 46 L221 51 L240 44 L240 72 L0 72 Z"
+                />
+                <path
+                  class="spark-line"
+                  d="M0 60 L17 55 L34 58 L51 44 L68 49 L85 33 L102 38 L119 26 L136 31 L153 41 L170 22 L187 28 L204 46 L221 51 L240 44"
+                />
+              </svg>
+              <p class="lf-foot">近 14 天 · 累计 9,460 字</p>
+            </article>
+
+            <article class="lf-card reveal" style="--d: 0.18s">
+              <h3>情节卡与导出</h3>
+              <p>伏笔、冲突、转折挂成卡片，拖拽排序。</p>
+              <div class="kanban">
+                <div class="kb-col">
+                  <span class="kb-h">待写</span>
+                  <span class="kb-card">伞里是证据</span>
+                </div>
+                <div class="kb-col">
+                  <span class="kb-h">进行</span>
+                  <span class="kb-card is-on">巷口的对峙</span>
+                </div>
+                <div class="kb-col">
+                  <span class="kb-h">已完成</span>
+                  <span class="kb-card">母亲留下的信</span>
+                </div>
+              </div>
+              <p class="lf-foot">导出 TXT / Markdown / DOCX</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 伍 · 私有部署 ================= -->
+      <section class="sec sec-dark" id="private">
+        <div class="wrap">
+          <div class="sec-head">
+            <span class="sec-mark reveal" aria-hidden="true">伍</span>
+            <div>
+              <h2 class="sec-title reveal" style="--d: 0.05s">稿件不在别人手里</h2>
+              <p class="sec-lede reveal" style="--d: 0.1s">
+                寻迹是一台你自己的机器。数据库、插图、备份全在本地磁盘；
+                只有你主动发起的对话，才会带着必要的上下文去找模型。
+              </p>
+            </div>
+          </div>
+
+          <div class="priv-grid">
+            <div class="priv-item reveal">
+              <span class="priv-n">01</span>
+              <h3>单机自建</h3>
+              <p>香港轻量服务器 + Docker Compose，一条命令上线，续期、备份都归你管。</p>
+            </div>
+            <div class="priv-item reveal" style="--d: 0.06s">
+              <span class="priv-n">02</span>
+              <h3>定时备份</h3>
+              <p>每天凌晨三点自动打包，再同步一份到对象存储。删库也能捞回来。</p>
+            </div>
+            <div class="priv-item reveal" style="--d: 0.12s">
+              <span class="priv-n">03</span>
+              <h3>一道密码</h3>
+              <p>单一密码 + 会话 Cookie，密钥不进 Git、不进镜像、不进备份包。</p>
+            </div>
+            <div class="priv-item reveal" style="--d: 0.18s">
+              <span class="priv-n">04</span>
+              <h3>可验证</h3>
+              <p>58 项后端单测与 13 项端到端用例常驻流水线，改坏了会红。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CTA ================= -->
+      <section class="cta">
+        <div class="wrap cta-inner">
+          <p class="cta-kicker reveal">写你的第一本</p>
+          <h2 class="cta-title reveal" style="--d: 0.06s">
+            稿纸已经铺好了，<br />
+            剩下的交给<span class="zhu-red">它</span>盯着。
+          </h2>
+          <p class="cta-sub reveal" style="--d: 0.12s">
+            单人使用，不做社交、不做协作、不做 All in one。<br />
+            只解决一件事：让你把长篇写完。
+          </p>
+          <div class="cta-btns reveal" style="--d: 0.18s">
+            <a class="btn btn-primary btn-lg" href="https://curiositytrail.xyz/" target="_blank" rel="noopener">
+              进入书房
+              <svg viewBox="0 0 24 24" aria-hidden="true" class="btn-arrow">
+                <g stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6" /></g>
+              </svg>
+            </a>
+            <a class="btn btn-ghost btn-lg" href="#top">再看看</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ================= 页脚 ================= -->
+    <footer class="foot">
+      <div class="wrap foot-inner">
+        <div class="foot-brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">寻迹</span>
+          <span class="brand-sub">Curiosity Trail</span>
+        </div>
+        <p class="foot-note">
+          自建部署的 AI 小说写作台 · 深浅主题 · 导出 TXT / Markdown / DOCX
+        </p>
+        <nav class="foot-links" aria-label="页脚导航">
+          <a href="#roles">角色</a>
+          <a href="#channels">双通道</a>
+          <a href="#materials">素材</a>
+          <a href="#longform">长篇</a>
+          <a href="#private">私有</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script src="./assets/site.js"></script>
+  </body>
+</html>
