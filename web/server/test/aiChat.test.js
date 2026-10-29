@@ -16,9 +16,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const http = require('http');
 
 const { setupTempEnv, startServer } = require('./helpers');
+const { startFakeModel } = require('./fakeModel');
 
 // 必须在 require 业务模块之前设好 DATA_DIR
 const env = setupTempEnv();
@@ -30,107 +30,6 @@ const aiConfig = require('../services/aiConfig');
 let server;
 let fakeModel;
 let originalConfig;
-
-/** 当前这轮要伪造的模型行为 */
-let behavior = null;
-
-/**
- * 起一个假的 OpenAI 兼容端点。
- *
- * 按 body.stream 决定回 SSE 流还是普通 JSON，
- * 内容和 finish_reason 来自 behavior——测试想造什么场景就造什么场景。
- */
-function startFakeModel() {
-  return new Promise((resolve) => {
-    const sockets = new Set();
-
-    const srv = http.createServer((req, res) => {
-      let raw = '';
-      req.on('data', (chunk) => (raw += chunk));
-      req.on('end', () => {
-        let body = {};
-        try {
-          body = JSON.parse(raw || '{}');
-        } catch (e) {
-          body = {};
-        }
-
-        const b = behavior || { content: '', finishReason: 'stop' };
-
-        // 模拟供应商直接报错（限流、鉴权失败等）
-        if (b.httpStatus) {
-          res.writeHead(b.httpStatus, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: b.errorMessage || '供应商出错了' } }));
-          return;
-        }
-
-        if (!body.stream) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(
-            JSON.stringify({
-              choices: [
-                {
-                  message: {
-                    content: b.content || '',
-                    reasoning_content: b.reasoning || '',
-                  },
-                  finish_reason: b.finishReason || 'stop',
-                },
-              ],
-            })
-          );
-          return;
-        }
-
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
-
-        if (b.reasoning) {
-          res.write(
-            `data: ${JSON.stringify({
-              choices: [{ delta: { reasoning_content: b.reasoning }, finish_reason: null }],
-            })}\n\n`
-          );
-        }
-        if (b.content) {
-          res.write(
-            `data: ${JSON.stringify({
-              choices: [{ delta: { content: b.content }, finish_reason: null }],
-            })}\n\n`
-          );
-        }
-        res.write(
-          `data: ${JSON.stringify({
-            choices: [{ delta: {}, finish_reason: b.finishReason || 'stop' }],
-          })}\n\n`
-        );
-        res.write('data: [DONE]\n\n');
-        res.end();
-      });
-    });
-
-    // 记住连接：测试结束时必须主动断开。
-    // 只调 close() 是不够的——keep-alive 的空闲连接会让 close 一直等下去，
-    // 子进程迟迟不退出，测试运行器那边就会冒出莫名的 IPC 反序列化失败。
-    srv.on('connection', (socket) => {
-      sockets.add(socket);
-      socket.on('close', () => sockets.delete(socket));
-    });
-
-    srv.listen(0, '127.0.0.1', () =>
-      resolve({
-        server: srv,
-        close() {
-          for (const socket of sockets) socket.destroy();
-          return new Promise((done) => srv.close(done));
-        },
-      })
-    );
-  });
-}
 
 /**
  * 发一条消息，收集整条 SSE 流里的事件。
@@ -188,11 +87,11 @@ test.after(async () => {
 // ---------------------------------------------------------------------------
 
 test('模型被长度上限截断时，返回可见的错误而不是空回复', async () => {
-  behavior = {
+  fakeModel.setDefault({
     content: '',
     reasoning: '反复斟酌用词，写了一堆',
     finishReason: 'length',
-  };
+  });
 
   const events = await chat('按照以上的建议修改第一章的内容');
 
@@ -206,7 +105,7 @@ test('模型被长度上限截断时，返回可见的错误而不是空回复',
 });
 
 test('错误文案不指向设置页里不存在的开关', async () => {
-  behavior = { content: '', reasoning: '', finishReason: 'length' };
+  fakeModel.setDefault({ content: '', reasoning: '', finishReason: 'length' });
 
   const events = await chat('随便写点什么');
 
@@ -218,11 +117,11 @@ test('错误文案不指向设置页里不存在的开关', async () => {
 });
 
 test('模型只输出思考没有正文时，返回可见的错误', async () => {
-  behavior = {
+  fakeModel.setDefault({
     content: '',
     reasoning: '我在反复斟酌这段怎么开头',
     finishReason: 'stop',
-  };
+  });
 
   const events = await chat('这个场景还能怎么设计');
 
@@ -235,7 +134,7 @@ test('模型只输出思考没有正文时，返回可见的错误', async () =>
 });
 
 test('模型完全没给内容时，返回可见的错误', async () => {
-  behavior = { content: '', reasoning: '', finishReason: 'stop' };
+  fakeModel.setDefault({ content: '', reasoning: '', finishReason: 'stop' });
 
   const events = await chat('随便写点什么');
 
@@ -248,7 +147,7 @@ test('模型完全没给内容时，返回可见的错误', async () => {
 });
 
 test('空回复时不会在历史里留下孤立的用户消息', async () => {
-  behavior = { content: '', reasoning: '', finishReason: 'length' };
+  fakeModel.setDefault({ content: '', reasoning: '', finishReason: 'length' });
 
   await chat('这条消息不该留在历史里');
 
@@ -259,7 +158,7 @@ test('空回复时不会在历史里留下孤立的用户消息', async () => {
 
 test('供应商报错时同样会给出可见的错误并清掉孤立消息', async () => {
   // 4xx 不重试，测试不会被退避拖慢
-  behavior = { httpStatus: 401, errorMessage: '鉴权失败' };
+  fakeModel.setDefault({ httpStatus: 401, errorMessage: '鉴权失败' });
 
   const events = await chat('这条消息也不该留在历史里');
 
@@ -277,7 +176,7 @@ test('供应商报错时同样会给出可见的错误并清掉孤立消息', as
 // ---------------------------------------------------------------------------
 
 test('正常回复照常下发 action 事件', async () => {
-  behavior = {
+  fakeModel.setDefault({
     content: JSON.stringify({
       action: 'comment',
       content: '巷口的雨下得不大，陈默站在灯下等了三分钟。',
@@ -285,7 +184,7 @@ test('正常回复照常下发 action 事件', async () => {
       citations: [],
     }),
     finishReason: 'stop',
-  };
+  });
 
   const events = await chat('接着上一段往下写');
 
@@ -298,7 +197,7 @@ test('正常回复照常下发 action 事件', async () => {
 });
 
 test('模型没给 JSON 时，原始文本当回复内容', async () => {
-  behavior = { content: '这里直接是自然语言回复，没有 JSON。', finishReason: 'stop' };
+  fakeModel.setDefault({ content: '这里直接是自然语言回复，没有 JSON。', finishReason: 'stop' });
 
   const events = await chat('随便聊聊');
 
@@ -309,7 +208,7 @@ test('模型没给 JSON 时，原始文本当回复内容', async () => {
 });
 
 test('模型给了 JSON 但正文为空时，用 reason 顶上', async () => {
-  behavior = {
+  fakeModel.setDefault({
     content: JSON.stringify({
       action: 'none',
       content: '',
@@ -317,7 +216,7 @@ test('模型给了 JSON 但正文为空时，用 reason 顶上', async () => {
       citations: [],
     }),
     finishReason: 'stop',
-  };
+  });
 
   const events = await chat('帮我看看这一段');
 
@@ -330,7 +229,7 @@ test('模型给了 JSON 但正文为空时，用 reason 顶上', async () => {
 test('模型的正文不是字符串时（数组/对象），照样能显示出来', async () => {
   // 模型有时会把正文写成数组或对象。
   // 以前这些会被当成空串丢掉，作者看到的就是一个空白框。
-  behavior = {
+  fakeModel.setDefault({
     content: JSON.stringify({
       action: 'comment',
       content: ['方向一：雨夜里有人敲门。', '方向二：门缝里塞进来一封信。'],
@@ -338,7 +237,7 @@ test('模型的正文不是字符串时（数组/对象），照样能显示出�
       citations: [],
     }),
     finishReason: 'stop',
-  };
+  });
 
   const events = await chat('这个场景还能怎么设计');
 
@@ -354,7 +253,7 @@ test('模型的正文不是字符串时（数组/对象），照样能显示出�
 // ---------------------------------------------------------------------------
 
 test('行内操作遇到空回复时报错，而不是返回空正文', async () => {
-  behavior = { content: '', reasoning: '', finishReason: 'length' };
+  fakeModel.setDefault({ content: '', reasoning: '', finishReason: 'length' });
 
   const res = await server.request('/api/ai/inline', {
     method: 'POST',
