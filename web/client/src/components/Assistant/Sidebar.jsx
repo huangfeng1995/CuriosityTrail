@@ -113,7 +113,9 @@ export default function AssistantSidebar() {
         memoryRefs: [],
         memoryDegraded: false,
         memoryReason: '',
-        excludedRefIds,
+        // 消息字段叫 excludedRefIds（已剔除列表），入参叫 excludeRefIds，
+        // 这里必须显式赋值：写成简写会引用一个不存在的变量，点发送直接 ReferenceError。
+        excludedRefIds: excludeRefIds,
         regenerating: isRegen,
       };
 
