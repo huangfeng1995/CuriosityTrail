@@ -517,6 +517,65 @@ body.ct-resizing * {
   cursor: col-resize !important;
 }
 
+/* ---------- 把手上的折叠按钮 ----------
+   位于把手顶部，一个小三角，点击收起对应侧栏。
+   不参与拖拽（stopPropagation），所以不会误触拖动。 */
+.ct-resizer-collapse {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 22px;
+  border: none;
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0;
+  z-index: 6;
+  opacity: 0;
+  transition: opacity 0.16s ease, background-color 0.16s ease;
+}
+.ct-resizer:hover .ct-resizer-collapse,
+.ct-resizer:focus-visible .ct-resizer-collapse {
+  opacity: 1;
+}
+.ct-resizer-collapse:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ---------- 栏收起后的展开按钮 ----------
+   一条细竖条，贴在编辑区两侧，点击展开对应侧栏。 */
+.ct-col-toggle {
+  flex: 0 0 auto;
+  width: 14px;
+  border: none;
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+.ct-col-toggle:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.ct-col-toggle.is-left {
+  border-right: 1px solid var(--border);
+}
+.ct-col-toggle.is-right {
+  border-left: 1px solid var(--border);
+}
+
 .ct-left-inner {
   display: flex;
   flex-direction: column;
@@ -1407,7 +1466,7 @@ body.ct-resizing * {
   padding: 30px 32px 120px;
 }
 .ct-editor-body {
-  max-width: 720px;
+  max-width: 960px;
   margin: 0 auto;
   /* 左侧留出按钮沟，块按钮不会压到正文 */
   padding-left: 44px;

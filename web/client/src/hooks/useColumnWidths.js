@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 const STORAGE_KEY = 'ct.workspace.columns';
+const COLLAPSE_KEY = 'ct.workspace.collapsed';
 
 /**
  * 各栏宽度上下限。
@@ -14,6 +15,7 @@ export const LIMITS = {
 };
 
 const DEFAULTS = { left: 288, right: 352 };
+const COLLAPSED_DEFAULTS = { left: false, right: false };
 
 /** 中间编辑区的最小宽度。左右两栏加起来不能把正文挤没。 */
 const CENTER_MIN = 420;
@@ -21,9 +23,10 @@ const CENTER_MIN = 420;
 const clamp = (v, { min, max }) => Math.min(Math.max(v, min), max);
 
 /**
- * 工作区栏宽。
+ * 工作区栏宽 + 折叠状态。
  *
  * 宽度写进 localStorage：下次进来还是上次的样子。
+ * 折叠状态也持久化：收起的栏下次进来仍是收起的。
  * 拖动时左右两栏互相让位，中间永远留够正文的位置。
  */
 export default function useColumnWidths() {
@@ -43,6 +46,19 @@ export default function useColumnWidths() {
     return DEFAULTS;
   });
 
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      const raw = localStorage.getItem(COLLAPSE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        return { left: !!saved.left, right: !!saved.right };
+      }
+    } catch {
+      // 存储不可用就用默认值
+    }
+    return COLLAPSED_DEFAULTS;
+  });
+
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(widths));
@@ -50,6 +66,14 @@ export default function useColumnWidths() {
       // 存不下就算了，本次会话内仍然生效
     }
   }, [widths]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed));
+    } catch {
+      // 存不下就算了
+    }
+  }, [collapsed]);
 
   /**
    * 改某栏宽度。
@@ -73,6 +97,14 @@ export default function useColumnWidths() {
     setWidths((prev) => ({ ...prev, [side]: DEFAULTS[side] }));
   }, []);
 
+  /** 折叠 / 展开某栏。折叠时栏宽不丢，展开后恢复上次的宽度。 */
+  const toggleCollapse = useCallback((side) => {
+    setCollapsed((prev) => ({ ...prev, [side]: !prev[side] }));
+  }, []);
+
+  const toggleLeft = useCallback(() => toggleCollapse('left'), [toggleCollapse]);
+  const toggleRight = useCallback(() => toggleCollapse('right'), [toggleCollapse]);
+
   // 窗口缩小后重新收敛栏宽，避免正文被挤没
   useEffect(() => {
     const onResize = () => {
@@ -90,5 +122,5 @@ export default function useColumnWidths() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  return { widths, setLeft, setRight, reset };
+  return { widths, collapsed, setLeft, setRight, reset, toggleLeft, toggleRight };
 }

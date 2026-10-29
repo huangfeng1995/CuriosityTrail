@@ -33,7 +33,7 @@ export default function Workspace() {
   const [rightOpen, setRightOpen] = useState(false);
   const [panelKey, setPanelKey] = useState('characters');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 992);
-  const { widths, setLeft, setRight, reset } = useColumnWidths();
+  const { widths, collapsed, setLeft, setRight, reset, toggleLeft, toggleRight } = useColumnWidths();
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 992);
@@ -154,38 +154,68 @@ export default function Workspace() {
 
   return (
     <div className="ct-workspace">
-      <aside className="ct-col-left" style={{ width: widths.left }}>
-        {leftPanel}
-      </aside>
+      {!collapsed.left ? (
+        <>
+          <aside className="ct-col-left" style={{ width: widths.left }}>
+            {leftPanel}
+          </aside>
 
-      <Resizer
-        side="left"
-        value={widths.left}
-        min={LIMITS.left.min}
-        max={LIMITS.left.max}
-        onChange={setLeft}
-        onReset={() => reset('left')}
-      />
+          <Resizer
+            side="left"
+            value={widths.left}
+            min={LIMITS.left.min}
+            max={LIMITS.left.max}
+            onChange={setLeft}
+            onReset={() => reset('left')}
+            onCollapse={toggleLeft}
+          />
+        </>
+      ) : (
+        <button
+          type="button"
+          className="ct-col-toggle is-left"
+          onClick={toggleLeft}
+          title="展开左栏（目录与资料）"
+          aria-label="展开左栏"
+        >
+          ›
+        </button>
+      )}
 
       <main className="ct-col-center">
         <ChapterEditor />
       </main>
 
-      <Resizer
-        side="right"
-        value={widths.right}
-        min={LIMITS.right.min}
-        max={LIMITS.right.max}
-        onChange={setRight}
-        onReset={() => reset('right')}
-      />
+      {!collapsed.right ? (
+        <>
+          <Resizer
+            side="right"
+            value={widths.right}
+            min={LIMITS.right.min}
+            max={LIMITS.right.max}
+            onChange={setRight}
+            onReset={() => reset('right')}
+            onCollapse={toggleRight}
+          />
 
-      <aside
-        className={`ct-col-right${widths.right < 344 ? ' is-narrow' : ''}`}
-        style={{ width: widths.right }}
-      >
-        <AssistantSidebar />
-      </aside>
+          <aside
+            className={`ct-col-right${widths.right < 344 ? ' is-narrow' : ''}`}
+            style={{ width: widths.right }}
+          >
+            <AssistantSidebar />
+          </aside>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="ct-col-toggle is-right"
+          onClick={toggleRight}
+          title="展开右栏（AI 助手）"
+          aria-label="展开右栏"
+        >
+          ‹
+        </button>
+      )}
     </div>
   );
 }

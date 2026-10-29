@@ -12,8 +12,9 @@ import React, { useEffect, useRef, useState } from 'react';
  * @param {number} max 最大宽度
  * @param {(v: number) => void} onChange 拖动过程中的宽度
  * @param {() => void} onReset 双击复位
+ * @param {() => void} [onCollapse] 收起本栏（可选，传入则在把手顶部显示折叠按钮）
  */
-export default function Resizer({ side, value, min, max, onChange, onReset }) {
+export default function Resizer({ side, value, min, max, onChange, onReset, onCollapse }) {
   const [dragging, setDragging] = useState(false);
   // 记录起点：每次按下都从这里算，拖到边界再拖回来不会累积误差
   const anchor = useRef(null);
@@ -81,6 +82,22 @@ export default function Resizer({ side, value, min, max, onChange, onReset }) {
       onPointerCancel={handleUp}
       onDoubleClick={onReset}
       onKeyDown={handleKey}
-    />
+    >
+      {onCollapse && (
+        <button
+          type="button"
+          className="ct-resizer-collapse"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onCollapse();
+          }}
+          title={side === 'left' ? '收起左栏' : '收起右栏'}
+          aria-label={side === 'left' ? '收起左栏' : '收起右栏'}
+        >
+          {side === 'left' ? '‹' : '›'}
+        </button>
+      )}
+    </div>
   );
 }
