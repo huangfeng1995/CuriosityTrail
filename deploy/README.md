@@ -254,3 +254,33 @@ ss -tlnp | grep -E ':80|:443'
 - [ ] SSH 禁止密码登录、改用密钥：`sudo sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config && sudo systemctl restart sshd`
 - [ ] DeepSeek key 只在 `deploy/.env.production` 里，不在代码、不在 git
 - [ ] 异地备份跑通了（第五步验证过）
+
+---
+
+## 九、长期记忆（viking）线上为什么是关的
+
+**现象**：写作、AI 对话都正常，但侧边栏的「长期记忆」不生效，回忆不出前文。
+
+**原因**：记忆服务是一个 Python sidecar（`web/memory-service`），它钉死了
+`openviking==0.1.12`。这个版本只有 macOS 构建（本机装的是
+`cp39-macosx_11_0_universal2` 轮子，里面的 `openviking/bin/agfs-server`
+是 arm64 的 Mach-O 二进制），**Linux 服务器上装不起来**。
+PyPI 上能下载的 openviking 版本（0.2.x 起）都要求 Python ≥ 3.10，
+而且 sidecar 的实现是照 0.1.12 的实测行为写的，换版本必须重新验证。
+
+所以本轮的部署把 `MEMORY_ENABLED` 显式设成 `false`：
+
+```bash
+grep MEMORY_ENABLED /opt/curiosity-trail/deploy/.env.production
+# MEMORY_ENABLED=false
+```
+
+关掉之后记忆层直接短路，不会每次请求都去连一个不存在的 sidecar，
+也不会在索引台账里堆失败记录。**本地开发不受影响**（本机 sidecar 照常跑在 8019）。
+
+**什么时候能打开**：sidecar 迁到 Linux 可安装的 openviking 版本并通过冒烟测试后，
+把 `deploy/.env.production` 里的这一行改成 `true`，然后：
+
+```bash
+cd /opt/curiosity-trail && docker compose up -d
+```

@@ -125,12 +125,24 @@ ALIYUN_SMS_TEMPLATE_CODE=
 # DeepSeek API Key（https://platform.deepseek.com 创建）。
 # 没有它 AI 对话不可用，会回退到本地 Ollama。
 DEEPSEEK_API_KEY=
+
+# 长期记忆（viking sidecar）：线上默认关闭。
+# sidecar 依赖的 openviking==0.1.12 只有 macOS arm64 构建，
+# Linux 服务器装不起来。本轮先关，等 sidecar 迁到 Linux 可安装版本后改回 true。
+MEMORY_ENABLED=false
 EOF
 	chmod 600 "$ENV_FILE"
 	echo "    已生成 $ENV_FILE"
 	echo "    登录方式：手机号 + 短信验证码（需先填好上面的阿里云短信配置）"
 else
 	log "环境变量文件已存在，保留原值"
+fi
+
+# 老服务器上的 .env.production 是之前生成的，没有 MEMORY_ENABLED。
+# 补一行默认关闭，保证这次部署不会去连不存在的 sidecar。
+# 已经有这个键就不动——用户主动改过的值不能被覆盖。
+if ! grep -q '^MEMORY_ENABLED=' "$ENV_FILE"; then
+	echo 'MEMORY_ENABLED=false' >> "$ENV_FILE"
 fi
 
 # ---------------------------------------------------------------------------
@@ -195,6 +207,8 @@ if [[ "$ok" -eq 1 ]]; then
 	echo "  2. 设置 DeepSeek key：sudo sed -i 's|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=sk-你的key|' $ENV_FILE && cd $INSTALL_DIR && docker compose up -d"
 	echo "  3. 认领老数据：cd $INSTALL_DIR && docker compose exec app node scripts/migrate-owner.js 你的手机号"
 	echo "  4. 配置异地备份：见 deploy/README.md"
+	echo "  5. 长期记忆（viking）线上默认关闭：sidecar 依赖的 openviking 0.1.12 没有 Linux 构建，"
+	echo "     等它迁到 Linux 可安装版本并通过冒烟测试后，把 $ENV_FILE 的 MEMORY_ENABLED 改为 true 再重启容器"
 else
 	die "服务没起来，看日志：cd $INSTALL_DIR && docker compose logs --tail=50 app"
 fi
