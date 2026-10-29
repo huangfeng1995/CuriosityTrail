@@ -17,7 +17,8 @@ const { request } = require('@playwright/test');
 
 const PORT = Number(process.env.E2E_PORT || 3457);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
-const PASSWORD = process.env.E2E_PASSWORD || 'e2e-password-123';
+const PHONE = process.env.E2E_PHONE || '13700000000';
+const SMS_CODE = process.env.E2E_SMS_CODE || '135790';
 
 const STATE_FILE = path.join(__dirname, '.tmp', 'storage-state.json');
 
@@ -29,9 +30,16 @@ async function main() {
 
   const ctx = await request.newContext({ baseURL: BASE_URL });
 
-  // 1. 登录，拿到会话 Cookie
+  // 1. 走「发验证码 → 登录」流程，拿到会话 Cookie
+  const sendRes = await ctx.post('/api/auth/send-code', {
+    data: { phone: PHONE },
+  });
+  if (!sendRes.ok()) {
+    throw new Error(`E2E 发送验证码失败（${sendRes.status()}）：${await sendRes.text()}`);
+  }
+
   const loginRes = await ctx.post('/api/auth/login', {
-    data: { password: PASSWORD },
+    data: { phone: PHONE, code: SMS_CODE },
   });
   if (!loginRes.ok()) {
     const body = await loginRes.text();

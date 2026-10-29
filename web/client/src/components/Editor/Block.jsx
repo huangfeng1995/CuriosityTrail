@@ -19,6 +19,15 @@ import { useIsMobile } from '../../hooks/useMediaQuery';
 
 /**
  * textarea 随内容自动增高。
+ *
+ * 缩到 0 再量 scrollHeight：高度留在原处时，
+ * scrollHeight 至少等于当前高度，量不出"变小"的那部分。
+ *
+ * 另外，换行数会随宽度和字体变化（拉分隔条、字体晚到），
+ * 只在 value 变化时量一次的话，框会一直停留在旧高度：
+ * 内容比框高 → textarea 内部滚动 → 一输入光标就把可视区
+ * 钉在最后一行，看着就是"正在写的那一行掉到了最底下"。
+ * 所以宽度一变就重量一次。
  */
 function useAutoHeight(value) {
   const ref = useRef(null);
@@ -26,13 +35,39 @@ function useAutoHeight(value) {
   const resize = useCallback(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = 'auto';
+    el.style.height = '0px';
     el.style.height = `${el.scrollHeight}px`;
   }, []);
 
   useEffect(() => {
     resize();
   }, [value, resize]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    let lastWidth = el.clientWidth;
+    const onWidthChange = () => {
+      if (el.clientWidth === lastWidth) return;
+      lastWidth = el.clientWidth;
+      resize();
+    };
+
+    // 观察自身宽度：分栏拖动、窗口缩放都会走到这里。
+    // 高度变化不算——那是我们自己设的，不算"内容变了"。
+    const ro = new ResizeObserver(onWidthChange);
+    ro.observe(el);
+    window.addEventListener('resize', onWidthChange);
+
+    // 字体加载完成后换行数会变，重算一次
+    document.fonts?.ready?.then(resize).catch(() => {});
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', onWidthChange);
+    };
+  }, [resize]);
 
   return ref;
 }
@@ -113,6 +148,7 @@ export default function Block({
             />
             <textarea
               ref={textRef}
+              rows={1}
               value={block.content}
               onChange={(e) => onChange({ content: e.target.value })}
               onFocus={onFocus}
@@ -127,6 +163,7 @@ export default function Block({
         return (
           <textarea
             ref={textRef}
+            rows={1}
             value={block.content}
             onChange={(e) => onChange({ content: e.target.value })}
             onFocus={onFocus}
@@ -193,6 +230,7 @@ export default function Block({
             )}
             <textarea
               ref={textRef}
+              rows={1}
               value={block.content}
               onChange={(e) => onChange({ content: e.target.value })}
               onFocus={onFocus}
@@ -220,6 +258,7 @@ export default function Block({
         return (
           <textarea
             ref={textRef}
+            rows={1}
             value={block.content}
             onChange={(e) => onChange({ content: e.target.value })}
             onFocus={onFocus}

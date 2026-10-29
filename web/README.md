@@ -163,14 +163,17 @@ web/
 | `DATA_DIR` | `web/../data` | 数据目录（SQLite、图片、备份） |
 | `UPLOADS_DIR` | `$DATA_DIR/uploads` | 插图存储 |
 | `DOCS_DIR` | `$DATA_DIR/documents` | 导入的原始文档 |
-| `APP_PASSWORD` | 首次启动生成 | 登录密码 |
-| `APP_PASSWORD_SALT` | 首次启动生成 | 密码校验盐 |
 | `JWT_SECRET` | 首次启动生成 | 会话签名密钥 |
+| `ALIYUN_SMS_ACCESS_KEY_ID` | 空 | 阿里云短信 AccessKey ID |
+| `ALIYUN_SMS_ACCESS_KEY_SECRET` | 空 | 阿里云短信 AccessKey Secret |
+| `ALIYUN_SMS_SIGN_NAME` | 空 | 短信签名 |
+| `ALIYUN_SMS_TEMPLATE_CODE` | 空 | 短信模板 CODE（模板变量需为 `${code}`） |
+| `SMS_DEV_CODE` | 空 | 开发用固定验证码，仅非 production 生效 |
 | `DEEPSEEK_API_KEY` | 空 | DeepSeek key（对话与搜索共用） |
 | `BACKUP_HOUR` | `3` | 每日自动备份时刻（0-23），`-1` 关闭 |
 | `NODE_ENV` | `development` | `production` 时关闭 CORS、开启同域静态资源 |
 
-未注入 `APP_PASSWORD` / `JWT_SECRET` 时会退回到 `DATA_DIR` 下的持久化文件，重启不会掉密码，但生产环境应该用平台 secret 注入。
+登录方式是手机号 + 短信验证码，首次登录自动注册。四项 `ALIYUN_SMS_*` 不全时生产环境发不出验证码，用户无法登录；本地开发可设 `SMS_DEV_CODE` 跳过真实短信。`JWT_SECRET` 未注入时会退回 `DATA_DIR` 下的持久化文件，生产环境应该用平台 secret 注入。
 
 ---
 

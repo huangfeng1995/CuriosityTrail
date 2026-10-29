@@ -104,7 +104,7 @@ cd ../client && npm run dev
 
 打开 http://localhost:3000。
 
-首次启动会在 `data/` 下生成临时密码（`data/.app-password`），用它登录。想固定密码就设 `APP_PASSWORD` 环境变量。
+首次启动时用手机号 + 短信验证码登录，首次登录自动注册。本地开发不想接阿里云短信，就在 `web/.env` 里设 `SMS_DEV_CODE=000000`（仅非 production 生效），登录时填这个固定码即可。
 
 **配置 AI Key**（也可以在网页「设置 → AI 供应商」里填，填了会存进 `data/ai-config.json`）：
 
@@ -128,8 +128,8 @@ SSH 上去粘一条命令就上线：
 curl -fsSL https://raw.githubusercontent.com/huangfeng1995/CuriosityTrail/main/deploy/deploy.sh | bash
 ```
 
-脚本会自己装 Docker、克隆代码、生成随机登录密码、构建镜像、启动容器，
-打印访问地址和密码。配了域名就顺带开 HTTPS。
+脚本会自己装 Docker、克隆代码、生成会话密钥、构建镜像、启动容器，
+打印访问地址。配了域名就顺带开 HTTPS。
 
 > 为什么选香港节点：大陆节点对外用 80/443 必须先 ICP 备案（1-3 周），
 > 香港节点免备案，买完就能上线。
@@ -140,6 +140,6 @@ curl -fsSL https://raw.githubusercontent.com/huangfeng1995/CuriosityTrail/main/d
 
 ## 重要约定
 
-- **单用户模型**：没有注册，所有人共用一个密码（`APP_PASSWORD`）。
+- **多用户模型**：手机号 + 短信验证码登录，首次登录自动注册；作品、素材、灵感每人一份。
 - **单实例**：SQLite 不支持多进程并发写，服务启动时会检测并拒绝第二个实例。
 - **数据全在 `data/`**：SQLite 库、上传的图片、导入的文档、备份都在这。搬家拷这个目录即可。

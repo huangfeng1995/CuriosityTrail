@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Tabs,
   Input,
@@ -8,13 +8,18 @@ import {
   Space,
   Alert,
   Typography,
+  Switch,
+  Descriptions,
 } from 'antd';
 import {
   SaveOutlined,
   UndoOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import api from '../api/client';
+import { useAuth } from '../store/auth';
 import { useIsMobile } from '../hooks/useMediaQuery';
+import { useMemoryPref } from '../hooks/useMemoryPref';
 
 const { Text, Paragraph } = Typography;
 
@@ -27,16 +32,162 @@ const { Text, Paragraph } = Typography;
  * 以及稿件的备份。
  */
 export default function SettingsPage() {
+  const { user } = useAuth();
+
+  const items = [
+    { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
+    { key: 'memory', label: '长期记忆', children: <MemoryConfig /> },
+  ];
+  // 备份是整库级别的：下载包里是所有人的稿子，只有管理员能看这个入口
+  if (user?.role === 'admin') {
+    items.push({ key: 'backup', label: '备份', children: <BackupConfig /> });
+  }
+
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
-      <Tabs
-        defaultActiveKey="prompts"
-        items={[
-          { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
-          { key: 'backup', label: '备份', children: <BackupConfig /> },
-        ]}
-      />
+      <Tabs defaultActiveKey="prompts" items={items} />
     </div>
+  );
+}
+
+/**
+ * 长期记忆设置。
+ *
+ * 作者在这里能做的只有三件事：开不开、看看索引建得怎么样、重建。
+ * 模型名、维度这些是部署期的事，不摆给作者看。
+ */
+function MemoryConfig() {
+  const [enabled, setEnabled] = useMemoryPref();
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/memory/status');
+      setStatus(res.data);
+    } catch (e) {
+      message.error('记忆状态获取失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const rebuild = async () => {
+    setRebuilding(true);
+    try {
+      const res = await api.post('/memory/rebuild', { scope: 'mine' });
+      message.success(`已安排重建 ${res.data.scheduled} 个来源，稍后自动完成`);
+      load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '重建失败');
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
+  const stats = status?.stats || {};
+  const running = status?.serviceRunning;
+
+  return (
+    <Card size="small" title="长期记忆">
+      <Paragraph type="secondary" style={{ fontSize: 13 }}>
+        长期记忆会自动从你的章节、人物卡、设定卡和往期对话里翻出与当前写作相关的内容，
+        一起交给 AI。它记的是「这部作品自己的历史」，素材库不在其中。
+      </Paragraph>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 0',
+          borderTop: '1px solid var(--border-faint)',
+          borderBottom: '1px solid var(--border-faint)',
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 14 }}>在对话中使用长期记忆</div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+            关掉后 AI 不再自动回忆前情。也可以随时在 AI 侧边栏的输入框旁临时关闭。
+          </div>
+        </div>
+        <Switch checked={enabled} onChange={setEnabled} />
+      </div>
+
+      {status && !status.enabled && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="记忆服务当前处于关闭状态"
+          description="需要部署方在服务端启用后才能使用。"
+        />
+      )}
+
+      {status && !running && status.enabled && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="记忆服务没有运行"
+          description="AI 会照常工作，只是不会自动回忆前情。"
+        />
+      )}
+
+      {status && !status.indexConsistent && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="索引与当前记忆服务不一致"
+          description={`${status.consistencyReason}。请点下面的「重建索引」。`}
+        />
+      )}
+
+      <Descriptions size="small" column={2} bordered style={{ marginBottom: 16 }}>
+        <Descriptions.Item label="服务状态">
+          {status ? (
+            <Text type={running ? 'success' : 'danger'}>
+              {running ? '运行中' : '未运行'}
+            </Text>
+          ) : (
+            '—'
+          )}
+        </Descriptions.Item>
+        <Descriptions.Item label="记忆来源数">{stats.works ?? 0} 部作品</Descriptions.Item>
+        <Descriptions.Item label="已建索引">
+          {stats.indexed ?? 0} 块
+        </Descriptions.Item>
+        <Descriptions.Item label="待处理">
+          {stats.pending ?? 0} 块
+        </Descriptions.Item>
+        <Descriptions.Item label="失败">
+          <Text type={stats.failed ? 'danger' : undefined}>{stats.failed ?? 0} 块</Text>
+        </Descriptions.Item>
+        <Descriptions.Item label="合计">{stats.total ?? 0} 块</Descriptions.Item>
+      </Descriptions>
+
+      <Space wrap>
+        <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
+          刷新状态
+        </Button>
+        <Button type="primary" onClick={rebuild} loading={rebuilding} disabled={!running}>
+          重建索引
+        </Button>
+      </Space>
+
+      <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12 }}>
+        重建只动索引，不改你的稿子。章节、人物、设定改动后会自动增量更新，
+        一般不需要手动重建。
+      </Paragraph>
+    </Card>
   );
 }
 

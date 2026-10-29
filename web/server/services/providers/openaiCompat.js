@@ -68,6 +68,7 @@ class OpenAICompatProvider extends Provider {
 
     return {
       content: (choice.message && choice.message.content) || '',
+      finishReason: choice.finish_reason || '',
       usage: data.usage || null,
       raw: data,
     };
@@ -92,15 +93,24 @@ class OpenAICompatProvider extends Provider {
     const response = await fetchWithRetry(url, init);
 
     let content = '';
+    let finishReason = '';
     await readSseStream(response, (event) => {
-      const delta = event.choices && event.choices[0] && event.choices[0].delta;
+      const choice = event.choices && event.choices[0];
+      if (!choice) return;
+
+      // finish_reason='length' 表示被 max_tokens 截断，输出是不完整的
+      if (choice.finish_reason) {
+        finishReason = choice.finish_reason;
+      }
+
+      const delta = choice.delta;
       if (delta && delta.content) {
         content += delta.content;
         if (options.onToken) options.onToken(delta.content);
       }
     });
 
-    return { content };
+    return { content, finishReason };
   }
 
   async checkStatus() {

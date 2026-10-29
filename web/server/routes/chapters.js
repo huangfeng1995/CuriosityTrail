@@ -9,10 +9,12 @@
  */
 
 const express = require('express');
-const { get, run } = require('../database');
+const { run } = require('../database');
+const { ownedChapter } = require('../services/scope');
 const versions = require('../services/versions');
 const { countBlockWords, countWords } = require('../services/wordCount');
 const progress = require('../services/progress');
+const memory = require('../services/memory/indexer');
 
 const router = express.Router();
 const now = () => new Date().toISOString();
@@ -30,7 +32,7 @@ function deriveContent(blocks) {
 
 router.get('/:id', async (req, res) => {
   try {
-    const chapter = await get('SELECT * FROM chapters WHERE id = ?', [req.params.id]);
+    const chapter = await ownedChapter(req.params.id, req.userId);
     if (!chapter) return res.status(404).json({ error: '章节不存在' });
     res.json(chapter);
   } catch (err) {
@@ -42,7 +44,7 @@ router.put('/:id', async (req, res) => {
   const { title, volume, status, blocks, content, outline } = req.body || {};
 
   try {
-    const existing = await get('SELECT * FROM chapters WHERE id = ?', [req.params.id]);
+    const existing = await ownedChapter(req.params.id, req.userId);
     if (!existing) return res.status(404).json({ error: '章节不存在' });
 
     // blocks 存在时以 blocks 为准，content 是派生快照
@@ -96,7 +98,17 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    res.json(await get('SELECT * FROM chapters WHERE id = ?', [req.params.id]));
+    // 正文变了就把新内容排进记忆索引（后台异步，不阻塞保存）
+    if (contentChanged) {
+      memory.scheduleIndex({
+        userId: req.userId,
+        workId: existing.work_id,
+        sourceType: 'chapter',
+        sourceId: req.params.id,
+      });
+    }
+
+    res.json(await ownedChapter(req.params.id, req.userId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -104,8 +116,19 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    const chapter = await ownedChapter(req.params.id, req.userId);
+    if (!chapter) return res.status(404).json({ error: '章节不存在' });
+
     const result = await run('DELETE FROM chapters WHERE id = ?', [req.params.id]);
     if (!result.changes) return res.status(404).json({ error: '章节不存在' });
+
+    // 章节没了，它在记忆库里的块也得跟着消失——否则召回会捞到已删的正文
+    memory.scheduleRemove({
+      userId: req.userId,
+      sourceType: 'chapter',
+      sourceId: req.params.id,
+    });
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

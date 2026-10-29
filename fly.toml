@@ -66,5 +66,5 @@ primary_region = "hkg"
   destination = "/app/offsite"
 
 # 下面的 secrets 通过 `fly secrets set` 注入，不要写进本文件：
-#   fly secrets set APP_PASSWORD=... JWT_SECRET=... DEEPSEEK_API_KEY=...
+#   fly secrets set JWT_SECRET=... DEEPSEEK_API_KEY=... ALIYUN_SMS_ACCESS_KEY_ID=...
 # 详见 web/DEPLOY.md

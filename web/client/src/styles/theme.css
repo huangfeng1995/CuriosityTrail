@@ -70,9 +70,13 @@ html[data-theme='light'] {
   --shadow-float: 0 8px 28px rgba(94, 82, 56, 0.13);
   --shadow-lift: 0 2px 6px rgba(94, 82, 56, 0.08);
 
-  /* 稿纸横格线 */
+  /* 稿纸横格线：一个格子 = 一行正文的行高（约 16.5px 字号 × 2.06）。
+     必须是整像素：textarea 量出来的内容高度会被取整，
+     格子若是 33.825px 这种小数，每块都会差零点几像素，
+     一屏下来字又压线了。原来写死 30px，和 33.8px 的行高
+     每行差 3.8px——这才是"字和线对不上"的根源。 */
   --ruled-line: rgba(120, 108, 82, 0.075);
-  --ruled-size: 30px;
+  --ruled-size: 34px;
 
   /* 引用高亮 */
   --mark-bg: rgba(207, 161, 36, 0.28);
@@ -137,7 +141,7 @@ html[data-theme='dark'] {
   --shadow-lift: 0 2px 6px rgba(0, 0, 0, 0.28);
 
   --ruled-line: rgba(236, 229, 214, 0.045);
-  --ruled-size: 30px;
+  --ruled-size: 34px;
 
   --mark-bg: rgba(208, 164, 78, 0.3);
   --mark-text: #f0d9a4;
@@ -254,7 +258,13 @@ body {
   }
 }
 
-/* 稿纸：横格线背景 */
+/* 稿纸：横格线背景。
+   两个关键点：
+   - background-origin: content-box —— 格子从正文第一行的位置起算，
+     不受编辑器内边距影响；
+   - background-attachment: local —— 格子跟着正文一起滚动。
+     默认的 scroll 会让格子钉在滚动容器上，正文一滚就和线错开，
+     越往下滚错得越多。 */
 .ct-ruled {
   background-image: repeating-linear-gradient(
     to bottom,
@@ -263,6 +273,8 @@ body {
     var(--ruled-line) calc(var(--ruled-size) - 1px),
     var(--ruled-line) var(--ruled-size)
   );
+  background-origin: content-box;
+  background-attachment: local;
 }
 
 /* ============================================================
@@ -321,6 +333,17 @@ body {
   cursor: pointer;
   flex-shrink: 0;
   user-select: none;
+}
+/* 品牌标识：毛笔「寻」字，墨色主体 + 朱砂点睛，跟随主题变量 */
+.ct-logo-ink {
+  fill: var(--ink-0);
+}
+.ct-logo-cinnabar {
+  fill: var(--cinnabar);
+}
+.ct-brand-logo {
+  display: block;
+  flex: none;
 }
 .ct-brand-name {
   font-size: 16px;
@@ -1394,9 +1417,15 @@ body.ct-resizing * {
 /* ---------- 内容块 ---------- */
 .ct-block {
   position: relative;
-  padding: 4px 0;
+  padding: 0;
   border-radius: 4px;
   transition: background-color 0.16s ease;
+}
+/* 块与块之间只留一整个格子。
+   版面要"字压线"的前提是每个块的高度都是格子的整数倍，
+   所以段距不能是 4px、8px 这种半格——否则每过一块就错开一次。 */
+.ct-block + .ct-block {
+  margin-top: var(--ruled-size);
 }
 .ct-block.is-active {
   background: var(--accent-dim);
@@ -1409,11 +1438,15 @@ body.ct-resizing * {
   color: var(--text-primary);
   outline: none;
   resize: none;
-  min-height: 30px;
+  /* 高度由 useAutoHeight 按内容算，永远刚好够；
+     一旦这里出现内部滚动，光标会把可视区钉在最后一行，
+     看着就像"正在写的那一行掉到了最下面"。 */
+  overflow: hidden;
+  min-height: var(--ruled-size);
   padding: 0;
   font-family: 'Noto Serif SC', 'Songti SC', serif;
   font-size: 16.5px;
-  line-height: 2.05;
+  line-height: var(--ruled-size);
   letter-spacing: 0.01em;
   display: block;
 }
@@ -1422,16 +1455,18 @@ body.ct-resizing * {
 }
 .ct-block-dialogue {
   font-size: 16.5px;
-  line-height: 2.05;
+  line-height: var(--ruled-size);
 }
+/* 独白也用格子的行高：它夹在正文中间，行高一旦不同，
+   后面的块就整体错开半行，稿纸线立刻显形。 */
 .ct-block-inner {
   font-size: 15.5px;
-  line-height: 2;
+  line-height: var(--ruled-size);
   font-style: italic;
   color: var(--text-secondary);
   padding-left: 1em;
   border-left: 2px solid var(--border);
-  margin: 4px 0;
+  margin: 0;
 }
 .ct-block-caption {
   font-size: 13.5px;
@@ -1473,7 +1508,10 @@ body.ct-resizing * {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 16px 0;
+  /* 正好占一格：分场是正文里的一个"行"，
+     高度不是格子整数倍的话，下面的正文就整体错位。 */
+  height: var(--ruled-size);
+  padding: 0;
   color: var(--text-quaternary);
 }
 .ct-scene-break-line {
@@ -1513,7 +1551,9 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 12px;
+  /* 同分场：占满一格，不打乱稿纸的行列 */
+  height: var(--ruled-size);
+  padding: 0 12px;
   border-radius: 20px;
   border: 1px dashed var(--border-strong);
   font-size: 13.5px;
@@ -1903,6 +1943,55 @@ body.ct-resizing * {
   }
 }
 
+/* ---------- 记入记忆按钮 ---------- */
+/* 作者手动层：这条明确要记住。默认低调，hover 或已记入时才显眼。 */
+.ct-msg-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  max-width: 92%;
+}
+.ct-msg-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+.ct-msg-remember {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1.7;
+  color: var(--text-quaternary);
+  cursor: pointer;
+  transition:
+    color 0.18s ease,
+    border-color 0.18s ease,
+    background-color 0.18s ease;
+}
+.ct-msg-remember:hover {
+  color: var(--accent);
+  border-color: var(--cinnabar-glow);
+  background: var(--accent-dim);
+}
+.ct-msg-remember:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.ct-msg-remember.is-on {
+  color: var(--accent);
+  border-color: var(--cinnabar-glow);
+  cursor: default;
+}
+
 /* ---------- 结构化输出卡片 ---------- */
 .ct-action-card {
   border: 1px solid var(--border);
@@ -1955,6 +2044,132 @@ body.ct-resizing * {
   color: var(--text-primary);
 }
 
+/* ---------- 长期记忆面板 ---------- */
+/* 记忆是"AI 自己翻出来的旧账"，作者必须能一眼看到它从哪来，
+   否则无法判断这次回答靠不靠谱。 */
+.ct-memory {
+  margin-bottom: 8px;
+  border: 1px solid var(--border-faint);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+.ct-memory.is-degraded {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--amber-dim);
+  border-color: transparent;
+}
+.ct-memory-flag {
+  font-size: 11.5px;
+  color: var(--amber);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ct-memory-degraded-reason {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-memory-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.18s ease;
+}
+.ct-memory-head:hover {
+  color: var(--accent);
+}
+.ct-memory-list {
+  padding: 0 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ct-memory-item {
+  border-top: 1px solid var(--border-faint);
+  padding-top: 7px;
+}
+.ct-memory-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ct-memory-label {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-memory-score {
+  font-size: 11px;
+  color: var(--text-quaternary);
+  flex-shrink: 0;
+}
+.ct-memory-exclude {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-quaternary);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    color 0.18s ease,
+    border-color 0.18s ease;
+}
+.ct-memory-exclude:hover {
+  color: var(--accent);
+  border-color: var(--cinnabar-glow);
+}
+.ct-memory-preview {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-tertiary);
+  max-height: 76px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ct-memory-actions {
+  padding-top: 6px;
+  border-top: 1px solid var(--border-faint);
+}
+.ct-memory-actions .ant-btn {
+  padding-inline: 0;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* 记忆开关按钮：开着的时候点亮，关掉的时候灰着 */
+.ct-ai-memory-toggle.is-on {
+  color: var(--accent);
+}
+
 /* ---------- 输入区 ---------- */
 .ct-ai-input {
   border-top: 1px solid var(--border);
@@ -2002,6 +2217,9 @@ body.ct-resizing * {
 .ct-login-head {
   text-align: center;
   margin-bottom: 28px;
+}
+.ct-login-logo {
+  margin: 0 auto 12px;
 }
 .ct-login-title {
   margin: 0 0 5px;

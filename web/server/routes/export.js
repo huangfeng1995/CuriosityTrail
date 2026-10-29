@@ -25,8 +25,24 @@ const config = require('../config');
 const { all, get, close: closeDb, reopen: reopenDb } = require('../database');
 const docxExport = require('../services/docxExport');
 const backup = require('../services/backup');
+const { ownedChapter, isAdmin } = require('../services/scope');
 
 const router = express.Router();
+
+/**
+ * 全库备份/恢复只允许管理员。
+ *
+ * 备份包里是所有人的稿子，不能因为"我登录了"就能下载别人的数据；
+ * 恢复更是会整库覆盖，误操作一次全站数据就没了。
+ */
+function requireAdmin(req, res, next) {
+  isAdmin(req.userId)
+    .then((ok) => {
+      if (!ok) return res.status(403).json({ error: '只有管理员可以操作全库备份' });
+      next();
+    })
+    .catch(next);
+}
 
 /**
  * 把章节的 blocks 转成 Markdown 段落列表。
@@ -60,10 +76,13 @@ function blocksToParagraphs(chapter) {
 }
 
 /**
- * 读取作品的全部章节。
+ * 读取当前用户名下作品的全部章节。
  */
-async function loadWorkChapters(workId) {
-  const work = await get('SELECT * FROM works WHERE id = ?', [workId]);
+async function loadWorkChapters(workId, userId) {
+  const work = await get('SELECT * FROM works WHERE id = ? AND user_id = ?', [
+    workId,
+    userId,
+  ]);
   if (!work) return null;
 
   const chapters = await all(
@@ -75,7 +94,7 @@ async function loadWorkChapters(workId) {
 
 router.get('/work/:id/txt', async (req, res) => {
   try {
-    const data = await loadWorkChapters(req.params.id);
+    const data = await loadWorkChapters(req.params.id, req.userId);
     if (!data) return res.status(404).json({ error: '作品不存在' });
 
     const { work, chapters } = data;
@@ -103,7 +122,7 @@ router.get('/work/:id/txt', async (req, res) => {
 
 router.get('/work/:id/markdown', async (req, res) => {
   try {
-    const data = await loadWorkChapters(req.params.id);
+    const data = await loadWorkChapters(req.params.id, req.userId);
     if (!data) return res.status(404).json({ error: '作品不存在' });
 
     const { work, chapters } = data;
@@ -130,7 +149,7 @@ router.get('/work/:id/markdown', async (req, res) => {
 
 router.get('/chapter/:id/markdown', async (req, res) => {
   try {
-    const chapter = await get('SELECT * FROM chapters WHERE id = ?', [req.params.id]);
+    const chapter = await ownedChapter(req.params.id, req.userId);
     if (!chapter) return res.status(404).json({ error: '章节不存在' });
 
     const body = blocksToParagraphs(chapter).join('\n\n');
@@ -147,7 +166,7 @@ router.get('/chapter/:id/markdown', async (req, res) => {
 
 router.get('/chapter/:id/txt', async (req, res) => {
   try {
-    const chapter = await get('SELECT * FROM chapters WHERE id = ?', [req.params.id]);
+    const chapter = await ownedChapter(req.params.id, req.userId);
     if (!chapter) return res.status(404).json({ error: '章节不存在' });
 
     const body = blocksToParagraphs(chapter).join('\n\n');
@@ -164,7 +183,7 @@ router.get('/chapter/:id/txt', async (req, res) => {
 
 router.get('/work/:id/docx', async (req, res) => {
   try {
-    const data = await loadWorkChapters(req.params.id);
+    const data = await loadWorkChapters(req.params.id, req.userId);
     if (!data) return res.status(404).json({ error: '作品不存在' });
 
     const buffer = await docxExport.buildWorkDocx(data.work, data.chapters);
@@ -184,7 +203,7 @@ router.get('/work/:id/docx', async (req, res) => {
 
 router.get('/chapter/:id/docx', async (req, res) => {
   try {
-    const chapter = await get('SELECT * FROM chapters WHERE id = ?', [req.params.id]);
+    const chapter = await ownedChapter(req.params.id, req.userId);
     if (!chapter) return res.status(404).json({ error: '章节不存在' });
 
     const buffer = await docxExport.buildChapterDocx(chapter);
@@ -202,7 +221,7 @@ router.get('/chapter/:id/docx', async (req, res) => {
   }
 });
 
-router.get('/backup', async (req, res) => {
+router.get('/backup', requireAdmin, async (req, res) => {
   const dataDir = config.dataDir;
   const timestamp = new Date().toISOString().slice(0, 10);
 
@@ -232,21 +251,21 @@ router.get('/backup', async (req, res) => {
 /**
  * 列出磁盘上的定时备份。
  */
-router.get('/backups', (req, res) => {
+router.get('/backups', requireAdmin, (req, res) => {
   res.json(backup.listBackups());
 });
 
 /**
  * 异地备份状态。设置页显示"备份到底存到哪了"。
  */
-router.get('/backups/offsite', (req, res) => {
+router.get('/backups/offsite', requireAdmin, (req, res) => {
   res.json(backup.offsiteStatus());
 });
 
 /**
  * 立刻生成一份备份。用于"我现在就要一份"和验证定时备份是否在跑。
  */
-router.post('/backups', async (req, res) => {
+router.post('/backups', requireAdmin, async (req, res) => {
   const result = await backup.createBackup('manual');
   if (!result.ok) {
     return res.status(500).json({ error: result.reason });
@@ -269,6 +288,7 @@ router.post('/backups', async (req, res) => {
 // fileSize 上限也要显式给：express-fileupload 默认不限制大小。
 router.post(
   '/restore',
+  requireAdmin,
   fileUpload({
     useTempFiles: true,
     tempFileDir: config.tempDir,

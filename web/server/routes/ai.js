@@ -9,6 +9,7 @@
  *   POST /api/ai/prompts/:roleKey  保存提示词覆盖
  *   DELETE /api/ai/prompts/:roleKey 恢复默认
  *   GET  /api/ai/status    provider 连通状态
+ *   POST /api/ai/messages/:messageId/remember  把一条消息记入长期记忆
  */
 
 const express = require('express');
@@ -20,6 +21,11 @@ const { assembleContext } = require('../services/context');
 const roles = require('../services/roles');
 const localSearch = require('../services/search/local');
 const webSearch = require('../services/search/deepseekSearch');
+const { ownedWork } = require('../services/scope');
+const memory = require('../services/memory/retriever');
+const indexer = require('../services/memory/indexer');
+const memoryConv = require('../services/memory/conversation');
+const memorySources = require('../services/memory/sources');
 
 const router = express.Router();
 
@@ -56,6 +62,40 @@ function parseModelJson(text) {
 }
 
 /**
+ * 把模型给的字段转成可显示的文本。
+ *
+ * 模型不总是听话：content 有时是数组（分段写），有时是对象，
+ * 还有时干脆给个数字。只接受 string 的话，这些情况会一律变成空串——
+ * 作者看到的就是一个什么都没有的空白框。
+ * 所以这里做兜底：数组按行拼，象取文本值，其余转字符串。
+ */
+function toText(value) {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => toText(item))
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  if (typeof value === 'object') {
+    // 常见的 { text: '...' } / { content: '...' } 形状
+    for (const key of ['text', 'content', 'value']) {
+      if (typeof value[key] === 'string') return value[key];
+    }
+    try {
+      return JSON.stringify(value);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  return String(value);
+}
+
+/**
  * 归一化结构化输出，确保字段齐全且类型正确。
  */
 function normalizeAction(payload) {
@@ -66,9 +106,9 @@ function normalizeAction(payload) {
   const validActions = ['replace', 'append', 'insert', 'comment', 'none'];
   let action = validActions.includes(payload.action) ? payload.action : 'none';
 
-  const content = typeof payload.content === 'string' ? payload.content : '';
-  const reason = typeof payload.reason === 'string' ? payload.reason : '';
-  const target = typeof payload.target === 'string' ? payload.target : '';
+  const content = toText(payload.content);
+  const reason = toText(payload.reason);
+  const target = toText(payload.target);
 
   const citations = Array.isArray(payload.citations)
     ? payload.citations
@@ -131,24 +171,48 @@ function decorateRole(role, cfg, activeProvider) {
 }
 
 /**
- * 取得或创建会话。
+ * 模型没给出内容时，给作者一句能照着做的话。
+ *
+ * 这里必须区分两种失败，否则作者只会干等着重复重试：
+ *   - 被长度上限截断：思考模式最常见，reasoning 计入 max_tokens，
+ *     预算被思考吃光，正文一个字都没轮到。该做的是换个更短的说法再试。
+ *   - 模型自己没写：重试或换模型就行。
+ *
+ * 措辞只说作者做得到的事。调大输出上限、关掉深度思考是部署期的运维动作，
+ * 设置页里并没有这些开关——让作者去"设置里找"只会让他更困惑。
  */
-async function ensureConversation(conversationId, workId, title) {
+function describeEmptyReply(result = {}, reasoning = '') {
+  if (result.finishReason === 'length') {
+    return '这次输出被长度上限截断了，正文没写完。可以把要求说得更短一点再试。';
+  }
+  if (reasoning && reasoning.trim()) {
+    return '模型这次只做了思考，没有给出正文。请再试一次，或把要求说得更具体些。';
+  }
+  return '模型这次没有返回内容，请再试一次。';
+}
+
+/**
+ * 取得或创建会话。会话按用户隔离：别人的 conversationId 直接当作不存在。
+ */
+async function ensureConversation(conversationId, workId, title, userId) {
   if (conversationId) {
-    const existing = await get(
-      'SELECT * FROM conversations WHERE id = ?',
-      [conversationId]
-    );
+    const existing = await get('SELECT * FROM conversations WHERE id = ? AND user_id = ?', [
+      conversationId,
+      userId,
+    ]);
     if (existing) return existing;
   }
+
+  // 会话挂作品时必须确认作品属于本人，否则会把别人的 work_id 写进自己的会话
+  const work = await ownedWork(workId, userId);
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await run(
-    'INSERT INTO conversations (id, work_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-    [id, workId || null, title || '新对话', now, now]
+    'INSERT INTO conversations (id, user_id, work_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [id, userId, work ? work.id : null, title || '新对话', now, now]
   );
-  return get('SELECT * FROM conversations WHERE id = ?', [id]);
+  return get('SELECT * FROM conversations WHERE id = ? AND user_id = ?', [id, userId]);
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +278,7 @@ function needsWebFetch(message) {
  *   fragments 是喂给模型的参考资料，notices 是给作者看的提示
  *   （比如"联网检索没配 key，这次只用了站内素材"）
  */
-async function runRetrieval(roleKey, message, existing) {
+async function runRetrieval(roleKey, message, existing, userId) {
   if (!needsRetrieval(roleKey, message)) {
     return { fragments: existing, notices: [] };
   }
@@ -222,12 +286,12 @@ async function runRetrieval(roleKey, message, existing) {
   const fragments = [];
   const notices = [];
 
-  let results = await localSearch.searchLoose(message, { limit: 4 });
+  let results = await localSearch.searchLoose(message, { limit: 4, userId });
 
   // "素材库里有什么能用的"这类问法没有具体检索目标，关键词必然零命中。
   // 这时候给模型最近更新的几条，让它自己去判断哪条用得上。
   if (!results.length && localSearch.isGenericQuery(message)) {
-    results = await localSearch.recent(4);
+    results = await localSearch.recent(4, userId);
   }
 
   for (const r of results) {
@@ -312,6 +376,107 @@ function mergeCitations(modelCitations, fragments) {
 }
 
 // ---------------------------------------------------------------------------
+// 长期记忆召回
+// ---------------------------------------------------------------------------
+
+/**
+ * 取当前章的尾部正文，作为召回查询的一部分。
+ *
+ * 只用作者这一句指令做查询太窄——"继续写"这种指令没有任何语义，
+ * 拿它去检索什么也召不回来。当前章末尾才是"作者正在写什么"的真实信号。
+ *
+ * @param {string} chapterId
+ * @param {string} userId
+ * @param {Array} [blocks] 编辑中未保存的块，优先于已存正文
+ * @returns {Promise<string>}
+ */
+async function getChapterTail(chapterId, userId, blocks) {
+  if (Array.isArray(blocks) && blocks.length) {
+    const text = blocks
+      .filter((b) => b && b.content)
+      .map((b) => b.content)
+      .join('\n\n');
+    if (text) return text.slice(-1500);
+  }
+
+  if (!chapterId || !userId) return '';
+
+  const chapter = await get(
+    `SELECT c.content, c.blocks FROM chapters c
+     JOIN works w ON w.id = c.work_id
+     WHERE c.id = ? AND w.user_id = ?`,
+    [chapterId, userId]
+  );
+  if (!chapter) return '';
+
+  let text = chapter.content || '';
+  try {
+    const parsed = JSON.parse(chapter.blocks || '[]');
+    if (Array.isArray(parsed) && parsed.length) {
+      text = parsed
+        .filter((b) => b && b.content)
+        .map((b) => b.content)
+        .join('\n\n');
+    }
+  } catch (e) {
+    // blocks 不是合法 JSON 就退回 content
+  }
+
+  return text.slice(-1500);
+}
+
+/**
+ * 召回长期记忆。
+ *
+ * 任何一步失败都只返回空结果——记忆是加分项，不是必需品。
+ *
+ * @param {object} params
+ * @returns {Promise<{refs: Array, degraded: boolean, reason: string}>}
+ */
+async function recallMemory(params) {
+  const {
+    req,
+    workId,
+    chapterId,
+    blocks,
+    instruction,
+    useMemory,
+    excludeRefIds,
+    excludeSourceKeys,
+    scope = 'chat',
+  } = params;
+
+  if (!useMemory || !workId) {
+    return { refs: [], degraded: false, reason: '' };
+  }
+
+  try {
+    // 换了 embedding 模型还没重建索引时，旧向量维度对不上，
+    // 混用会得到"看起来正常但全是错的"结果——直接不召回。
+    const consistency = await indexer.checkMetaConsistency(req.userId);
+    if (!consistency.ok) {
+      return { refs: [], degraded: true, reason: consistency.reason };
+    }
+
+    const chapterTail = await getChapterTail(chapterId, req.userId, blocks);
+    const query = memory.buildQueryText({ chapterTail, instruction });
+
+    return await memory.retrieve({
+      userId: req.userId,
+      workId,
+      query,
+      // 当前章的正文已经全量注进上下文了，召回它没有意义。
+      excludeChapterId: chapterId || '',
+      excludeRefIds: Array.isArray(excludeRefIds) ? excludeRefIds : [],
+      excludeSourceKeys: Array.isArray(excludeSourceKeys) ? excludeSourceKeys : [],
+      scope,
+    });
+  } catch (e) {
+    return { refs: [], degraded: true, reason: '记忆召回失败' };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/ai/chat —— 侧边栏对话，SSE
 // ---------------------------------------------------------------------------
 router.post('/chat', async (req, res) => {
@@ -323,6 +488,9 @@ router.post('/chat', async (req, res) => {
     conversationId,
     scope = 'chapter',
     blocks,
+    useMemory = true,
+    excludeRefIds = [],
+    replaceMessageId = '',
   } = req.body || {};
   let retrieval = Array.isArray(req.body?.retrieval) ? req.body.retrieval : [];
 
@@ -340,17 +508,75 @@ router.post('/chat', async (req, res) => {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
+  // 本次新插入的用户消息。失败时要把它清掉，
+  // 否则历史里会留下"作者问了、但没人答"的记录，污染下一轮的上下文。
+  //
+  // 重新生成时上一版的提问会被复用（既不删也不重建），这时它是 null——
+  // 复用的那条是原稿的一部分，不能删。
+  let insertedUserMessageId = null;
+
+  // 重新生成时：被替换掉的上一版回答，以及复用的上一版提问。
+  let replacedMessage = null;
+  let reusedUserMessage = null;
+
+  let conversation = null;
+
+  // 被摘掉的旧回答。失败时要原样放回去。
+  let removedRows = [];
+
+  const restoreRemoved = async () => {
+    for (const row of removedRows) {
+      await run(
+        `INSERT INTO messages (id, conversation_id, role, content, role_key, action, payload, citations, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          row.id,
+          row.conversation_id,
+          row.role,
+          row.content,
+          row.role_key,
+          row.action,
+          row.payload,
+          row.citations,
+          row.created_at,
+        ]
+      ).catch(() => {});
+    }
+  };
+
   try {
     // 站内素材检索 + 联网检索：资料员角色总会搜；其他角色在作者明确要"找/查"时也搜。
     // 检索结果既进上下文，也作为引用的兜底来源。
     const { fragments: searched, notices } = await runRetrieval(
       roleKey,
       String(message),
-      retrieval
+      retrieval,
+      req.userId
     );
     if (searched.length) {
       retrieval = searched;
     }
+
+    // 长期记忆召回。失败或超时都只是少一段上下文，不能影响这次对话。
+    //
+    // 重新生成时，上一版回答的记忆要整条排掉：
+    // 作者要的是另一个答案，不是让模型在旧答案的记忆上继续写。
+    // 对话三层都以消息 id 为来源 id，所以三个键都排掉。
+    const excludeSourceKeys = replaceMessageId
+      ? ['conv_raw', 'conv_fact', 'conv_manual'].map((type) => `${type}:${replaceMessageId}`)
+      : [];
+
+    const memoryResult = await recallMemory({
+      req,
+      workId,
+      chapterId,
+      blocks,
+      instruction: String(message),
+      useMemory,
+      excludeRefIds,
+      excludeSourceKeys,
+      scope: 'chat',
+    });
 
     const { messages, meta } = await assembleContext({
       workId,
@@ -358,23 +584,78 @@ router.post('/chat', async (req, res) => {
       roleKey,
       scope,
       retrieval,
+      memoryRefs: memoryResult.refs,
       blocks,
+      userId: req.userId,
     });
 
-    const conversation = await ensureConversation(conversationId, workId);
+    conversation = await ensureConversation(conversationId, workId, undefined, req.userId);
     const now = new Date().toISOString();
 
+    // 重新生成：把上一版回答从历史里摘掉。
+    //
+    // 不摘的话，模型会在上下文里同时看到"上一版回答"和"同一个提问"，
+    // 它多半顺着上一版继续写，而不是重新回答——作者剔除记忆后想看的
+    // 是另一个答案，而不是旧答案的续写。
+    //
+    // 只摘回答，**保留那一轮的提问**：作者可能对提问点过「记入记忆」，
+    // 手动层是按消息 id 锚定的，把这行删掉再新建一条新 id 的，
+    // 作者手动记下的东西就指空了。
+    //
+    // 先删后插，失败时再把删掉的行原样写回去：一次失败的重生成
+    // 不该把作者之前已经拿到的好答案弄丢。
+    if (replaceMessageId) {
+      const old = await get(
+        'SELECT * FROM messages WHERE id = ? AND conversation_id = ?',
+        [replaceMessageId, conversation.id]
+      );
+      if (old) {
+        replacedMessage = old;
+
+        // 同一轮里在它之前的用户提问——复用它，不删
+        const prevUser = await get(
+          `SELECT * FROM messages
+           WHERE conversation_id = ? AND role = 'user'
+             AND rowid <= (SELECT rowid FROM messages WHERE id = ?)
+           ORDER BY rowid DESC LIMIT 1`,
+          [conversation.id, replaceMessageId]
+        );
+        reusedUserMessage = prevUser || null;
+
+        removedRows = [old];
+        for (const row of removedRows) {
+          await run('DELETE FROM messages WHERE id = ?', [row.id]);
+        }
+      }
+    }
+
     // 历史消息
-    const history = await all(
-      'SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid',
-      [conversation.id]
-    );
+    // 重新生成时，复用的那行提问还在库里，但它要作为"这一轮的问题"
+    // 出现在最后，所以先从历史里剔掉。
+    const history = reusedUserMessage
+      ? await all(
+          `SELECT role, content FROM messages
+           WHERE conversation_id = ? AND id != ?
+           ORDER BY created_at, rowid`,
+          [conversation.id, reusedUserMessage.id]
+        )
+      : await all(
+          'SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid',
+          [conversation.id]
+        );
 
     // 保存用户消息
-    await run(
-      'INSERT INTO messages (id, conversation_id, role, content, role_key, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), conversation.id, 'user', String(message), roleKey, now]
-    );
+    // id 记下来：这次调用失败时要把它删掉，否则历史里会留下一条
+    // "作者问了、但没有任何回答"的孤立消息，污染下一轮的上下文。
+    //
+    // 重新生成时上一版的提问还在，而且就是同一个问题——不新建一条。
+    if (!reusedUserMessage) {
+      insertedUserMessageId = crypto.randomUUID();
+      await run(
+        'INSERT INTO messages (id, conversation_id, role, content, role_key, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [insertedUserMessageId, conversation.id, 'user', String(message), roleKey, now]
+      );
+    }
 
     const chatMessages = [
       ...messages,
@@ -393,7 +674,25 @@ router.post('/chat', async (req, res) => {
       send({ type: 'notice', content: notice });
     }
 
-    const role = await roles.getRole(roleKey);
+    // 记忆事件必须在第一个 token 之前发。
+    // 前端要先把"本次参考了哪几条记忆"显示出来，
+    // 迟了就会和已经流出来的正文混在一起，作者分不清哪段是记忆。
+    send({
+      type: 'memory',
+      refs: memoryResult.refs.map((ref) => ({
+        id: ref.id,
+        sourceType: ref.sourceType,
+        label: ref.label,
+        preview: ref.preview,
+        score: ref.score,
+        sourceId: ref.sourceId,
+        messageId: ref.messageId,
+      })),
+      degraded: memoryResult.degraded,
+      reason: memoryResult.reason,
+    });
+
+    const role = await roles.getRole(roleKey, req.userId);
 
     // 流式输出
     let fullText = '';
@@ -420,12 +719,45 @@ router.post('/chat', async (req, res) => {
     });
 
     const rawText = result.content || fullText;
-    const payload = normalizeAction(parseModelJson(rawText));
+    const parsed = parseModelJson(rawText);
+    const payload = normalizeAction(parsed);
 
     // 模型没给 JSON 时，把原文当对话回复
-    if (!parseModelJson(rawText) && rawText.trim()) {
+    if (!parsed && rawText.trim()) {
       payload.action = 'comment';
       payload.content = rawText.trim();
+    }
+
+    // 模型给了 JSON，但正文是空的（常见于 action='none' 的空回复）。
+    // 它至少给了理由——把理由当正文显示，总好过让作者对着一片空白。
+    if (!payload.content.trim() && payload.reason.trim()) {
+      payload.action = 'comment';
+      payload.content = payload.reason.trim();
+    }
+
+    // 模型一个字都没给。
+    //
+    // 这时候绝不能像平常那样下发 action='none' + content=''：
+    // 前端会把它渲染成一个空白的圆角框，作者既看不到内容也看不到原因，
+    // 只能对着一片空白反复重试。改成明确的错误事件，让作者知道发生了什么、
+    // 下一步该做什么。
+    if (!payload.content.trim()) {
+      const reason = describeEmptyReply(result, reasoning);
+
+      // 这次调用没产生任何回复，别把孤零零的用户消息留在历史里——
+      // 它会在下一轮被当成"作者问了但没人答"的上下文塞给模型。
+      //
+      // 重新生成时那条提问是复用来的，不是这一轮插的，删了就把原稿弄坏了。
+      if (insertedUserMessageId) {
+        await run('DELETE FROM messages WHERE id = ?', [insertedUserMessageId]);
+      }
+
+      // 重生成失败：把上一版问答放回去，作者至少还留着上一个答案
+      await restoreRemoved();
+
+      send({ type: 'error', message: reason });
+      send({ type: 'done', conversationId: conversation.id, provider: name });
+      return;
     }
 
     // 检索到的素材补进引用：作者要看到"查到了什么、从哪来的"
@@ -453,6 +785,24 @@ router.post('/chat', async (req, res) => {
       [new Date().toISOString(), conversation.id]
     );
 
+    // 这一轮对话进记忆库：原始层立刻入库，事实层后台抽。
+    // 记忆写不进去也不该影响对话本身。
+    memoryConv.rememberTurn({
+      userId: req.userId,
+      workId: conversation.work_id,
+      conversationId: conversation.id,
+      messageId,
+      userText: String(message),
+      assistantText: payload.content,
+    });
+
+    // 重新生成：上一版回答的消息行已经摘掉了，它留在记忆库里的三层也得清。
+    // 不清的话，下次召回会把"上一版回答"的原文翻出来——
+    // 而那条回答作者早就不要了。
+    if (replacedMessage) {
+      memoryConv.forgetMessage({ userId: req.userId, messageId: replacedMessage.id });
+    }
+
     send({
       type: 'action',
       action: payload.action,
@@ -464,14 +814,79 @@ router.post('/chat', async (req, res) => {
     send({
       type: 'done',
       messageId,
+      // 用户消息的服务端 id 也一并带回：前端要靠它才能给"作者自己的提问"
+      // 提供「记入记忆」。重新生成时这条提问是复用的，id 不变。
+      userMessageId: insertedUserMessageId || (reusedUserMessage && reusedUserMessage.id) || '',
       conversationId: conversation.id,
       provider: name,
     });
   } catch (err) {
     console.error('AI chat 失败：', err.message);
+
+    // 失败的这轮同样不能留下孤立消息。
+    // 注意只删用户消息：助手消息此时还没写库，删了也不会丢东西。
+    //
+    // 重新生成时那条提问是复用来的，删了会把原稿弄坏——不动它。
+    if (insertedUserMessageId) {
+      await run('DELETE FROM messages WHERE id = ?', [insertedUserMessageId]).catch(() => {});
+    }
+
+    // 重生成失败：把上一版问答放回去
+    await restoreRemoved();
+
     send({ type: 'error', message: err.message });
+    // 补一个 done：前端靠它同步 conversationId，
+    // 缺了这一条，作者下一句话会另起一个会话，前面的对话就断了。
+    if (conversation) {
+      send({ type: 'done', conversationId: conversation.id });
+    }
   } finally {
     res.end();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/ai/messages/:messageId/remember —— 手动记入长期记忆
+// ---------------------------------------------------------------------------
+
+/**
+ * 作者点「记入记忆」。
+ *
+ * 手动层是最高权重的一层：作者明确说"这条要记住"，
+ * 那不管它看起来多普通都得留下。
+ *
+ * 这一层同步写——作者点了就该立刻知道成没成功。
+ * 丢进后台队列的话，他看到的"已记入"只是一句空话：
+ * sidecar 没起来、embedding 报错了，作者毫不知情。
+ *
+ * 幂等：同一条消息重复点，走的还是同一条来源，
+ * 索引器靠内容哈希判断没变就不重复调 embedding。
+ */
+router.post('/messages/:messageId/remember', async (req, res) => {
+  const { messageId } = req.params;
+
+  try {
+    // 归属校验在 SQL 里：别人的消息拿不到。
+    const row = await memorySources.findMessage(messageId, req.userId);
+    if (!row) {
+      return res.status(404).json({ error: '消息不存在' });
+    }
+
+    const result = await memoryConv.rememberManual({
+      userId: req.userId,
+      workId: row.work_id,
+      conversationId: row.conversation_id,
+      messageId,
+      content: row.content,
+    });
+
+    if (!result.ok) {
+      return res.status(502).json({ error: result.error || '记入记忆失败' });
+    }
+
+    res.json({ ok: true, messageId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -488,6 +903,8 @@ router.post('/inline', async (req, res) => {
     chapterId,
     roleKey = 'editor',
     instruction,
+    useMemory = true,
+    excludeRefIds = [],
   } = req.body || {};
 
   if (!selection || !String(selection).trim()) {
@@ -507,6 +924,18 @@ router.post('/inline', async (req, res) => {
   const actionInstruction = INLINE_ACTIONS[action] || INLINE_ACTIONS.rewrite;
 
   try {
+    // 行内操作也要召回：改写一段话时，作者同样希望 AI 记得前情。
+    const memoryResult = await recallMemory({
+      req,
+      workId,
+      chapterId,
+      blocks,
+      instruction: actionInstruction + (instruction ? `。${instruction}` : ''),
+      useMemory,
+      excludeRefIds,
+      scope: 'inline',
+    });
+
     const { messages } = await assembleContext({
       workId,
       chapterId,
@@ -515,12 +944,14 @@ router.post('/inline', async (req, res) => {
       blocks,
       blockId,
       scope: 'inline',
+      memoryRefs: memoryResult.refs,
       extraInstruction: actionInstruction + (instruction ? `。${instruction}` : ''),
+      userId: req.userId,
     });
 
     const aiCfg = aiConfig.getConfig();
     const { provider, name, degraded, reason } = resolveProvider(aiCfg);
-    const role = await roles.getRole(roleKey);
+    const role = await roles.getRole(roleKey, req.userId);
 
     const result = await provider.chat({
       messages: [
@@ -539,6 +970,10 @@ router.post('/inline', async (req, res) => {
     const parsed = parseModelJson(rawText);
 
     if (!parsed) {
+      // 模型没给出任何内容：不能返回空正文，那会让行内工具"改写"成空白段落。
+      if (!rawText.trim()) {
+        return res.status(502).json({ error: describeEmptyReply(result, result.reasoning) });
+      }
       return res.json({
         action: 'comment',
         content: rawText.trim(),
@@ -547,14 +982,30 @@ router.post('/inline', async (req, res) => {
         provider: name,
         degraded,
         notice: reason,
+        memoryRefs: memoryResult.refs,
+        memoryDegraded: memoryResult.degraded,
       });
     }
 
+    const payload = normalizeAction(parsed);
+
+    // 同理：正文为空就别把它当成一次成功的改写交回去
+    if (!payload.content.trim()) {
+      if (payload.reason.trim()) {
+        payload.action = 'comment';
+        payload.content = payload.reason.trim();
+      } else {
+        return res.status(502).json({ error: describeEmptyReply(result, result.reasoning) });
+      }
+    }
+
     res.json({
-      ...normalizeAction(parsed),
+      ...payload,
       provider: name,
       degraded,
       notice: reason,
+      memoryRefs: memoryResult.refs,
+      memoryDegraded: memoryResult.degraded,
     });
   } catch (err) {
     console.error('AI inline 失败：', err.message);
@@ -567,7 +1018,7 @@ router.post('/inline', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/roles', async (req, res) => {
   try {
-    const list = await roles.listRoles();
+    const list = await roles.listRoles(req.userId);
     const cfg = aiConfig.getConfig();
     // 用实际生效的 provider，而不是设置页里选的那个：
     // DeepSeek 没配 key 时会降级到 Ollama，而 Ollama 没有思考模式。
@@ -595,13 +1046,17 @@ router.post('/prompts/:roleKey', async (req, res) => {
   }
 
   try {
-    await roles.saveOverride(roleKey, {
-      systemPrompt: String(systemPrompt),
-      temperature: typeof temperature === 'number' ? temperature : undefined,
-      model: typeof model === 'string' ? model.trim() : undefined,
-      thinking: typeof thinking === 'boolean' ? thinking : undefined,
-    });
-    const role = await roles.getRole(roleKey);
+    await roles.saveOverride(
+      roleKey,
+      {
+        systemPrompt: String(systemPrompt),
+        temperature: typeof temperature === 'number' ? temperature : undefined,
+        model: typeof model === 'string' ? model.trim() : undefined,
+        thinking: typeof thinking === 'boolean' ? thinking : undefined,
+      },
+      req.userId
+    );
+    const role = await roles.getRole(roleKey, req.userId);
     res.json(role);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -613,8 +1068,8 @@ router.post('/prompts/:roleKey', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.delete('/prompts/:roleKey', async (req, res) => {
   try {
-    await roles.clearOverride(req.params.roleKey);
-    const role = await roles.getRole(req.params.roleKey);
+    await roles.clearOverride(req.params.roleKey, req.userId);
+    const role = await roles.getRole(req.params.roleKey, req.userId);
     res.json(role);
   } catch (err) {
     res.status(400).json({ error: err.message });

@@ -164,11 +164,11 @@ docker compose logs -f app        # 实时
 docker compose logs --tail=100 app # 最近 100 行
 ```
 
-### 改密码
+### 改短信配置
 
 ```bash
 cd /opt/curiosity-trail
-sudo sed -i 's|^APP_PASSWORD=.*|APP_PASSWORD=新密码|' deploy/.env.production
+sudo sed -i 's|^ALIYUN_SMS_ACCESS_KEY_ID=.*|ALIYUN_SMS_ACCESS_KEY_ID=新的key|' deploy/.env.production
 docker compose up -d
 ```
 

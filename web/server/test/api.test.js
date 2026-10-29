@@ -81,13 +81,21 @@ test('健康检查公开可访问', async () => {
   assert.strictEqual(body.status, 'ok');
 });
 
-test('错误密码不发放会话', async () => {
+test('错误验证码不发放会话', async () => {
+  const phone = '13900000002';
+  await fetch(`${server.baseUrl}/api/auth/send-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  });
+
   const res = await fetch(`${server.baseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: '错误密码' }),
+    body: JSON.stringify({ phone, code: '000000' }),
   });
   assert.strictEqual(res.status, 401);
+  assert.strictEqual((res.headers.getSetCookie?.() || []).length, 0, '不该下发会话 Cookie');
 });
 
 // ---------------------------------------------------------------------------
@@ -391,4 +399,91 @@ test('响应带安全头', async () => {
   assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
   assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');
   assert.strictEqual(res.headers.get('referrer-policy'), 'same-origin');
+});
+
+// ---------------------------------------------------------------------------
+// 多用户隔离
+// ---------------------------------------------------------------------------
+
+test('不同用户的稿件与素材互相不可见', async () => {
+  // A（默认会话）建一部作品、一条素材、一条灵感
+  const { work } = await seedWork();
+  const materialRes = await server.request('/api/materials', {
+    method: 'POST',
+    body: { title: 'A 的素材', body: '只有 A 能看到的内容' },
+  });
+  assert.strictEqual(materialRes.status, 200);
+  const material = await materialRes.json();
+
+  const inspirationRes = await server.request('/api/inspirations', {
+    method: 'POST',
+    body: { text: 'A 的灵感' },
+  });
+  assert.strictEqual(inspirationRes.status, 200);
+  const inspiration = await inspirationRes.json();
+
+  // B 是另一个手机号，首次登录自动注册
+  const cookieB = await server.loginAs('13900000003');
+
+  // 作品列表里没有 A 的作品
+  const worksRes = await server.requestAs(cookieB, '/api/works');
+  const works = await worksRes.json();
+  assert.ok(
+    !works.some((w) => w.id === work.id),
+    'B 的作品列表不该出现 A 的作品'
+  );
+
+  // 直接按 id 访问也不行
+  const detailRes = await server.requestAs(cookieB, `/api/works/${work.id}`);
+  assert.strictEqual(detailRes.status, 404);
+
+  const chapterRes = await server.requestAs(cookieB, `/api/works/${work.id}/chapters`);
+  assert.strictEqual(chapterRes.status, 404);
+
+  // 素材按 id 读、按 id 定位都拿不到
+  const materialDetailRes = await server.requestAs(cookieB, `/api/materials/${material.id}`);
+  assert.strictEqual(materialDetailRes.status, 404);
+
+  const locateRes = await server.requestAs(
+    cookieB,
+    `/api/materials/${material.id}/locate?snippet=${encodeURIComponent('只有 A')}`
+  );
+  assert.strictEqual(locateRes.status, 404);
+
+  // 素材检索不该把 A 的素材搜出来
+  const searchRes = await server.requestAs(
+    cookieB,
+    `/api/materials/search?q=${encodeURIComponent('只有 A')}`
+  );
+  const searchBody = await searchRes.json();
+  assert.ok(
+    !(Array.isArray(searchBody) ? searchBody : []).some((m) => m.id === material.id),
+    'B 的检索结果不该出现 A 的素材'
+  );
+
+  // 灵感的列表与更新同样隔离
+  const inspirationsRes = await server.requestAs(cookieB, '/api/inspirations');
+  const inspirations = await inspirationsRes.json();
+  assert.ok(!inspirations.some((i) => i.id === inspiration.id));
+
+  const updateInspirationRes = await server.requestAs(
+    cookieB,
+    `/api/inspirations/${inspiration.id}`,
+    { method: 'PUT', body: { text: 'B 想改 A 的灵感' } }
+  );
+  assert.strictEqual(updateInspirationRes.status, 404);
+
+  // 导出也要拦住
+  const exportRes = await server.requestAs(cookieB, `/api/export/work/${work.id}/txt`);
+  assert.strictEqual(exportRes.status, 404);
+
+  // A 自己仍然看得到
+  const ownRes = await server.request(`/api/materials/${material.id}`);
+  assert.strictEqual(ownRes.status, 200);
+});
+
+test('普通用户不能下载全库备份', async () => {
+  const cookieB = await server.loginAs('13900000004');
+  const res = await server.requestAs(cookieB, '/api/export/backup');
+  assert.strictEqual(res.status, 403);
 });

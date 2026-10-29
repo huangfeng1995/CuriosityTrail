@@ -33,11 +33,17 @@ app.listen(PORT, () => {
   console.log(
     `   DEEPSEEK_API_KEY: ${config.deepseekApiKey ? '已加载' : '未配置（将回退到本地 Ollama）'}`
   );
-  if (config.appPasswordIsFallback) {
+  if (config.smsDevMode) {
     console.warn(
-      '⚠️  未设置 APP_PASSWORD 环境变量，已生成临时密码并存入 ' +
-        `${config.dataDir}/.app-password —— 生产环境请用平台 secret 注入`
+      `⚠️  短信开发模式：验证码固定为 ${config.smsDevCode}（仅非 production 生效）`
     );
+  } else if (!config.smsConfigured) {
+    console.warn(
+      '⚠️  未配置阿里云短信（ALIYUN_SMS_ACCESS_KEY_ID / SECRET / SIGN_NAME / TEMPLATE_CODE），' +
+        '生产环境下用户将无法收到验证码'
+    );
+  } else {
+    console.log('   短信服务: 阿里云短信已配置');
   }
   if (config.jwtSecretIsFallback) {
     console.warn(

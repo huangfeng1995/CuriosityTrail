@@ -154,12 +154,21 @@ async function getWorkProgress(workId, options = {}) {
 }
 
 /**
- * 汇总所有作品的进度（作品列表页用）。
+ * 汇总某个用户所有作品的进度（作品列表页用）。
  *
+ * 没有 userId 就返回空数组：这是失败安全策略，
+ * 宁可让列表空白，也不能把别人的作品统计混进来。
+ *
+ * @param {string} userId
  * @returns {Promise<Array>}
  */
-async function listAllProgress() {
-  const works = await all('SELECT * FROM works ORDER BY modified_at DESC');
+async function listAllProgress(userId) {
+  if (!userId) return [];
+
+  const works = await all(
+    'SELECT * FROM works WHERE user_id = ? ORDER BY modified_at DESC',
+    [userId]
+  );
   const result = [];
 
   for (const work of works) {

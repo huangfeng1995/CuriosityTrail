@@ -108,19 +108,19 @@ mkdir -p data data-offsite
 ENV_FILE="$INSTALL_DIR/deploy/.env.production"
 if [[ ! -f "$ENV_FILE" ]]; then
 	log "生成环境变量文件"
-	# 随机密码：避免弱口令。字母数字去掉易混淆字符。
-	gen_password() {
-		LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 | tr -d '0O1l'
-	}
 	cat > "$ENV_FILE" <<EOF
 # 自动生成于 $(date '+%Y-%m-%d %H:%M:%S')
 # 权限 600，仅 root 可读
 
-# 登录平台的密码。改这里，然后 docker compose up -d 生效。
-APP_PASSWORD=$(gen_password)
-
 # 会话签名密钥。保持不变，改了会让所有人重新登录。
 JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n')
+
+# 阿里云短信（登录要用）。四项都要填，否则用户收不到验证码。
+# 模板变量必须是 \${code}，例如：「您的验证码为\${code}，5分钟内有效。」
+ALIYUN_SMS_ACCESS_KEY_ID=
+ALIYUN_SMS_ACCESS_KEY_SECRET=
+ALIYUN_SMS_SIGN_NAME=
+ALIYUN_SMS_TEMPLATE_CODE=
 
 # DeepSeek API Key（https://platform.deepseek.com 创建）。
 # 没有它 AI 对话不可用，会回退到本地 Ollama。
@@ -128,7 +128,7 @@ DEEPSEEK_API_KEY=
 EOF
 	chmod 600 "$ENV_FILE"
 	echo "    已生成 $ENV_FILE"
-	echo "    登录密码：$(grep '^APP_PASSWORD=' "$ENV_FILE" | cut -d= -f2)"
+	echo "    登录方式：手机号 + 短信验证码（需先填好上面的阿里云短信配置）"
 else
 	log "环境变量文件已存在，保留原值"
 fi
@@ -188,11 +188,13 @@ if [[ "$ok" -eq 1 ]]; then
 	echo -e "\033[1;32m✓ 服务已启动\033[0m"
 	[[ -n "$DOMAIN" ]] && echo "  访问地址：https://$DOMAIN" \
 		|| echo "  访问地址：http://$(curl -fsS --max-time 3 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'):8080"
-	echo "  登录密码：见 $ENV_FILE 的 APP_PASSWORD"
+	echo "  登录方式：手机号 + 短信验证码"
 	echo
 	echo "接下来："
-	echo "  1. 设置 DeepSeek key：sudo sed -i 's|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=sk-你的key|' $ENV_FILE && cd $INSTALL_DIR && docker compose up -d"
-	echo "  2. 配置异地备份：见 deploy/README.md"
+	echo "  1. 填阿里云短信：sudo sed -i 's|^ALIYUN_SMS_ACCESS_KEY_ID=.*|ALIYUN_SMS_ACCESS_KEY_ID=你的key|' $ENV_FILE，其余三项同理，然后 cd $INSTALL_DIR && docker compose up -d"
+	echo "  2. 设置 DeepSeek key：sudo sed -i 's|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=sk-你的key|' $ENV_FILE && cd $INSTALL_DIR && docker compose up -d"
+	echo "  3. 认领老数据：cd $INSTALL_DIR && docker compose exec app node scripts/migrate-owner.js 你的手机号"
+	echo "  4. 配置异地备份：见 deploy/README.md"
 else
 	die "服务没起来，看日志：cd $INSTALL_DIR && docker compose logs --tail=50 app"
 fi

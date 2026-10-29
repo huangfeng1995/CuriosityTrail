@@ -4,7 +4,8 @@
  * 限流中间件。
  *
  * 三档限制：
- *  - 登录：5 次 / 15 分钟，防密码爆破
+ *  - 登录：10 次 / 15 分钟，防验证码爆破
+ *  - 发验证码：10 次 / 15 分钟，防短信轰炸
  *  - AI 调用：60 次 / 分钟，防脚本刷爆 API 额度
  *  - 全局 API：300 次 / 15 分钟，防一般滥用
  *
@@ -27,11 +28,18 @@ const common = {
   handler,
 };
 
-/** 登录限流：每 IP 每 15 分钟 5 次。 */
+/** 登录限流：每 IP 每 15 分钟 10 次。 */
 const loginLimiter = rateLimit({
   ...common,
   windowMs: 15 * 60 * 1000,
-  limit: 5,
+  limit: 10,
+});
+
+/** 发送验证码限流：每 IP 每 15 分钟 10 次。 */
+const smsLimiter = rateLimit({
+  ...common,
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
 });
 
 /** AI 调用限流：每 IP 每分钟 60 次。 */
@@ -48,4 +56,4 @@ const apiLimiter = rateLimit({
   limit: 300,
 });
 
-module.exports = { loginLimiter, aiLimiter, apiLimiter };
+module.exports = { loginLimiter, smsLimiter, aiLimiter, apiLimiter };

@@ -16,19 +16,26 @@ const config = require('./config');
 let db = new sqlite3.Database(config.dbPath);
 
 /**
- * Schema 版本。用 SQLite 的 user_version 记录，版本不匹配时重建全部表。
+ * Schema 版本。用 SQLite 的 user_version 记录。
  *
- * 为什么用版本号而不是"列出要删的旧表"：
- * 'settings' 在旧 schema 里是键值对配置表，在新 schema 里是世界观设定表——
- * 同名不同结构。若把 'settings' 放进"每次启动都删"的列表，新建的设定会在重启后消失；
- * 若不放进去，CREATE TABLE IF NOT EXISTS 又会沿用旧结构。
- * 版本号一次性解决这个问题：版本不匹配 → 全删重建；匹配 → 什么都不动。
+ * 版本升级只做**增量迁移**：绝不 DROP 已有的业务表。
+ * 小说是作者长期积累的资产，一次误删就是不可挽回的事故，
+ * 所以这里没有"版本不匹配就重建"的兜底路径。
+ *
+ * 版本 1 → 2：多用户（users / login_codes），业务表补 user_id。
+ * 版本 2 → 3：长期记忆台账（memory_chunks / memory_index_meta）。
  */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 3;
 
-// 需要在重建时一并清掉的表
-const ALL_TABLES = [
-  // 旧 schema
+/**
+ * 版本号之前的老库遗留表。
+ *
+ * 只在 user_version = 0（从未跑过本模块的库）时清掉：
+ * 'settings' 在旧 schema 里是键值对配置表，与新 schema 的世界观设定表同名不同结构，
+ * 必须先删掉才能按新结构建表。这类老库没有任何版本号，
+ * 也就没有用户数据可保，清掉是安全的。
+ */
+const LEGACY_TABLES = [
   'reports',
   'documents',
   'categories',
@@ -37,26 +44,38 @@ const ALL_TABLES = [
   'keywords',
   'translation_history',
   'agent_memory',
-  // 新 schema（版本不匹配时同样重建）
-  'works',
-  'chapters',
-  'characters',
   'settings',
-  'materials',
-  'materials_fts',
-  'inspirations',
-  'conversations',
-  'messages',
-  'prompt_overrides',
-  'chapter_versions',
-  'plot_cards',
-  'writing_events',
 ];
 
 const SCHEMA = `
+-- 用户。手机号即账号，首次验证码登录时自动创建。
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  phone         TEXT NOT NULL UNIQUE,
+  nickname      TEXT,
+  role          TEXT DEFAULT 'user',
+  created_at    TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+-- 短信验证码。
+-- 只存哈希，不存明文：库文件泄露时验证码不能直接被拿来登录。
+CREATE TABLE IF NOT EXISTS login_codes (
+  id         TEXT PRIMARY KEY,
+  phone      TEXT NOT NULL,
+  code_hash  TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  attempts   INTEGER DEFAULT 0,
+  consumed   INTEGER DEFAULT 0,
+  ip         TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_codes_phone ON login_codes(phone, created_at);
+
 -- 作品
 CREATE TABLE IF NOT EXISTS works (
   id           TEXT PRIMARY KEY,
+  user_id      TEXT REFERENCES users(id) ON DELETE CASCADE,
   title        TEXT NOT NULL,
   genre        TEXT,
   synopsis     TEXT,
@@ -163,10 +182,11 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 CREATE INDEX IF NOT EXISTS idx_settings_work ON settings(work_id, category);
 
--- 素材库
+-- 素材库（每个用户一份）
 CREATE TABLE IF NOT EXISTS materials (
   rid          INTEGER PRIMARY KEY AUTOINCREMENT,
   id           TEXT NOT NULL UNIQUE,
+  user_id      TEXT REFERENCES users(id) ON DELETE CASCADE,
   title        TEXT NOT NULL,
   body         TEXT,
   source       TEXT,
@@ -195,18 +215,20 @@ CREATE TRIGGER IF NOT EXISTS materials_ad AFTER DELETE ON materials BEGIN
   DELETE FROM materials_fts WHERE rowid = old.rid;
 END;
 
--- 灵感速记
+-- 灵感速记（每个用户一份）
 CREATE TABLE IF NOT EXISTS inspirations (
   id           TEXT PRIMARY KEY,
+  user_id      TEXT REFERENCES users(id) ON DELETE CASCADE,
   text         TEXT NOT NULL,
   tags         TEXT,
   consumed     INTEGER DEFAULT 0,
   created_at   TEXT NOT NULL
 );
 
--- AI 会话
+-- AI 会话（每个用户一份；work_id 可为空表示不挂作品的通用对话）
 CREATE TABLE IF NOT EXISTS conversations (
   id           TEXT PRIMARY KEY,
+  user_id      TEXT REFERENCES users(id) ON DELETE CASCADE,
   work_id      TEXT REFERENCES works(id) ON DELETE CASCADE,
   title        TEXT,
   created_at   TEXT NOT NULL,
@@ -226,16 +248,86 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
 
--- 提示词覆盖
+-- 提示词覆盖（每个用户一份）。
+-- 主键是 (user_id, id)：同一个角色在不同用户下各有一份覆盖。
 CREATE TABLE IF NOT EXISTS prompt_overrides (
-  id             TEXT PRIMARY KEY,
+  user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id             TEXT NOT NULL,
   system_prompt  TEXT NOT NULL,
   temperature    REAL,
   model          TEXT,
   thinking       INTEGER,
-  updated_at     TEXT NOT NULL
+  updated_at     TEXT NOT NULL,
+  PRIMARY KEY (user_id, id)
+);
+
+-- 长期记忆台账。每一条记录对应 viking 里的一个记忆块。
+--
+-- SQLite 始终是唯一事实来源：这块内容是什么、该放在哪个 URI、索引成功没有，
+-- 都记在这里。viking 只是可重建的向量存储，删了索引能重建，数据不会丢。
+--
+-- content 存切块正文，约等于原稿一份。代价是磁盘，
+-- 换来的是召回结果不必回查源表就能展示预览。
+CREATE TABLE IF NOT EXISTS memory_chunks (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  work_id       TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  source_type   TEXT NOT NULL CHECK (source_type IN
+                  ('chapter','character','setting','conv_raw','conv_fact','conv_manual')),
+  source_id     TEXT NOT NULL,
+  chunk_no      INTEGER NOT NULL DEFAULT 0,
+  content       TEXT NOT NULL,
+  content_hash  TEXT NOT NULL,
+  viking_uri    TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','indexing','indexed','failed')),
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  last_error    TEXT,
+  indexed_at    TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+
+-- 同一来源的同号块只能有一条：重建时按这个唯一键覆盖。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_source_chunk
+  ON memory_chunks (source_type, source_id, chunk_no);
+CREATE INDEX IF NOT EXISTS idx_memory_work
+  ON memory_chunks (user_id, work_id, source_type);
+CREATE INDEX IF NOT EXISTS idx_memory_status
+  ON memory_chunks (status, updated_at);
+
+-- 记忆索引的元信息。
+--
+-- embedding_model / embedding_dim 记的是建索引时用的模型与维度。
+-- 换模型后旧向量维度对不上，混用会得到静默的错误结果——
+-- 启动时拿它跟 sidecar /health 报的当前模型比对，不一致就拒绝召回并要求重建。
+CREATE TABLE IF NOT EXISTS memory_index_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 `;
+
+/**
+ * user_id 相关索引必须在补列之后建。
+ *
+ * 老库（schema 版本 1）没有 user_id，先跑 SCHEMA 里的 CREATE INDEX 会直接报错，
+ * 所以这部分从 SCHEMA 里拆出来，等 ensureColumn 完成后再执行。
+ */
+const USER_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_works_user ON works(user_id, modified_at);
+CREATE INDEX IF NOT EXISTS idx_materials_user ON materials(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_inspirations_user ON inspirations(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at);
+`;
+
+/** 需要 user_id 的业务表。 */
+const USER_SCOPED_TABLES = [
+  'works',
+  'materials',
+  'inspirations',
+  'conversations',
+  'prompt_overrides',
+];
 
 /**
  * 给已存在的表补一列。
@@ -262,67 +354,123 @@ function ensureColumn(table, column, definition) {
   });
 }
 
+/** 执行多条 SQL（无参数），出错即拒绝。 */
+function exec(sql) {
+  return new Promise((resolve, reject) => {
+    db.exec(sql, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
 /**
- * 初始化数据库：版本不匹配则重建表结构，匹配则只确保表存在。
+ * prompt_overrides 老结构是 id 单列主键（全站一份覆盖），
+ * 多用户后必须是 (user_id, id)。SQLite 不能直接改主键，只能重建表，
+ * 重建时把老数据整体搬过去（user_id 先留空串，由迁移脚本认领）。
+ */
+async function ensurePromptOverridesPk() {
+  const columns = await all('PRAGMA table_info(prompt_overrides)');
+  const pkColumns = columns.filter((c) => c.pk > 0);
+  if (pkColumns.length >= 2) return;
+
+  await run('BEGIN');
+  try {
+    await run(`
+      CREATE TABLE prompt_overrides_v2 (
+        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        id             TEXT NOT NULL,
+        system_prompt  TEXT NOT NULL,
+        temperature    REAL,
+        model          TEXT,
+        thinking       INTEGER,
+        updated_at     TEXT NOT NULL,
+        PRIMARY KEY (user_id, id)
+      )
+    `);
+    await run(`
+      INSERT INTO prompt_overrides_v2
+        (user_id, id, system_prompt, temperature, model, thinking, updated_at)
+      SELECT COALESCE(user_id, ''), id, system_prompt, temperature, model, thinking, updated_at
+      FROM prompt_overrides
+    `);
+    await run('DROP TABLE prompt_overrides');
+    await run('ALTER TABLE prompt_overrides_v2 RENAME TO prompt_overrides');
+    await run('COMMIT');
+  } catch (err) {
+    await run('ROLLBACK').catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * 增量迁移。只加表、加列、加索引，不删任何已有业务表。
+ * @param {number} fromVersion 当前库的 schema 版本
+ */
+async function migrate(fromVersion) {
+  if (fromVersion === 0) {
+    // 首次运行（或版本号之前的老库）：清掉没有保留价值的老表
+    console.log('数据库首次初始化');
+    await exec('PRAGMA foreign_keys = OFF');
+    for (const table of LEGACY_TABLES) {
+      await run(`DROP TABLE IF EXISTS ${table}`);
+    }
+  } else if (fromVersion < SCHEMA_VERSION) {
+    console.log(
+      `数据库 schema 版本 ${fromVersion} → ${SCHEMA_VERSION}，执行增量迁移（保留全部数据）`
+    );
+  }
+
+  // 建缺失的表（IF NOT EXISTS，不会动已有表的数据）
+  await exec(SCHEMA);
+
+  // 老表补新列
+  for (const table of USER_SCOPED_TABLES) {
+    await ensureColumn(table, 'user_id', 'TEXT REFERENCES users(id) ON DELETE CASCADE');
+  }
+  await ensureColumn('users', 'role', "TEXT DEFAULT 'user'");
+  await ensureColumn('materials', 'page_count', 'INTEGER DEFAULT 0');
+  await ensureColumn('prompt_overrides', 'model', 'TEXT');
+  await ensureColumn('prompt_overrides', 'thinking', 'INTEGER');
+  await ensureColumn('chapters', 'outline', 'TEXT');
+  await ensureColumn('chapters', 'word_count', 'INTEGER DEFAULT 0');
+  await ensureColumn('works', 'target_words', 'INTEGER DEFAULT 0');
+
+  // prompt_overrides 需要复合主键，老库要重建一次（数据整体保留）
+  await ensurePromptOverridesPk();
+
+  // 依赖 user_id 的索引要等补列完成
+  await exec(USER_INDEXES);
+
+  await run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+
+  // 老库重建时外键曾被关掉，建完新表再开启，否则 ON DELETE CASCADE 不生效
+  if (fromVersion === 0) {
+    await exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+/**
+ * 初始化数据库：按版本号做增量迁移。
  * @returns {Promise<void>}
  */
 function initDatabase() {
   return new Promise((resolve, reject) => {
-    db.serialize(() => {
-      db.get('PRAGMA user_version', (err, row) => {
-        if (err) {
-          reject(err);
-          return;
-        }
+    db.get('PRAGMA user_version', (err, row) => {
+      if (err) {
+        reject(err);
+        return;
+      }
 
-        const currentVersion = row ? row.user_version : 0;
+      const currentVersion = row ? row.user_version : 0;
 
-        if (currentVersion === SCHEMA_VERSION) {
-          // 版本一致：只确保表存在，不动任何数据
-          db.exec(SCHEMA, (execErr) => {
-            if (execErr) {
-              reject(execErr);
-              return;
-            }
-            ensureColumn('materials', 'page_count', 'INTEGER DEFAULT 0')
-              .then(() => ensureColumn('prompt_overrides', 'model', 'TEXT'))
-              .then(() => ensureColumn('prompt_overrides', 'thinking', 'INTEGER'))
-              .then(() => ensureColumn('chapters', 'outline', 'TEXT'))
-              .then(() => ensureColumn('chapters', 'word_count', 'INTEGER DEFAULT 0'))
-              .then(() => ensureColumn('works', 'target_words', 'INTEGER DEFAULT 0'))
-              .then(() => resolve())
-              .catch(reject);
-          });
-          return;
-        }
-
-        console.log(
-          `数据库 schema 版本 ${currentVersion} → ${SCHEMA_VERSION}，重建表结构（旧数据不迁移）`
+      if (currentVersion > SCHEMA_VERSION) {
+        reject(
+          new Error(
+            `数据库 schema 版本 ${currentVersion} 高于当前服务端支持的 ${SCHEMA_VERSION}，请勿降级运行`
+          )
         );
+        return;
+      }
 
-        // 重建期间关闭外键：旧表之间存在引用关系，开着外键删表会报 constraint failed
-        db.run('PRAGMA foreign_keys = OFF');
-        for (const table of ALL_TABLES) {
-          db.run(`DROP TABLE IF EXISTS ${table}`);
-        }
-        db.exec(SCHEMA, (execErr) => {
-          if (execErr) {
-            reject(execErr);
-            return;
-          }
-          db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`, (verErr) => {
-            if (verErr) {
-              reject(verErr);
-              return;
-            }
-            // 建完新表再开启外键，否则 ON DELETE CASCADE 不生效
-            db.run('PRAGMA foreign_keys = ON', (pragmaErr) => {
-              if (pragmaErr) reject(pragmaErr);
-              else resolve();
-            });
-          });
-        });
-      });
+      migrate(currentVersion).then(resolve).catch(reject);
     });
   });
 }

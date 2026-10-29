@@ -247,6 +247,11 @@ function extractSnippet(body, terms) {
  */
 async function search(query, options = {}) {
   const limit = options.limit ?? 5;
+  const userId = options.userId;
+  // 没有用户上下文就不检索：素材是每个人的私有数据，
+  // 宁可返回空，也不能退化成一个看全库的接口。
+  if (!userId) return [];
+
   const terms = bigrams(query);
   if (!terms.length) return [];
 
@@ -258,9 +263,10 @@ async function search(query, options = {}) {
     rows = await all(
       `SELECT material_id FROM materials_fts
        WHERE materials_fts MATCH ?
+         AND material_id IN (SELECT id FROM materials WHERE user_id = ?)
        ORDER BY rank
        LIMIT ?`,
-      [expr, limit]
+      [expr, userId, limit]
     );
   } catch (e) {
     // MATCH 表达式语法出错（罕见，多为素材正文里含特殊符号）时退化为 OR
@@ -269,9 +275,10 @@ async function search(query, options = {}) {
       rows = await all(
         `SELECT material_id FROM materials_fts
          WHERE materials_fts MATCH ?
+           AND material_id IN (SELECT id FROM materials WHERE user_id = ?)
          ORDER BY rank
          LIMIT ?`,
-        [orExpr, limit]
+        [orExpr, userId, limit]
       );
     } catch (e2) {
       return [];
@@ -314,6 +321,9 @@ async function search(query, options = {}) {
 async function searchLoose(query, options = {}) {
   const limit = options.limit ?? 4;
   const candidates = options.candidates ?? 40;
+  const userId = options.userId;
+  if (!userId) return [];
+
   const terms = extractQueryTerms(query);
   if (!terms.length) return [];
 
@@ -328,8 +338,9 @@ async function searchLoose(query, options = {}) {
     rows = await all(
       `SELECT material_id FROM materials_fts
        WHERE materials_fts MATCH ?
+         AND material_id IN (SELECT id FROM materials WHERE user_id = ?)
        LIMIT ?`,
-      [orExpr, candidates]
+      [orExpr, userId, candidates]
     );
   } catch (e) {
     return [];
@@ -440,10 +451,11 @@ async function rebuildIndex() {
  * 取最近更新的若干条素材。
  * 用来回答"素材库里有什么"这类没有明确关键词的问题。
  */
-async function recent(limit = 3) {
+async function recent(limit = 3, userId) {
+  if (!userId) return [];
   const rows = await all(
-    'SELECT * FROM materials ORDER BY modified_at DESC LIMIT ?',
-    [limit]
+    'SELECT * FROM materials WHERE user_id = ? ORDER BY modified_at DESC LIMIT ?',
+    [userId, limit]
   );
   return rows.map((material) => ({
     id: material.id,

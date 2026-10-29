@@ -39,8 +39,8 @@ services:
       BACKUP_OFFSITE_DIR: /app/offsite
       BACKUP_OFFSITE_KEEP: "30"
     env_file:
-      # 存放 APP_PASSWORD / JWT_SECRET / DEEPSEEK_API_KEY，不进版本库。
-      # required: false —— 文件不存在时不报错，容器照常起（只是没有登录密码和 AI key）。
+      # 存放 JWT_SECRET / 阿里云短信 / DEEPSEEK_API_KEY，不进版本库。
+      # required: false —— 文件不存在时不报错，容器照常起（只是登录验证码和 AI key 都没有）。
       # deploy.sh 会在启动前生成这个文件。
       - path: deploy/.env.production
         required: false

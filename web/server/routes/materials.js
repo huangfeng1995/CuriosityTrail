@@ -20,6 +20,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const config = require('../config');
 const { all, get, run } = require('../database');
+const { ownedMaterial } = require('../services/scope');
 const localSearch = require('../services/search/local');
 const documentText = require('../services/documentText');
 const citations = require('../services/citations');
@@ -78,17 +79,18 @@ router.get('/', async (req, res) => {
         `SELECT id, title, substr(body, 1, ?) AS preview, source, source_url, tags,
                 char_count, page_count, file_path, created_at, modified_at
          FROM materials
-         WHERE title LIKE ? OR body LIKE ? OR tags LIKE ?
+         WHERE user_id = ? AND (title LIKE ? OR body LIKE ? OR tags LIKE ?)
          ORDER BY modified_at DESC`,
-        [PREVIEW_LEN, `%${search}%`, `%${search}%`, `%${search}%`]
+        [PREVIEW_LEN, req.userId, `%${search}%`, `%${search}%`, `%${search}%`]
       );
     } else {
       rows = await all(
         `SELECT id, title, substr(body, 1, ?) AS preview, source, source_url, tags,
                 char_count, page_count, file_path, created_at, modified_at
          FROM materials
+         WHERE user_id = ?
          ORDER BY modified_at DESC`,
-        [PREVIEW_LEN]
+        [PREVIEW_LEN, req.userId]
       );
     }
     // 页码标记是内部记号，列表里不显示；页码单独用 page_count 字段
@@ -120,9 +122,9 @@ router.get('/search', async (req, res) => {
   }
   const max = Math.min(Number(limit) || 10, 30);
   try {
-    let results = await localSearch.search(String(q), { limit: max });
+    let results = await localSearch.search(String(q), { limit: max, userId: req.userId });
     if (!results.length) {
-      results = await localSearch.searchLoose(String(q), { limit: max });
+      results = await localSearch.searchLoose(String(q), { limit: max, userId: req.userId });
     }
     res.json(results);
   } catch (err) {
@@ -140,10 +142,11 @@ router.post('/', async (req, res) => {
     const id = crypto.randomUUID();
     const ts = now();
     await run(
-      `INSERT INTO materials (id, title, body, source, source_url, tags, char_count, created_at, modified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO materials (id, user_id, title, body, source, source_url, tags, char_count, created_at, modified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
+        req.userId,
         String(title).trim(),
         body || '',
         source || '手记',
@@ -154,7 +157,7 @@ router.post('/', async (req, res) => {
         ts,
       ]
     );
-    const created = await get('SELECT * FROM materials WHERE id = ?', [id]);
+    const created = await ownedMaterial(id, req.userId);
     await localSearch.indexMaterial(created);
     res.json(created);
   } catch (err) {
@@ -196,10 +199,11 @@ router.post('/upload', upload.array('files'), async (req, res) => {
       const ts = now();
       await run(
         `INSERT INTO materials
-           (id, title, body, source, file_path, char_count, page_count, created_at, modified_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, user_id, title, body, source, file_path, char_count, page_count, created_at, modified_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
+          req.userId,
           title,
           body,
           ext === '.pdf' ? 'PDF' : '文件',
@@ -210,7 +214,7 @@ router.post('/upload', upload.array('files'), async (req, res) => {
           ts,
         ]
       );
-      results.push(await get('SELECT * FROM materials WHERE id = ?', [id]));
+      results.push(await ownedMaterial(id, req.userId));
     }
 
     // 上传的文件同样要进索引，否则检索不到
@@ -234,7 +238,7 @@ router.post('/upload', upload.array('files'), async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const row = await get('SELECT * FROM materials WHERE id = ?', [req.params.id]);
+    const row = await ownedMaterial(req.params.id, req.userId);
     if (!row) return res.status(404).json({ error: '素材不存在' });
     res.json(row);
   } catch (err) {
@@ -244,7 +248,7 @@ router.get('/:id', async (req, res) => {
 
 router.get('/:id/file', async (req, res) => {
   try {
-    const row = await get('SELECT * FROM materials WHERE id = ?', [req.params.id]);
+    const row = await ownedMaterial(req.params.id, req.userId);
     if (!row || !row.file_path || !fs.existsSync(row.file_path)) {
       return res.status(404).json({ error: '文件不存在' });
     }
@@ -266,6 +270,7 @@ router.get('/:id/locate', async (req, res) => {
     const result = await citations.locateCitation({
       materialId: req.params.id,
       snippet: String(snippet),
+      userId: req.userId,
     });
     if (!result) return res.status(404).json({ error: '素材不存在' });
     res.json(result);
@@ -277,7 +282,7 @@ router.get('/:id/locate', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { title, body, source, sourceUrl, tags } = req.body || {};
   try {
-    const existing = await get('SELECT * FROM materials WHERE id = ?', [req.params.id]);
+    const existing = await ownedMaterial(req.params.id, req.userId);
     if (!existing) return res.status(404).json({ error: '素材不存在' });
 
     const nextBody = body !== undefined ? body : existing.body;
@@ -296,7 +301,7 @@ router.put('/:id', async (req, res) => {
         req.params.id,
       ]
     );
-    const updated = await get('SELECT * FROM materials WHERE id = ?', [req.params.id]);
+    const updated = await ownedMaterial(req.params.id, req.userId);
     await localSearch.indexMaterial(updated);
     res.json(updated);
   } catch (err) {
@@ -306,12 +311,12 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const row = await get('SELECT * FROM materials WHERE id = ?', [req.params.id]);
-    if (row && row.file_path && fs.existsSync(row.file_path)) {
+    const row = await ownedMaterial(req.params.id, req.userId);
+    if (!row) return res.status(404).json({ error: '素材不存在' });
+    if (row.file_path && fs.existsSync(row.file_path)) {
       fs.unlinkSync(row.file_path);
     }
-    const result = await run('DELETE FROM materials WHERE id = ?', [req.params.id]);
-    if (!result.changes) return res.status(404).json({ error: '素材不存在' });
+    await run('DELETE FROM materials WHERE id = ? AND user_id = ?', [req.params.id, req.userId]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -36,10 +36,12 @@ function extractToken(req) {
 function requireAuth(req, res, next) {
   const token = extractToken(req);
   const payload = verifyToken(token);
-  if (!payload) {
+  // sub 是用户 id；没有 sub 的 token（旧版单用户 token）一律视为无效
+  if (!payload || !payload.sub) {
     return res.status(401).json({ error: '未登录或会话已过期' });
   }
-  req.user = payload;
+  req.userId = payload.sub;
+  req.user = { id: payload.sub };
   next();
 }
 

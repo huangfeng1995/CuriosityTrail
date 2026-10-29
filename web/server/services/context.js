@@ -15,6 +15,7 @@
  *   5. 设定层（importance>=3 全量；否则正文命中设定名才纳入）
  *   6. 内容层（行内：选区 + 前后各一块；侧边栏：当前章全文）
  *   7. 衔接层（上一场景结尾片段，供续写衔接）
+ *   7.5 记忆层（自动召回的长期记忆片段，由调用方注入）
  *   8. 检索层（材料片段，由调用方注入）
  */
 
@@ -202,7 +203,9 @@ function collectMatchText(chapter, blocks) {
  * @param {string} [params.blockId] 行内操作的当前块 id
  * @param {string} [params.scope] 'work' | 'chapter' | 'inline'
  * @param {Array}  [params.retrieval] 检索片段 [{title, snippet, source}]
+ * @param {Array}  [params.memoryRefs] 自动召回的长期记忆片段 [{label, preview}]
  * @param {string} [params.extraInstruction] 用户在本次请求里附加的指令
+ * @param {string} params.userId 当前用户，用于数据归属校验与私有素材注入
  * @returns {Promise<{messages: Array, meta: Object}>}
  */
 async function assembleContext(params = {}) {
@@ -215,10 +218,12 @@ async function assembleContext(params = {}) {
     blockId,
     scope = 'chapter',
     retrieval = [],
+    memoryRefs = [],
     extraInstruction,
+    userId,
   } = params;
 
-  const role = await getRole(roleKey);
+  const role = await getRole(roleKey, userId);
   const systemParts = [];
 
   if (role) {
@@ -235,9 +240,10 @@ async function assembleContext(params = {}) {
   };
 
   // ---- 1. 作品层 ----
+  // 必须按 user_id 取：workId 是客户端传的，换个 id 不能读到别人的作品。
   let work = null;
-  if (workId) {
-    work = await get('SELECT * FROM works WHERE id = ?', [workId]);
+  if (workId && userId) {
+    work = await get('SELECT * FROM works WHERE id = ? AND user_id = ?', [workId, userId]);
     meta.work = work;
   }
 
@@ -255,8 +261,13 @@ async function assembleContext(params = {}) {
   // ---- 2. 章节层 ----
   let chapter = null;
   let chapterBlocks = [];
-  if (chapterId) {
-    chapter = await get('SELECT * FROM chapters WHERE id = ?', [chapterId]);
+  if (chapterId && userId) {
+    chapter = await get(
+      `SELECT c.* FROM chapters c
+       JOIN works w ON w.id = c.work_id
+       WHERE c.id = ? AND w.user_id = ?`,
+      [chapterId, userId]
+    );
     meta.chapter = chapter;
     if (chapter) {
       chapterBlocks = parseBlocks(chapter.blocks);
@@ -319,13 +330,13 @@ async function assembleContext(params = {}) {
   // ---- 5.5 灵感层 ----
   // 作者随手记下的念头，是最"私人"的素材：不会被通用检索命中，
   // 但恰恰是灵感师该先看的。仅注入未消费的。
-  if (workId) {
+  if (work) {
     const inspirations = await all(
       `SELECT * FROM inspirations
-       WHERE consumed = 0
+       WHERE user_id = ? AND consumed = 0
        ORDER BY created_at DESC
        LIMIT ?`,
-      [INSPIRATION_LIMIT]
+      [userId, INSPIRATION_LIMIT]
     );
     meta.inspirations = inspirations.length;
 
@@ -385,6 +396,17 @@ async function assembleContext(params = {}) {
     if (continuity) {
       systemParts.push(`## 上一场景结尾（用于衔接）\n${continuity}`);
     }
+  }
+
+  // ---- 7.5 记忆层 ----
+  // 自动召回的长期记忆。放在检索资料之前——
+  // 记忆是"这部作品自己的历史"，素材是"外部参考"，
+  // 模型的注意力应该先落在作品自身的前情上。
+  if (memoryRefs.length) {
+    const items = memoryRefs
+      .map((ref, i) => `${i + 1}. 〔${ref.label}〕${ref.preview || ''}`)
+      .join('\n');
+    systemParts.push(`## 长期记忆（自动召回）\n${items}`);
   }
 
   // ---- 8. 检索层 ----

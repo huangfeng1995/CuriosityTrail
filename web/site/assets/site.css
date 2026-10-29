@@ -236,9 +236,31 @@ button {
 
 .brand {
   display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-shrink: 0;
+}
+
+/* 品牌标识：毛笔「寻」字，墨色主体 + 朱砂点睛，跟随主题变量 */
+.brand-logo {
+  display: block;
+  flex: none;
+  width: 30px;
+  height: 34px;
+}
+
+.ct-logo-ink {
+  fill: var(--ink-0);
+}
+
+.ct-logo-cinnabar {
+  fill: var(--cinnabar);
+}
+
+.brand-text {
+  display: flex;
   align-items: baseline;
   gap: 9px;
-  flex-shrink: 0;
 }
 
 .brand-name {
@@ -1577,8 +1599,13 @@ html[data-theme='dark'] .own-item {
 
 .foot-brand {
   display: flex;
-  align-items: baseline;
-  gap: 9px;
+  align-items: center;
+  gap: 11px;
+}
+
+.foot-brand .brand-logo {
+  width: 26px;
+  height: 30px;
 }
 
 .foot-note {

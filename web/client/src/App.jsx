@@ -17,6 +17,7 @@ import Works from './pages/Works';
 import Workspace from './pages/Workspace';
 import Materials from './pages/Materials';
 import SettingsPage from './pages/SettingsPage';
+import BrandLogo from './components/BrandLogo';
 
 const { Header, Content } = Layout;
 
@@ -119,6 +120,7 @@ function AppShell({ isDark, setIsDark }) {
     <Layout style={{ minHeight: '100vh', background: 'var(--bg-layout)' }}>
       <Header className="ct-topbar">
         <div className="ct-brand" onClick={() => navigate('/works')}>
+          <BrandLogo size={26} />
           <span className="ct-brand-name font-serif">寻迹</span>
         </div>
 

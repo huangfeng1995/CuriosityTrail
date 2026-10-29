@@ -8,11 +8,11 @@
  */
 
 const express = require('express');
-const { get } = require('../database');
 const aiConfig = require('../services/aiConfig');
 const { resolveProvider } = require('../services/providers');
 const roles = require('../services/roles');
 const consistency = require('../services/consistency');
+const { ownedWork } = require('../services/scope');
 
 const router = express.Router();
 
@@ -21,7 +21,7 @@ const router = express.Router();
  */
 router.get('/:workId', async (req, res) => {
   try {
-    const work = await get('SELECT id FROM works WHERE id = ?', [req.params.workId]);
+    const work = await ownedWork(req.params.workId, req.userId);
     if (!work) return res.status(404).json({ error: '作品不存在' });
 
     const issues = await consistency.runRuleChecks(req.params.workId);
@@ -39,7 +39,7 @@ router.get('/:workId', async (req, res) => {
  */
 router.post('/:workId', async (req, res) => {
   try {
-    const work = await get('SELECT id FROM works WHERE id = ?', [req.params.workId]);
+    const work = await ownedWork(req.params.workId, req.userId);
     if (!work) return res.status(404).json({ error: '作品不存在' });
 
     const issues = await consistency.runRuleChecks(req.params.workId);
@@ -49,7 +49,7 @@ router.post('/:workId', async (req, res) => {
     try {
       const cfg = aiConfig.getConfig();
       const { provider, name } = resolveProvider(cfg);
-      const role = await roles.getRole('critic');
+      const role = await roles.getRole('critic', req.userId);
 
       aiIssues = await consistency.runAiCheck(req.params.workId, {
         provider,

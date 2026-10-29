@@ -28,14 +28,17 @@ fly auth login
 
 ### 2. 生成密钥
 
-三个 secret 需要在部署前准备好：
+这些 secret 需要在部署前准备好：
 
 ```bash
-# 登录密码——太太用来进平台的那一个
-APP_PASSWORD='换成你自己的密码'
-
 # 会话签名密钥。必须是随机串，别用现成的密码
 JWT_SECRET=$(openssl rand -base64 32)
+
+# 阿里云短信：登录验证码靠它发出去（四项都要）
+ALIYUN_SMS_ACCESS_KEY_ID='你的 AccessKeyId'
+ALIYUN_SMS_ACCESS_KEY_SECRET='你的 AccessKeySecret'
+ALIYUN_SMS_SIGN_NAME='你的签名'
+ALIYUN_SMS_TEMPLATE_CODE='SMS_xxxxxxx'
 
 # DeepSeek 的 API key。对话和联网搜索共用这一把
 DEEPSEEK_API_KEY='sk-xxxxxxxx'
@@ -118,7 +121,10 @@ fly volumes create curiosity_trail_offsite --size 1 --region hkg
 
 ```bash
 fly secrets set \
-  APP_PASSWORD='你的密码' \
+  ALIYUN_SMS_ACCESS_KEY_ID='你的 AccessKeyId' \
+  ALIYUN_SMS_ACCESS_KEY_SECRET='你的 AccessKeySecret' \
+  ALIYUN_SMS_SIGN_NAME='你的签名' \
+  ALIYUN_SMS_TEMPLATE_CODE='SMS_xxxxxxx' \
   JWT_SECRET="$(openssl rand -base64 32)" \
   DEEPSEEK_API_KEY='sk-你的key'
 ```
@@ -153,8 +159,8 @@ fly open
 
 ### 6. 首次登录
 
-用 `APP_PASSWORD` 里设的密码登录。进去后先去「设置 → AI 供应商」点一次「测试连接」，
-确认 key 生效；再去「设置 → 备份」手动备份一次，确认卷上的东西都对。
+用手机号 + 短信验证码登录（首次登录自动注册）。进去后先去「设置 → AI 供应商」点一次「测试连接」，
+确认 key 生效；如果你是管理员，还可以去「设置 → 备份」手动备份一次，确认卷上的东西都对。
 
 ---
 
@@ -196,10 +202,10 @@ fly deploy
 
 卷上的数据不受影响。
 
-### 改密码
+### 改短信配置
 
 ```bash
-fly secrets set APP_PASSWORD='新密码'
+fly secrets set ALIYUN_SMS_ACCESS_KEY_ID='新的 key'
 fly restart
 ```
 
@@ -281,7 +287,10 @@ docker run -d \
   --name curiosity-trail \
   -p 8080:8080 \
   -v /srv/curiosity-data:/app/data \
-  -e APP_PASSWORD='你的密码' \
+  -e ALIYUN_SMS_ACCESS_KEY_ID='你的 AccessKeyId' \
+  -e ALIYUN_SMS_ACCESS_KEY_SECRET='你的 AccessKeySecret' \
+  -e ALIYUN_SMS_SIGN_NAME='你的签名' \
+  -e ALIYUN_SMS_TEMPLATE_CODE='SMS_xxxxxxx' \
   -e JWT_SECRET="$(openssl rand -base64 32)" \
   -e DEEPSEEK_API_KEY='sk-你的key' \
   curiosity-trail

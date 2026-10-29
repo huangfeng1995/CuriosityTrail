@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Input, Button, Spin, Tooltip, App as AntApp } from 'antd';
 import { SendOutlined, ClearOutlined } from '@ant-design/icons';
-import { Square } from 'lucide-react';
+import { Square, Brain, EyeOff } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
+import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
 import EmptyState from '../EmptyState';
@@ -37,6 +38,8 @@ export default function AssistantSidebar() {
   const listRef = useRef(null);
   // 流式累加器：token 回调闭包里的 streaming 永远是旧值，必须用 ref 累
   const streamBufRef = useRef('');
+  // 长期记忆开关。作者说了算，默认开着。
+  const [useMemory, setUseMemory] = useMemoryPref();
   const { message: toast } = AntApp.useApp();
 
   // 角色列表
@@ -60,19 +63,42 @@ export default function AssistantSidebar() {
 
   const activeRole = roles.find((r) => r.key === roleKey);
 
+  /**
+   * 发起一次对话。
+   *
+   * options.excludeRefIds   作者剔除的记忆条目（重新生成时带上）
+   * options.replaceMessageId 被替换掉的助手消息（服务端 id）
+   * options.reuseAssistantId 复用哪条助手气泡（重新生成时不新建气泡）
+   */
   const send = useCallback(
-    async (text) => {
+    async (text, options = {}) => {
+      const {
+        excludeRefIds = [],
+        replaceMessageId = '',
+        reuseAssistantId = '',
+      } = options;
+
       const content = (text ?? input).trim();
       if (!content || sending) return;
 
-      setInput('');
+      // 重新生成：沿用原来的用户气泡与助手气泡，只换内容。
+      // 新建一对气泡会让对话流里出现"同一个问题问了两遍"。
+      const isRegen = Boolean(reuseAssistantId);
 
-      const userMsg = {
-        id: `u-${Date.now()}`,
-        role: 'user',
-        content,
-      };
-      const assistantId = `a-${Date.now()}`;
+      // 本轮新插入的用户气泡。服务端回消息 id 时要靠它对上号——
+      // 「记入记忆」要的是服务端 id，不是本地这个临时 id。
+      let userBubbleId = '';
+
+      if (!isRegen) {
+        setInput('');
+        userBubbleId = `u-${Date.now()}`;
+        dispatch({
+          type: 'message/add',
+          message: { id: userBubbleId, role: 'user', content },
+        });
+      }
+
+      const assistantId = isRegen ? reuseAssistantId : `a-${Date.now()}`;
       const assistantMsg = {
         id: assistantId,
         role: 'assistant',
@@ -82,16 +108,31 @@ export default function AssistantSidebar() {
         citations: [],
         roleLabel: activeRole ? `${activeRole.icon} ${activeRole.name}` : '',
         applied: false,
+        // 记住这次问了什么：重新生成时要拿它重发
+        prompt: content,
+        memoryRefs: [],
+        memoryDegraded: false,
+        memoryReason: '',
+        excludedRefIds,
+        regenerating: isRegen,
       };
 
-      dispatch({ type: 'message/add', message: userMsg });
-      dispatch({ type: 'message/add', message: assistantMsg });
+      if (isRegen) {
+        dispatch({ type: 'message/update', id: assistantId, patch: assistantMsg });
+      } else {
+        dispatch({ type: 'message/add', message: assistantMsg });
+      }
       dispatch({ type: 'sending/set', sending: true });
       dispatch({ type: 'streaming/set', streaming: '' });
 
       const controller = new AbortController();
       abortRef.current = controller;
       streamBufRef.current = '';
+      // 本次请求有没有拿到过实质回复。
+      // 流正常结束却没收到 action 事件时，占位消息会一直是空的——
+      // 必须兜底给作者一句看得见的话，不能留一个空气泡。
+      let gotReply = false;
+      let aborted = false;
 
       try {
         await streamPost(
@@ -104,6 +145,9 @@ export default function AssistantSidebar() {
             conversationId,
             scope: 'chapter',
             blocks,
+            useMemory,
+            excludeRefIds,
+            replaceMessageId,
           },
           (event) => {
             if (event.type === 'token') {
@@ -114,7 +158,20 @@ export default function AssistantSidebar() {
               });
             } else if (event.type === 'notice') {
               dispatch({ type: 'notice/set', notice: event.content });
+            } else if (event.type === 'memory') {
+              // 记忆事件在第一个 token 之前到：作者先看到"参考了什么"，
+              // 再看到答案。
+              dispatch({
+                type: 'message/update',
+                id: assistantId,
+                patch: {
+                  memoryRefs: event.refs || [],
+                  memoryDegraded: !!event.degraded,
+                  memoryReason: event.reason || '',
+                },
+              });
             } else if (event.type === 'action') {
+              gotReply = true;
               dispatch({
                 type: 'streaming/set',
                 streaming: '',
@@ -137,37 +194,113 @@ export default function AssistantSidebar() {
                 type: 'conversation/set',
                 conversationId: event.conversationId,
               });
+              // 记住服务端的助手消息 id：下次重新生成要靠它替换旧回答
+              dispatch({
+                type: 'message/update',
+                id: assistantId,
+                patch: {
+                  serverMessageId: event.messageId || '',
+                  regenerating: false,
+                },
+              });
+              // 用户消息的服务端 id 同样要留着：作者可以给自己的提问
+              // 点「记入记忆」。重新生成时这条提问是复用的，id 不变。
+              if (userBubbleId && event.userMessageId) {
+                dispatch({
+                  type: 'message/update',
+                  id: userBubbleId,
+                  patch: { serverMessageId: event.userMessageId },
+                });
+              }
             } else if (event.type === 'error') {
+              gotReply = true;
+              dispatch({
+                type: 'streaming/set',
+                streaming: '',
+              });
+              const detail = event.message || 'AI 调用失败';
               dispatch({
                 type: 'notice/set',
-                error: event.message || 'AI 调用失败',
+                error: detail,
               });
               dispatch({
                 type: 'message/update',
                 id: assistantId,
-                patch: { content: `调用失败：${event.message}` },
+                patch: { content: `调用失败：${detail}`, regenerating: false },
               });
             }
           },
           controller.signal
         );
       } catch (e) {
-        if (e.name !== 'AbortError') {
+        if (e.name === 'AbortError') {
+          // 作者主动点了「停止」：这不是故障，告诉他停在了哪儿就行。
+          aborted = true;
+          dispatch({
+            type: 'message/update',
+            id: assistantId,
+            patch: { content: '已停止生成。', regenerating: false },
+          });
+        } else {
+          gotReply = true;
           dispatch({ type: 'notice/set', error: e.message });
           dispatch({
             type: 'message/update',
             id: assistantId,
-            patch: { content: `调用失败：${e.message}` },
+            patch: { content: `调用失败：${e.message}`, regenerating: false },
           });
         }
       } finally {
+        // 流结束了，但既没收到 action 也没收到 error。
+        // 说明连接在中途断掉了——给作者一句话，别留空白气泡。
+        if (!gotReply && !aborted) {
+          dispatch({
+            type: 'message/update',
+            id: assistantId,
+            patch: { content: '连接中断，没有收到回复，请重试。', regenerating: false },
+          });
+        }
         dispatch({ type: 'sending/set', sending: false });
         dispatch({ type: 'streaming/set', streaming: '' });
         streamBufRef.current = '';
         abortRef.current = null;
       }
     },
-    [input, sending, dispatch, work, chapter, roleKey, conversationId, blocks, activeRole]
+    [input, sending, dispatch, work, chapter, roleKey, conversationId, blocks, activeRole, useMemory]
+  );
+
+  /**
+   * 剔除一条记忆。
+   *
+   * 只是标记，不立刻重发——作者可能一次要剔好几条。
+   * 剔完点「重新生成」才生效。
+   */
+  const excludeMemory = useCallback(
+    (msg, ref) => {
+      const list = msg.excludedRefIds || [];
+      if (list.includes(ref.id)) return;
+      dispatch({
+        type: 'message/update',
+        id: msg.id,
+        patch: { excludedRefIds: [...list, ref.id] },
+      });
+    },
+    [dispatch]
+  );
+
+  /**
+   * 带着剔除名单重新生成这条回答。
+   */
+  const regenerate = useCallback(
+    (msg) => {
+      if (!msg?.prompt || sending) return;
+      send(msg.prompt, {
+        excludeRefIds: msg.excludedRefIds || [],
+        replaceMessageId: msg.serverMessageId || '',
+        reuseAssistantId: msg.id,
+      });
+    },
+    [send, sending]
   );
 
   /**
@@ -236,6 +369,52 @@ export default function AssistantSidebar() {
     [updateBlock, dispatch, toast]
   );
 
+  /**
+   * 把一条消息记入长期记忆（手动层）。
+   *
+   * 手动层是作者明确划的线，权重最高的一层。
+   * 这一层是同步写的：作者点了就该立刻知道成没成功，
+   * 所以这里等服务端返回再给反馈，不做乐观更新。
+   */
+  const rememberMessage = useCallback(
+    async (msg) => {
+      if (!msg?.serverMessageId || msg.remembering) return;
+
+      dispatch({
+        type: 'message/update',
+        id: msg.id,
+        patch: { remembering: true },
+      });
+
+      try {
+        const res = await fetch(`/api/ai/messages/${msg.serverMessageId}/remember`, {
+          method: 'POST',
+          credentials: 'include',
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(data.error || '记入失败');
+        }
+
+        dispatch({
+          type: 'message/update',
+          id: msg.id,
+          patch: { remembering: false, remembered: true },
+        });
+        toast.success('已记入长期记忆');
+      } catch (e) {
+        dispatch({
+          type: 'message/update',
+          id: msg.id,
+          patch: { remembering: false },
+        });
+        toast.error(e.message || '记入失败');
+      }
+    },
+    [dispatch, toast]
+  );
+
   const clearChat = () => {
     dispatch({ type: 'message/clear' });
   };
@@ -282,6 +461,9 @@ export default function AssistantSidebar() {
           sending={sending}
           onApply={applyAction}
           onRevert={revertAction}
+          onExcludeMemory={excludeMemory}
+          onRegenerate={regenerate}
+          onRemember={rememberMessage}
         />
       </div>
 
@@ -308,6 +490,22 @@ export default function AssistantSidebar() {
               icon={<ClearOutlined />}
               onClick={clearChat}
               disabled={sending || !messages.length}
+            />
+          </Tooltip>
+          <Tooltip
+            title={
+              useMemory
+                ? '长期记忆已开启：AI 会自动回忆前情'
+                : '长期记忆已关闭：AI 不会自动回忆前情'
+            }
+          >
+            <Button
+              size="small"
+              type="text"
+              icon={useMemory ? <Brain size={14} /> : <EyeOff size={14} />}
+              onClick={() => setUseMemory(!useMemory)}
+              disabled={sending}
+              className={`ct-ai-memory-toggle${useMemory ? ' is-on' : ''}`}
             />
           </Tooltip>
           <span style={{ flex: 1 }} />

@@ -41,7 +41,9 @@ export default function ActionCard({ action, content, reason, applied, onApply, 
         )}
       </div>
 
-      <div className="ct-action-body">{content}</div>
+      <div className="ct-action-body">
+        {(content || '').trim() || '（本次没有返回内容）'}
+      </div>
     </div>
   );
 }

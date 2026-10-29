@@ -60,16 +60,7 @@ function readOrCreate(fileName, bytes) {
   return value;
 }
 
-// APP_PASSWORD 优先取平台注入的 secret；缺失时落到 DATA_DIR 内的持久化文件，
-// 保证容器重建后密码不变（仅在 platform 未注入时使用，会在启动日志中警告）。
-const appPasswordFromEnv = (process.env.APP_PASSWORD || '').trim();
-const appPassword = appPasswordFromEnv || readOrCreate('.app-password', 24);
-const appPasswordIsFallback = !appPasswordFromEnv;
-
-// scrypt salt。用于派生登录校验值，两次计算必须同盐。
-const appPasswordSalt =
-  (process.env.APP_PASSWORD_SALT || '').trim() || readOrCreate('.app-password-salt', 16);
-
+// 登录已改为手机号 + 短信验证码（见 services/sms.js），不再有共享密码。
 // JWT 签名密钥。缺失时落到 DATA_DIR 内的持久化文件，避免重启后所有会话失效。
 const jwtSecretFromEnv = (process.env.JWT_SECRET || '').trim();
 const jwtSecret = jwtSecretFromEnv || readOrCreate('.session-secret', 32);
@@ -80,11 +71,63 @@ const sessionRememberTtlDays = Number(process.env.SESSION_REMEMBER_TTL_DAYS || 9
 const sessionCookieName = 'ct_session';
 
 // ---------------------------------------------------------------------------
+// 3.1 阿里云短信
+// ---------------------------------------------------------------------------
+// AccessKey 走环境变量注入，不落库、不写日志。
+const aliyunSmsAccessKeyId = (process.env.ALIYUN_SMS_ACCESS_KEY_ID || '').trim();
+const aliyunSmsAccessKeySecret = (process.env.ALIYUN_SMS_ACCESS_KEY_SECRET || '').trim();
+const aliyunSmsSignName = (process.env.ALIYUN_SMS_SIGN_NAME || '').trim();
+const aliyunSmsTemplateCode = (process.env.ALIYUN_SMS_TEMPLATE_CODE || '').trim();
+
+const smsConfigured = Boolean(
+  aliyunSmsAccessKeyId && aliyunSmsAccessKeySecret && aliyunSmsSignName && aliyunSmsTemplateCode
+);
+
+// 开发/测试用固定验证码。
+// 仅非生产环境生效——生产环境即使误配了也不会被当成万能码，
+// 这样本地调试不必真发短信，上线也不会留下后门。
+const smsDevCode = (process.env.SMS_DEV_CODE || '').trim();
+const smsDevMode = !isProduction && Boolean(smsDevCode);
+
+const smsCodeTtlMinutes = Number(process.env.SMS_CODE_TTL_MINUTES || 5);
+const smsResendSeconds = Number(process.env.SMS_RESEND_SECONDS || 60);
+const smsDailyLimit = Number(process.env.SMS_DAILY_LIMIT || 10);
+
+// ---------------------------------------------------------------------------
 // 4. AI / 服务商
 // ---------------------------------------------------------------------------
 const deepseekApiKey = (process.env.DEEPSEEK_API_KEY || '').trim();
 const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
 const ollamaModel = (process.env.OLLAMA_MODEL || 'qwen2.5:7b').trim();
+
+// ---------------------------------------------------------------------------
+// 4.1 长期记忆（viking sidecar）
+// ---------------------------------------------------------------------------
+//
+// 记忆服务是一个跑在 127.0.0.1 的 Python sidecar（web/memory-service）。
+// 它没启动时整个记忆层关闭，对话与写作照常——所以这里没有"必须可达"的校验。
+//
+// Ark key 只存在于 sidecar 的环境变量里，Node 不读取、不下发。
+const memoryEnabled = (process.env.MEMORY_ENABLED || 'true').trim() !== 'false';
+const vikingBaseUrl = (process.env.VIKING_BASE_URL || 'http://127.0.0.1:8019').replace(/\/$/, '');
+const vikingTimeoutMs = Number(process.env.VIKING_TIMEOUT_MS || 800);
+// 写入超时必须**长于** sidecar 的 VIKING_INDEX_TIMEOUT_SECONDS（默认 8 秒）。
+//
+// 谁先超时很重要：sidecar 先超时 → 它返回 503，Node 拿到明确失败，
+// 台账记 failed，两边状态一致；Node 先放弃 → sidecar 还在后台写向量，
+// 变成「台账说失败、向量已经写进去」。
+const vikingIndexTimeoutMs = Number(process.env.VIKING_INDEX_TIMEOUT_MS || 10000);
+const memoryIndexConcurrency = Number(process.env.MEMORY_INDEX_CONCURRENCY || 2);
+const memoryTopK = Number(process.env.MEMORY_TOP_K || 16);
+const memoryMaxRefs = Number(process.env.MEMORY_MAX_REFS || 8);
+const memoryMaxChars = Number(process.env.MEMORY_MAX_CHARS || 3000);
+// 召回门槛的基准值。分类型门槛是它的倍数，见 retriever.js 的 TYPE_THRESHOLD_FACTORS。
+// 0.24 来自标定实测（30 章 / 92 块，安全区间 (0.13, 0.34) 的中点）。
+const memoryMinScore = Number(process.env.MEMORY_MIN_SCORE || 0.24);
+const memoryExtractEnabled =
+  (process.env.MEMORY_EXTRACT_ENABLED || 'true').trim() !== 'false';
+// 索引失败后的首次退避时长，后面的重试按 2 的幂往上翻。
+const memoryRetryBaseMs = Number(process.env.MEMORY_RETRY_BASE_MS || 1000);
 
 // ---------------------------------------------------------------------------
 // 5. 运行环境
@@ -139,19 +182,39 @@ module.exports = {
   aiConfigPath,
   // 鉴权
   isProd,
-  appPassword,
-  appPasswordIsFallback,
-  appPasswordSalt,
   jwtSecret,
   jwtSecretIsFallback,
   sessionTtlDays,
   sessionRememberTtlDays,
   sessionCookieName,
   cookieSecure,
+  // 短信
+  aliyunSmsAccessKeyId,
+  aliyunSmsAccessKeySecret,
+  aliyunSmsSignName,
+  aliyunSmsTemplateCode,
+  smsConfigured,
+  smsDevCode,
+  smsDevMode,
+  smsCodeTtlMinutes,
+  smsResendSeconds,
+  smsDailyLimit,
   // AI
   deepseekApiKey,
   ollamaBaseUrl,
   ollamaModel,
+  // 长期记忆
+  memoryEnabled,
+  vikingBaseUrl,
+  vikingTimeoutMs,
+  vikingIndexTimeoutMs,
+  memoryIndexConcurrency,
+  memoryTopK,
+  memoryMaxRefs,
+  memoryMaxChars,
+  memoryMinScore,
+  memoryExtractEnabled,
+  memoryRetryBaseMs,
   // 异地备份
   backupOffsiteDir,
   backupOffsiteKeep,

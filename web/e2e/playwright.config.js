@@ -26,7 +26,8 @@ const DATA_DIR = path.join(__dirname, '.tmp', 'data');
 /** 登录态：globalSetup 登录一次写下来，所有用例复用 */
 const STATE_FILE = path.join(__dirname, '.tmp', 'storage-state.json');
 
-const PASSWORD = process.env.E2E_PASSWORD || 'e2e-password-123';
+/** 短信验证码在测试环境用固定值（SMS_DEV_CODE），不会真的发短信 */
+const SMS_CODE = process.env.E2E_SMS_CODE || '135790';
 
 module.exports = defineConfig({
   testDir: './specs',
@@ -68,7 +69,7 @@ module.exports = defineConfig({
       PORT: String(PORT),
       NODE_ENV: 'test',
       DATA_DIR,
-      APP_PASSWORD: PASSWORD,
+      SMS_DEV_CODE: SMS_CODE,
       JWT_SECRET: 'e2e-jwt-secret-for-ci-only',
       ALLOW_MULTI_INSTANCE: '1',
       BACKUP_HOUR: '-1',

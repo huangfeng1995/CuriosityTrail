@@ -20,6 +20,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const { all, get, run, transaction } = require('../database');
+const { ownedWork } = require('../services/scope');
+const memory = require('../services/memory/indexer');
 
 const router = express.Router();
 
@@ -45,7 +47,9 @@ router.get('/', async (req, res) => {
     const rows = await all(
       `SELECT w.*, (SELECT COUNT(*) FROM chapters c WHERE c.work_id = w.id) AS chapter_count
        FROM works w
-       ORDER BY w.modified_at DESC`
+       WHERE w.user_id = ?
+       ORDER BY w.modified_at DESC`,
+      [req.userId]
     );
     res.json(rows);
   } catch (err) {
@@ -63,10 +67,11 @@ router.post('/', async (req, res) => {
     const id = crypto.randomUUID();
     const ts = now();
     await run(
-      `INSERT INTO works (id, title, genre, synopsis, outline, target_words, created_at, modified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
+        req.userId,
         String(title).trim(),
         genre || '',
         synopsis || '',
@@ -76,7 +81,7 @@ router.post('/', async (req, res) => {
         ts,
       ]
     );
-    res.json(await get('SELECT * FROM works WHERE id = ?', [id]));
+    res.json(await get('SELECT * FROM works WHERE id = ? AND user_id = ?', [id, req.userId]));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -84,7 +89,7 @@ router.post('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const work = await get('SELECT * FROM works WHERE id = ?', [req.params.id]);
+    const work = await ownedWork(req.params.id, req.userId);
     if (!work) return res.status(404).json({ error: '作品不存在' });
 
     const chapters = await all(
@@ -100,13 +105,13 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { title, genre, synopsis, outline, targetWords } = req.body || {};
   try {
-    const existing = await get('SELECT * FROM works WHERE id = ?', [req.params.id]);
+    const existing = await ownedWork(req.params.id, req.userId);
     if (!existing) return res.status(404).json({ error: '作品不存在' });
 
     await run(
       `UPDATE works SET title = ?, genre = ?, synopsis = ?, outline = ?, target_words = ?,
          modified_at = ?
-       WHERE id = ?`,
+       WHERE id = ? AND user_id = ?`,
       [
         (title !== undefined ? String(title).trim() : existing.title),
         genre !== undefined ? genre : existing.genre,
@@ -115,9 +120,10 @@ router.put('/:id', async (req, res) => {
         targetWords !== undefined ? (Number(targetWords) || 0) : existing.target_words,
         now(),
         req.params.id,
+        req.userId,
       ]
     );
-    res.json(await get('SELECT * FROM works WHERE id = ?', [req.params.id]));
+    res.json(await get('SELECT * FROM works WHERE id = ? AND user_id = ?', [req.params.id, req.userId]));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -125,7 +131,13 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await run('DELETE FROM works WHERE id = ?', [req.params.id]);
+    // 先把要删的向量 URI 抓好——作品一删，台账就随外键级联清空了
+    await memory.scheduleRemoveWork({ userId: req.userId, workId: req.params.id });
+
+    const result = await run('DELETE FROM works WHERE id = ? AND user_id = ?', [
+      req.params.id,
+      req.userId,
+    ]);
     if (!result.changes) return res.status(404).json({ error: '作品不存在' });
     res.json({ ok: true });
   } catch (err) {
@@ -139,6 +151,9 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/:id/chapters', async (req, res) => {
   try {
+    const work = await ownedWork(req.params.id, req.userId);
+    if (!work) return res.status(404).json({ error: '作品不存在' });
+
     const rows = await all(
       'SELECT * FROM chapters WHERE work_id = ? ORDER BY seq, created_at',
       [req.params.id]
@@ -152,7 +167,7 @@ router.get('/:id/chapters', async (req, res) => {
 router.post('/:id/chapters', async (req, res) => {
   const { title, volume, status } = req.body || {};
   try {
-    const work = await get('SELECT id FROM works WHERE id = ?', [req.params.id]);
+    const work = await ownedWork(req.params.id, req.userId);
     if (!work) return res.status(404).json({ error: '作品不存在' });
 
     const maxRow = await get(
@@ -195,6 +210,9 @@ router.post('/:id/chapters/reorder', async (req, res) => {
   }
 
   try {
+    const work = await ownedWork(req.params.id, req.userId);
+    if (!work) return res.status(404).json({ error: '作品不存在' });
+
     const statements = chapterIds.map((chapterId, index) => ({
       sql: 'UPDATE chapters SET seq = ?, modified_at = ? WHERE id = ? AND work_id = ?',
       params: [index + 1, now(), chapterId, req.params.id],

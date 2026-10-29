@@ -60,6 +60,7 @@ class OllamaProvider extends Provider {
     const data = await response.json();
     return {
       content: (data.message && data.message.content) || '',
+      finishReason: data.done_reason || '',
       raw: data,
     };
   }
@@ -82,7 +83,12 @@ class OllamaProvider extends Provider {
     }
 
     let content = '';
+    let finishReason = '';
     await readNdjsonStream(response, (event) => {
+      // Ollama 在最后一条 NDJSON 里带 done_reason（'stop' / 'length'）
+      if (event.done_reason) {
+        finishReason = event.done_reason;
+      }
       const piece = event.message && event.message.content;
       if (piece) {
         content += piece;
@@ -90,7 +96,7 @@ class OllamaProvider extends Provider {
       }
     });
 
-    return { content };
+    return { content, finishReason };
   }
 
   async checkStatus() {

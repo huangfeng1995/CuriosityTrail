@@ -13,6 +13,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const { all, get, run } = require('../database');
+const { ownedWork, ownedCharacter } = require('../services/scope');
+const memory = require('../services/memory/indexer');
 
 const router = express.Router();
 const now = () => new Date().toISOString();
@@ -30,8 +32,20 @@ router.get('/', async (req, res) => {
   const { workId } = req.query;
   try {
     const rows = workId
-      ? await all('SELECT * FROM characters WHERE work_id = ? ORDER BY name', [workId])
-      : await all('SELECT * FROM characters ORDER BY modified_at DESC');
+      ? await all(
+          `SELECT c.* FROM characters c
+           JOIN works w ON w.id = c.work_id
+           WHERE c.work_id = ? AND w.user_id = ?
+           ORDER BY c.name`,
+          [workId, req.userId]
+        )
+      : await all(
+          `SELECT c.* FROM characters c
+           JOIN works w ON w.id = c.work_id
+           WHERE w.user_id = ?
+           ORDER BY c.modified_at DESC`,
+          [req.userId]
+        );
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -48,7 +62,7 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const work = await get('SELECT id FROM works WHERE id = ?', [workId]);
+    const work = await ownedWork(workId, req.userId);
     if (!work) return res.status(404).json({ error: '作品不存在' });
 
     const id = crypto.randomUUID();
@@ -74,6 +88,15 @@ router.post('/', async (req, res) => {
         ts,
       ]
     );
+
+    // 新建的人物卡立刻进记忆库：作者可能马上就让 AI 参考这个人
+    memory.scheduleIndex({
+      userId: req.userId,
+      workId,
+      sourceType: 'character',
+      sourceId: id,
+    });
+
     res.json(await get('SELECT * FROM characters WHERE id = ?', [id]));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -82,7 +105,7 @@ router.post('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const row = await get('SELECT * FROM characters WHERE id = ?', [req.params.id]);
+    const row = await ownedCharacter(req.params.id, req.userId);
     if (!row) return res.status(404).json({ error: '人物不存在' });
     res.json(row);
   } catch (err) {
@@ -95,7 +118,7 @@ router.put('/:id', async (req, res) => {
     req.body || {};
 
   try {
-    const existing = await get('SELECT * FROM characters WHERE id = ?', [req.params.id]);
+    const existing = await ownedCharacter(req.params.id, req.userId);
     if (!existing) return res.status(404).json({ error: '人物不存在' });
 
     await run(
@@ -117,7 +140,16 @@ router.put('/:id', async (req, res) => {
         req.params.id,
       ]
     );
-    res.json(await get('SELECT * FROM characters WHERE id = ?', [req.params.id]));
+
+    // 档案改了，旧块作废、重新入索引
+    memory.scheduleIndex({
+      userId: req.userId,
+      workId: existing.work_id,
+      sourceType: 'character',
+      sourceId: req.params.id,
+    });
+
+    res.json(await ownedCharacter(req.params.id, req.userId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -125,8 +157,18 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await run('DELETE FROM characters WHERE id = ?', [req.params.id]);
-    if (!result.changes) return res.status(404).json({ error: '人物不存在' });
+    const existing = await ownedCharacter(req.params.id, req.userId);
+    if (!existing) return res.status(404).json({ error: '人物不存在' });
+
+    await run('DELETE FROM characters WHERE id = ?', [req.params.id]);
+
+    // 人没了，记忆里的"林昭"也得跟着消失，否则召回会捞到一个空壳人物
+    memory.scheduleRemove({
+      userId: req.userId,
+      sourceType: 'character',
+      sourceId: req.params.id,
+    });
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

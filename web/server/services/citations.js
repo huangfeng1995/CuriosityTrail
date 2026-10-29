@@ -163,12 +163,16 @@ function locateInBody(body, snippet) {
  * @param {Object} params
  * @param {string} params.materialId
  * @param {string} params.snippet
- * @returns {Promise<Object|null>} 定位结果；素材不存在返回 null
+ * @param {string} params.userId 素材归属人
+ * @returns {Promise<Object|null>} 定位结果；素材不存在或不属于该用户返回 null
  */
-async function locateCitation({ materialId, snippet }) {
-  if (!materialId) return null;
+async function locateCitation({ materialId, snippet, userId }) {
+  if (!materialId || !userId) return null;
 
-  const material = await get('SELECT * FROM materials WHERE id = ?', [materialId]);
+  const material = await get('SELECT * FROM materials WHERE id = ? AND user_id = ?', [
+    materialId,
+    userId,
+  ]);
   if (!material) return null;
 
   const located = locateInBody(material.body, snippet || '');

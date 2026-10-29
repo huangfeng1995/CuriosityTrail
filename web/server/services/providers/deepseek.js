@@ -98,6 +98,7 @@ class DeepSeekProvider extends Provider {
     return {
       content: message.content || '',
       reasoning: message.reasoning_content || '',
+      finishReason: choice.finish_reason || '',
       usage: data.usage || null,
       raw: data,
     };
@@ -129,9 +130,20 @@ class DeepSeekProvider extends Provider {
 
     let content = '';
     let reasoning = '';
+    let finishReason = '';
 
     await readSseStream(response, (event) => {
-      const delta = event.choices && event.choices[0] && event.choices[0].delta;
+      const choice = event.choices && event.choices[0];
+      if (!choice) return;
+
+      // finish_reason 决定这次输出是"正常结束"还是"被长度上限截断"。
+      // 思考模式下 reasoning 计入 max_tokens，预算被吃光时 content 会是空的——
+      // 不把 finish_reason 带回去，上层就分不清"模型没话说"和"被截断了"。
+      if (choice.finish_reason) {
+        finishReason = choice.finish_reason;
+      }
+
+      const delta = choice.delta;
       if (!delta) return;
 
       if (delta.reasoning_content) {
@@ -144,7 +156,7 @@ class DeepSeekProvider extends Provider {
       }
     });
 
-    return { content, reasoning };
+    return { content, reasoning, finishReason };
   }
 
   async checkStatus() {

@@ -24,12 +24,15 @@ const DEFINITIONS = [
 const BY_KEY = new Map(DEFINITIONS.map((r) => [r.key, r]));
 
 /**
- * 读取所有提示词覆盖。
+ * 读取某个用户的全部提示词覆盖。
+ * @param {string} userId
  * @returns {Promise<Map<string, {systemPrompt: string, temperature: number|null, model: string|null, thinking: boolean|null}>>}
  */
-async function loadOverrides() {
+async function loadOverrides(userId) {
+  if (!userId) return new Map();
   const rows = await all(
-    'SELECT id, system_prompt, temperature, model, thinking FROM prompt_overrides'
+    'SELECT id, system_prompt, temperature, model, thinking FROM prompt_overrides WHERE user_id = ?',
+    [userId]
   );
   return new Map(
     rows.map((row) => [
@@ -76,26 +79,30 @@ function withOverride(def, override) {
 }
 
 /**
- * 获取生效中的角色列表（含用户覆盖）。
+ * 获取生效中的角色列表（含当前用户的覆盖）。
+ * @param {string} userId
  * @returns {Promise<Array>}
  */
-async function listRoles() {
-  const overrides = await loadOverrides();
+async function listRoles(userId) {
+  const overrides = await loadOverrides(userId);
   return DEFINITIONS.map((def) => withOverride(def, overrides.get(def.key)));
 }
 
 /**
  * 获取单个角色的生效定义。
  * @param {string} key
+ * @param {string} userId
  */
-async function getRole(key) {
+async function getRole(key, userId) {
   const def = BY_KEY.get(key);
   if (!def) return null;
 
-  const override = await get(
-    'SELECT system_prompt, temperature, model, thinking FROM prompt_overrides WHERE id = ?',
-    [key]
-  );
+  const override = userId
+    ? await get(
+        'SELECT system_prompt, temperature, model, thinking FROM prompt_overrides WHERE id = ? AND user_id = ?',
+        [key, userId]
+      )
+    : null;
 
   return withOverride(def, override ? {
     systemPrompt: override.system_prompt,
@@ -109,22 +116,27 @@ async function getRole(key) {
  * 保存提示词覆盖。
  * @param {string} key
  * @param {{systemPrompt: string, temperature?: number, model?: string, thinking?: boolean|null}} payload
+ * @param {string} userId
  */
-async function saveOverride(key, payload) {
+async function saveOverride(key, payload, userId) {
   if (!BY_KEY.has(key)) {
     throw new Error(`未知的角色：${key}`);
   }
+  if (!userId) {
+    throw new Error('缺少用户身份');
+  }
   const now = new Date().toISOString();
   await run(
-    `INSERT INTO prompt_overrides (id, system_prompt, temperature, model, thinking, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
+    `INSERT INTO prompt_overrides (user_id, id, system_prompt, temperature, model, thinking, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, id) DO UPDATE SET
        system_prompt = excluded.system_prompt,
        temperature   = excluded.temperature,
        model         = excluded.model,
        thinking      = excluded.thinking,
        updated_at    = excluded.updated_at`,
     [
+      userId,
       key,
       payload.systemPrompt,
       payload.temperature ?? null,
@@ -138,9 +150,10 @@ async function saveOverride(key, payload) {
 /**
  * 删除提示词覆盖，恢复默认。
  * @param {string} key
+ * @param {string} userId
  */
-async function clearOverride(key) {
-  await run('DELETE FROM prompt_overrides WHERE id = ?', [key]);
+async function clearOverride(key, userId) {
+  await run('DELETE FROM prompt_overrides WHERE id = ? AND user_id = ?', [key, userId]);
 }
 
 /**
