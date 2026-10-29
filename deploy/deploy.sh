@@ -136,7 +136,7 @@ ALIYUN_SMS_SIGN_NAME=
 ALIYUN_SMS_TEMPLATE_CODE=
 
 # 临时：短信还没配好时，给指定手机号开一个固定验证码通道。
-# 两项都填才生效，只对 SMS_FIXED_PHONE 这一个号码有效。
+# 两项都填才生效；SMS_FIXED_PHONE 支持多个号码，用逗号分隔。
 # 短信配好后删掉这两行、docker compose up -d，后门就没了。
 SMS_FIXED_CODE=
 SMS_FIXED_PHONE=

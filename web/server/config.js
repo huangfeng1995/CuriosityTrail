@@ -94,11 +94,14 @@ const smsDevMode = !isProduction && Boolean(smsDevCode);
 // 用途：阿里云短信还没配好时，先让站点能登录。
 // 必须显式配置 SMS_FIXED_CODE 才生效——线上留万能码是后门，
 // 所以它跟 SMS_DEV_CODE 分开：那个自动在生产失效，这个要人主动写。
-// 只对 SMS_FIXED_PHONE 这一个手机号有效：码再固定，也不能让别人登进来烧 AI 额度。
+// 只对 SMS_FIXED_PHONE 里列出的手机号有效：码再固定，也不能让别人登进来烧 AI 额度。
+// 多个号码用逗号、空格或换行分隔。
 // 短信配好后把这两个环境变量删掉、容器重启，后门就没了。
 const smsFixedCode = (process.env.SMS_FIXED_CODE || '').trim();
-const smsFixedPhone = (process.env.SMS_FIXED_PHONE || '').trim();
-const smsFixedMode = Boolean(smsFixedCode && smsFixedPhone);
+const smsFixedPhones = (process.env.SMS_FIXED_PHONE || '')
+  .split(/[\s,]+/)
+  .filter(Boolean);
+const smsFixedMode = Boolean(smsFixedCode && smsFixedPhones.length);
 
 const smsCodeTtlMinutes = Number(process.env.SMS_CODE_TTL_MINUTES || 5);
 const smsResendSeconds = Number(process.env.SMS_RESEND_SECONDS || 60);
@@ -208,7 +211,7 @@ module.exports = {
   smsDevCode,
   smsDevMode,
   smsFixedCode,
-  smsFixedPhone,
+  smsFixedPhones,
   smsFixedMode,
   smsCodeTtlMinutes,
   smsResendSeconds,

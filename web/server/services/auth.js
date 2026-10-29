@@ -30,10 +30,19 @@ function normalizePhone(input) {
 }
 
 /**
- * 配置里写死的那个手机号（同样规范化，跟用户输入对齐）。
- * @type {string}
+ * 配置里写死的那些手机号（同样规范化，跟用户输入对齐）。
+ * @type {Set<string>}
  */
-const fixedPhone = normalizePhone(config.smsFixedPhone || '');
+const fixedPhones = new Set((config.smsFixedPhones || []).map(normalizePhone).filter(Boolean));
+
+/**
+ * 这个号码是否走固定验证码通道。
+ * @param {string} phone 已规范化的手机号
+ * @returns {boolean}
+ */
+function usesFixedCode(phone) {
+  return config.smsFixedMode && fixedPhones.has(phone);
+}
 
 /**
  * 是否为中国大陆手机号。
@@ -66,7 +75,7 @@ async function issueLoginCode(phone, ip) {
 
   // 固定验证码模式（短信还没配好时的临时后门）：只认指定手机号。
   // 码是写死的，不发短信也不入库——所以发送频率和每日上限在这里没有意义。
-  if (config.smsFixedMode && phone === fixedPhone) {
+  if (usesFixedCode(phone)) {
     console.log(`[fixed] 手机号 ${phone} 使用固定验证码（未发送短信）`);
     return { devMode: false };
   }
@@ -140,7 +149,7 @@ async function consumeLoginCode(phone, code) {
 
   // 固定验证码模式：不查库，码对就放行。
   // 爆破防护靠路由层的登录限流（每 IP 每 15 分钟 10 次）。
-  if (config.smsFixedMode && phone === fixedPhone) {
+  if (usesFixedCode(phone)) {
     return code === config.smsFixedCode;
   }
 

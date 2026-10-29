@@ -35,7 +35,7 @@ app.listen(PORT, () => {
   );
   if (config.smsFixedMode) {
     console.warn(
-      `⚠️  固定验证码模式：${config.smsFixedPhone} 的登录验证码固定为 ${config.smsFixedCode}（未发送短信）`
+      `⚠️  固定验证码模式：${config.smsFixedPhones.join('、')} 的登录验证码固定为 ${config.smsFixedCode}（未发送短信）`
     );
   } else if (config.smsDevMode) {
     console.warn(
