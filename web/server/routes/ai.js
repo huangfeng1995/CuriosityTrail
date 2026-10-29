@@ -756,11 +756,28 @@ router.post('/chat', async (req, res) => {
     // 前端会把它渲染成一个空白的圆角框，作者既看不到内容也看不到原因，
     // 只能对着一片空白反复重试。改成明确的错误事件，让作者知道发生了什么、
     // 下一步该做什么。
+    //
+    // 三类空回复要分开报，否则作者只会干等着重复重试：
+    //   1. 模型返回了有效 JSON（通常是 action=none）——模型有回应，只是没正文。
+    //      常见于指令不明确（如"根据上面建议重写"但没说改哪段）。
+    //   2. 模型只做了思考没写正文（reasoning 非空）。
+    //   3. 真空响应（既无 JSON 也无思考）。
     if (!payload.content.trim()) {
-      const reason = describeEmptyReply(
-        { finishReason: loopResult.finishReason },
-        loopResult.reasoning || ''
-      );
+      const reasoning = (loopResult.reasoning || '').trim();
+      let reason;
+      if (parsed) {
+        // 模型返回了有效 JSON（通常是 action=none），只是没正文。
+        // 报"模型没有返回内容"会误导作者——模型有回应，只是无事可做或指令不明确。
+        reason =
+          'AI 没能给出可写入的正文（可能是指令不够明确）。请说明要改写哪段、改成什么样，再试一次。';
+      } else {
+        // 无有效 JSON：交给 describeEmptyReply 区分
+        // 被长度截断 / 只思考无正文 / 真空响应三类。
+        reason = describeEmptyReply(
+          { finishReason: loopResult.finishReason },
+          reasoning
+        );
+      }
 
       // 这次调用没产生任何回复，别把孤零零的用户消息留在历史里——
       // 它会在下一轮被当成"作者问了但没人答"的上下文塞给模型。
@@ -1014,13 +1031,18 @@ router.post('/inline', async (req, res) => {
 
     const payload = normalizeAction(parsed);
 
-    // 同理：正文为空就别把它当成一次成功的改写交回去
+    // 同理：正文为空就别把它当成一次成功的改写交回去。
+    // parsed 存在说明模型返回了有效 JSON（通常是 action=none），
+    // 报"模型没有返回内容"会误导作者——模型有回应，只是没正文。
     if (!payload.content.trim()) {
       if (payload.reason.trim()) {
         payload.action = 'comment';
         payload.content = payload.reason.trim();
       } else {
-        return res.status(502).json({ error: describeEmptyReply(result, result.reasoning) });
+        return res.status(502).json({
+          error:
+            'AI 没能给出可写入的正文（可能是指令不够明确）。请说明要改写哪段、改成什么样，再试一次。',
+        });
       }
     }
 
