@@ -27,6 +27,7 @@ const indexer = require('../services/memory/indexer');
 const memoryConv = require('../services/memory/conversation');
 const memorySources = require('../services/memory/sources');
 const { parseModelJson } = require('../services/agent/parse');
+const { runAgentLoop } = require('../services/agent/loop');
 
 const router = express.Router();
 
@@ -72,7 +73,7 @@ function normalizeAction(payload) {
     return { action: 'none', content: '', reason: '', citations: [] };
   }
 
-  const validActions = ['replace', 'append', 'insert', 'comment', 'none'];
+  const validActions = ['replace', 'append', 'insert', 'comment', 'none', 'call_tool'];
   let action = validActions.includes(payload.action) ? payload.action : 'none';
 
   const content = toText(payload.content);
@@ -99,7 +100,18 @@ function normalizeAction(payload) {
     action = 'none';
   }
 
-  return { action, target, content, reason, citations };
+  // 工具调用摘要。技能执行结果由 loop.js 收集，通过 payload.skills 传进来。
+  // 这一列必须在白名单里，否则会被静默丢弃——不报错，只是数据不见了。
+  const skills = Array.isArray(payload.skills)
+    ? payload.skills.map((s) => ({
+        tool: String(s.tool || ''),
+        label: String(s.label || ''),
+        summary: String(s.summary || ''),
+        degraded: Boolean(s.degraded),
+      }))
+    : [];
+
+  return { action, target, content, reason, citations, skills };
 }
 
 /**
@@ -665,31 +677,65 @@ router.post('/chat', async (req, res) => {
 
     // 流式输出
     let fullText = '';
-    let reasoning = '';
 
-    const result = await provider.chatStream({
+    // 进入循环之前先告诉作者"正在判断"。
+    // 第一轮模型调用的 token 全被缓冲不下发（见 loop.js），
+    // 没有这个信号，作者从发问到看到任何反馈之间只有一个不动的空占位。
+    send({ type: 'agent_thinking', label: '正在判断需要查什么' });
+
+    const toolCalls = [];
+
+    const loopResult = await runAgentLoop({
+      provider,
       messages: chatMessages,
-      temperature: role?.temperature,
-      // 角色可以单独指定模型与思考开关；没指定就跟随全局配置。
-      // 角色模型只在 DeepSeek 下生效——别的 provider 用的是自己的模型名，
-      // 硬套 DeepSeek 的模型名会直接报"模型不存在"。
-      model: role?.model && name === 'deepseek' ? role.model : undefined,
-      thinking: role?.thinking === null || role?.thinking === undefined
-        ? undefined
-        : (role.thinking ? 'enabled' : 'disabled'),
-      jsonOutput: true,
+      options: {
+        temperature: role?.temperature,
+        // 角色模型只在 DeepSeek 下生效——别的 provider 用的是自己的模型名，
+        // 硬套 DeepSeek 的模型名会直接报"模型不存在"。
+        model: role?.model && name === 'deepseek' ? role.model : undefined,
+        thinking: role?.thinking === null || role?.thinking === undefined
+          ? undefined
+          : (role.thinking ? 'enabled' : 'disabled'),
+      },
+      ctx: {
+        userId: req.userId,
+        workId: conversation.work_id,
+        providerName: name,
+        degraded,
+        role: roleKey,
+      },
       onToken: (token) => {
         fullText += token;
         send({ type: 'token', content: token });
       },
-      onThinking: (chunk) => {
-        reasoning += chunk;
+      onToolStart: ({ tool, label }) => {
+        send({ type: 'tool_start', tool, label });
+      },
+      onToolDone: ({ tool, result }) => {
+        toolCalls.push({
+          tool,
+          label: result.label || tool,
+          summary: result.summary || '',
+          degraded: Boolean(result.degraded),
+        });
+        send({
+          type: 'tool_done',
+          tool,
+          label: result.label || tool,
+          summary: result.summary || '',
+          detail: result.detail || [],
+          degraded: Boolean(result.degraded),
+        });
+      },
+      onToolError: ({ tool, error }) => {
+        toolCalls.push({ tool, label: tool, summary: '', degraded: false });
+        send({ type: 'tool_done', tool, label: tool, summary: '', detail: [], degraded: false, error });
       },
     });
 
-    const rawText = result.content || fullText;
-    const parsed = parseModelJson(rawText);
-    const payload = normalizeAction(parsed);
+    const rawText = loopResult.raw || fullText;
+    const parsed = loopResult.parsed;
+    const payload = normalizeAction({ ...(parsed || {}), skills: toolCalls });
 
     // 模型没给 JSON 时，把原文当对话回复
     if (!parsed && rawText.trim()) {
@@ -711,7 +757,10 @@ router.post('/chat', async (req, res) => {
     // 只能对着一片空白反复重试。改成明确的错误事件，让作者知道发生了什么、
     // 下一步该做什么。
     if (!payload.content.trim()) {
-      const reason = describeEmptyReply(result, reasoning);
+      const reason = describeEmptyReply(
+        { finishReason: loopResult.finishReason },
+        loopResult.reasoning || ''
+      );
 
       // 这次调用没产生任何回复，别把孤零零的用户消息留在历史里——
       // 它会在下一轮被当成"作者问了但没人答"的上下文塞给模型。
@@ -779,6 +828,7 @@ router.post('/chat', async (req, res) => {
       content: payload.content,
       reason: payload.reason,
       citations: payload.citations,
+      skills: payload.skills,
     });
     send({
       type: 'done',
@@ -791,6 +841,12 @@ router.post('/chat', async (req, res) => {
     });
   } catch (err) {
     console.error('AI chat 失败：', err.message);
+
+    // 模型反复调用技能却拿不到结果：这句话要说明白，
+    // 作者才知道是自己问得太绕，而不是平台坏了。
+    if (err.code === 'MAX_STEPS') {
+      err.message = '这次没能查完：模型反复调用技能但没有拿到结果。请换个说法再问一次。';
+    }
 
     // 失败的这轮同样不能留下孤立消息。
     // 注意只删用户消息：助手消息此时还没写库，删了也不会丢东西。
