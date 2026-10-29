@@ -26,11 +26,20 @@
 
 ## T4 部署（需用户执行或提供服务器访问）
 
-- [ ] 在服务器 `/opt/curiosity-trail` 执行 `bash deploy/deploy.sh`（阻塞：本机无服务器地址与 SSH 凭据）
-- [ ] 确认 `http://127.0.0.1:8080/api/health` 返回 200
-- [ ] 确认 `deploy/.env.production` 含 `MEMORY_ENABLED=false`
+- [x] 在服务器 `/opt/curiosity-trail` 执行 `bash deploy/deploy.sh`（走阿里云 Workbench CLI，无需 SSH）
+- [x] 确认 `http://127.0.0.1:8080/api/health` 返回 200
+- [x] 确认 `deploy/.env.production` 含 `MEMORY_ENABLED=false`
+- [x] 验收：`/api/memory/status` 返回未启用，写作与 AI 对话正常
 
-验收：站点可访问，`/api/memory/status` 明确返回未启用，写作与 AI 对话正常。
+## T4.1 登录通道打通（短信未配置时的临时方案）
+
+- [x] `web/server/config.js` 新增 `SMS_FIXED_CODE` + `SMS_FIXED_PHONE`，两项都填才生效
+- [x] `web/server/services/auth.js`：`issueLoginCode` 对指定手机号直接放行、不发短信；`consumeLoginCode` 校验固定码
+- [x] `web/server/index.js` 启动日志提示固定验证码模式
+- [x] `deploy/deploy.sh` 环境变量模板 + `git reset` 后重新 exec（修脚本被自己覆盖的坑）
+- [x] `scripts/migrate-owner.js` 把老数据归属到 18689979305
+
+验收：手机号 18689979305 + 验证码 960315 能登录，看到迁移后的作品。
 
 ## T5（决策 B，另行排期，不在本次提交内）
 

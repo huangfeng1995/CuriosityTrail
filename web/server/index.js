@@ -33,7 +33,11 @@ app.listen(PORT, () => {
   console.log(
     `   DEEPSEEK_API_KEY: ${config.deepseekApiKey ? '已加载' : '未配置（将回退到本地 Ollama）'}`
   );
-  if (config.smsDevMode) {
+  if (config.smsFixedMode) {
+    console.warn(
+      `⚠️  固定验证码模式：${config.smsFixedPhone} 的登录验证码固定为 ${config.smsFixedCode}（未发送短信）`
+    );
+  } else if (config.smsDevMode) {
     console.warn(
       `⚠️  短信开发模式：验证码固定为 ${config.smsDevCode}（仅非 production 生效）`
     );

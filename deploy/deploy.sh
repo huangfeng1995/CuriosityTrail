@@ -31,6 +31,11 @@ set -euo pipefail
 REPO_URL="https://github.com/huangfeng1995/CuriosityTrail.git"
 INSTALL_DIR="/opt/curiosity-trail"
 
+# 本脚本的真实路径。git reset --hard 可能把正在执行的脚本自己覆盖掉，
+# bash 会按文件偏移继续往下读，结果跑到错位的分支上。
+# 所以更新完代码后用这个路径重新 exec 一遍自己。
+SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || true)"
+
 # 域名与邮箱：位置参数优先于环境变量
 # （sudo 默认 env_reset，环境变量方式不可靠，位置参数最稳）
 DOMAIN="${1:-${DOMAIN:-}}"
@@ -85,6 +90,14 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
 	cd "$INSTALL_DIR"
 	git fetch --all --tags
 	git reset --hard origin/main
+	# 脚本自己可能被这次 reset 换掉了（内容变了的话，bash 继续按旧偏移读会跑错）。
+	# 重新 exec 一遍新的自己，位置参数原样传下去。
+	# CT_DEPLOY_REEXEC 是守卫：重新执行后不会再触发，否则会无限循环。
+	if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" && "${CT_DEPLOY_REEXEC:-0}" != "1" ]]; then
+		log "代码已更新，重新执行最新脚本"
+		export CT_DEPLOY_REEXEC=1
+		exec bash "$SCRIPT_PATH" "$@"
+	fi
 else
 	log "克隆仓库到 $INSTALL_DIR"
 	mkdir -p "$INSTALL_DIR"
@@ -121,6 +134,12 @@ ALIYUN_SMS_ACCESS_KEY_ID=
 ALIYUN_SMS_ACCESS_KEY_SECRET=
 ALIYUN_SMS_SIGN_NAME=
 ALIYUN_SMS_TEMPLATE_CODE=
+
+# 临时：短信还没配好时，给指定手机号开一个固定验证码通道。
+# 两项都填才生效，只对 SMS_FIXED_PHONE 这一个号码有效。
+# 短信配好后删掉这两行、docker compose up -d，后门就没了。
+SMS_FIXED_CODE=
+SMS_FIXED_PHONE=
 
 # DeepSeek API Key（https://platform.deepseek.com 创建）。
 # 没有它 AI 对话不可用，会回退到本地 Ollama。
