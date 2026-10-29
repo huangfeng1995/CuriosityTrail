@@ -20,14 +20,17 @@ import { useIsMobile } from '../../hooks/useMediaQuery';
 /**
  * textarea 随内容自动增高。
  *
- * 缩到 0 再量 scrollHeight：高度留在原处时，
+ * 缩小高度必须先把高度归零再量 scrollHeight：高度留在原处时，
  * scrollHeight 至少等于当前高度，量不出"变小"的那部分。
  *
+ * 但**光标在框里时绝不能归零**。元素瞬间变成 0 高，光标被裁掉，
+ * 浏览器为了让光标可见会把可滚动祖先滚到底部——用户看到的就是
+ * 「一打字就跳到最下面一行」。所以聚焦时只增不减：用 scrollHeight
+ * 判断内容有没有超出当前高度，超出就长；收缩留到失焦后再做。
+ *
  * 另外，换行数会随宽度和字体变化（拉分隔条、字体晚到），
- * 只在 value 变化时量一次的话，框会一直停留在旧高度：
- * 内容比框高 → textarea 内部滚动 → 一输入光标就把可视区
- * 钉在最后一行，看着就是"正在写的那一行掉到了最底下"。
- * 所以宽度一变就重量一次。
+ * 只在 value 变化时量一次的话，框会一直停留在旧高度。
+ * 所以宽度一变也重量一次。
  */
 function useAutoHeight(value) {
   const ref = useRef(null);
@@ -35,6 +38,14 @@ function useAutoHeight(value) {
   const resize = useCallback(() => {
     const el = ref.current;
     if (!el) return;
+
+    if (el === document.activeElement) {
+      // 只增不减：不归零，就不会惊动浏览器的"滚动到光标"。
+      const needed = el.scrollHeight;
+      if (needed > el.clientHeight) el.style.height = `${needed}px`;
+      return;
+    }
+
     el.style.height = '0px';
     el.style.height = `${el.scrollHeight}px`;
   }, []);
@@ -60,12 +71,16 @@ function useAutoHeight(value) {
     ro.observe(el);
     window.addEventListener('resize', onWidthChange);
 
+    // 失焦时做一次完整测量，把聚焦期间"只增不减"留下的多余高度收掉。
+    el.addEventListener('blur', resize);
+
     // 字体加载完成后换行数会变，重算一次
     document.fonts?.ready?.then(resize).catch(() => {});
 
     return () => {
       ro.disconnect();
       window.removeEventListener('resize', onWidthChange);
+      el.removeEventListener('blur', resize);
     };
   }, [resize]);
 
