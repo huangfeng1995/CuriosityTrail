@@ -9,6 +9,9 @@ const { setupTempEnv } = require('./helpers');
 const env = setupTempEnv();
 
 const { runAgentLoop, detectAction } = require('../services/agent/loop');
+const { ready, close } = require('../database');
+const skills = require('../services/skills');
+const { assembleContext } = require('../services/context');
 
 /**
  * 假 provider：按次序返回预设的模型输出。
@@ -102,6 +105,56 @@ test('技能不存在时不中断，错误被喂回模型', async () => {
   assert.match(fed.content, /失败|没有/, '要说明技能没跑起来');
 });
 
-test.after(() => {
+test('技能清单注入到 system prompt 末尾，行内操作不注入', async () => {
+  const unregister = skills.register({
+    name: 'audit_foreshadowing',
+    label: '伏笔盘点',
+    description: '检查全书里已经埋下但没有回收的伏笔。',
+    parameters: {
+      type: 'object',
+      properties: { target: { type: 'string', description: '要查的伏笔关键词' } },
+      required: [],
+    },
+    run: async () => ({}),
+  });
+
+  try {
+    const chat = await assembleContext({ userId: 'u1', roleKey: 'writer', scope: 'chapter' });
+    const sys = chat.messages[0].content;
+
+    assert.ok(sys.includes('## 可用技能'), '侧边栏对话要注入技能清单');
+    assert.ok(sys.includes('audit_foreshadowing'), '要列出技能名');
+    assert.ok(sys.includes('"action":"call_tool"'), '要给出调用示例');
+    // 角色提示词已经规定了 action 的取值范围，技能段必须在其之后
+    // 才不会被前面的白名单盖掉。
+    assert.ok(
+      sys.indexOf('## 可用技能') > sys.indexOf('## 输出格式'),
+      '技能段必须在角色提示词之后'
+    );
+
+    const inline = await assembleContext({ userId: 'u1', roleKey: 'writer', scope: 'inline' });
+    assert.ok(
+      !inline.messages[0].content.includes('## 可用技能'),
+      '行内操作不做跨章查询，不该塞技能清单'
+    );
+  } finally {
+    unregister();
+  }
+});
+
+// 库初始化要放在 before 钩子里，不能塞进某个测试体。
+//
+// database.js 在模块加载时就异步开始建表，它的 console.log 会打进测试的
+// TAP 输出流。如果初始化日志落在测试用例之间，Node 的测试运行器会把这
+// 段输出当成损坏的帧，整个文件报 "Unable to deserialize cloned data"。
+// before 钩子在任何用例之前跑完，日志就落在文件头，不会插到用例中间。
+test.before(async () => {
+  await ready;
+});
+
+test.after(async () => {
+  // 先关库再删目录：连接开着的时候删库文件，
+  // sqlite 的收尾读写会打到一个已经没了的路径上。
+  await close().catch(() => {});
   env.cleanup();
 });

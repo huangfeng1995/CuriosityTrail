@@ -21,6 +21,7 @@
 
 const { all, get } = require('../database');
 const { getRole } = require('./roles');
+const skills = require('./skills');
 
 /** 大纲最多注入的字符数 */
 const OUTLINE_LIMIT = 4000;
@@ -439,6 +440,40 @@ async function assembleContext(params = {}) {
   // ---- 附加指令 ----
   if (extraInstruction) {
     systemParts.push(`## 本次任务要求\n${extraInstruction}`);
+  }
+
+  // ---- 技能清单 ----
+  // 放在 system prompt 末尾：角色提示词已经规定了 action 的取值范围，
+  // 追加段必须在其之后才能被模型看见。
+  //
+  // 只对侧边栏对话注入：行内操作（inline）不做跨章查询，
+  // 给它塞技能清单只会让模型多想。
+  if (scope !== 'inline') {
+    const list = skills.listSkills();
+    if (list.length) {
+      const lines = ['## 可用技能'];
+      lines.push('当你需要当前上下文之外的信息时，可以调用下面的技能。');
+      lines.push('');
+      lines.push('调用方式和上面不同：action 填 "call_tool"——这是上面 action 取值之外的额外取值。');
+      lines.push('tool 填技能名，params 填技能参数，target / content / reason 这几个字段不用填。');
+      lines.push('调用之后你会收到工具结果，再据此给出最终回答。');
+      for (const s of list) {
+        lines.push('');
+        lines.push(`### ${s.label}（${s.name}）`);
+        lines.push(`说明：${s.description}`);
+        lines.push(`参数：${JSON.stringify(s.parameters)}`);
+      }
+      lines.push('');
+      lines.push('示例：');
+      const first = list[0];
+      const firstKeys = Object.keys((first.parameters && first.parameters.properties) || {});
+      lines.push(JSON.stringify({
+        action: 'call_tool',
+        tool: first.name,
+        params: firstKeys.length ? { [firstKeys[0]]: '示例' } : {},
+      }));
+      systemParts.push(lines.join('\n'));
+    }
   }
 
   const messages = [{ role: 'system', content: systemParts.join('\n\n---\n\n') }];
