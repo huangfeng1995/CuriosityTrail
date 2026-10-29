@@ -4,6 +4,7 @@ import { Bookmark, BookmarkCheck } from 'lucide-react';
 import ActionCard from './ActionCard';
 import CitationBadge from './CitationBadge';
 import MemoryPanel from './MemoryPanel';
+import ToolPanel from './ToolPanel';
 import EmptyState from '../EmptyState';
 
 /**
@@ -85,6 +86,9 @@ export default function MessageList({
           ) : (
             <div className="ct-msg-body">
               {msg.roleLabel && <div className="ct-msg-role">{msg.roleLabel}</div>}
+
+              {/* 过程条在最上方：作者先看到"这次现查了什么"，再看答案 */}
+              {msg.toolTrace?.length > 0 && <ToolPanel trace={msg.toolTrace} />}
 
               {/* 记忆面板在正文上方：作者先看到"AI 参考了什么"，
                   再看答案——顺序反了就成了事后补注。 */}

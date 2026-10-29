@@ -40,6 +40,9 @@ export default function AssistantSidebar() {
   const listRef = useRef(null);
   // 流式累加器：token 回调闭包里的 streaming 永远是旧值，必须用 ref 累
   const streamBufRef = useRef('');
+  // 工具过程累积器。事件回调闭包里的 msg 永远是旧快照，
+  // 直接读 msg.toolTrace 会丢掉前面几次调用——必须用 ref 累。
+  const toolTraceRef = useRef([]);
   // 长期记忆开关。作者说了算，默认开着。
   const [useMemory, setUseMemory] = useMemoryPref();
   const { message: toast } = AntApp.useApp();
@@ -115,6 +118,8 @@ export default function AssistantSidebar() {
         memoryRefs: [],
         memoryDegraded: false,
         memoryReason: '',
+        // 工具过程：AI 自己翻出来的东西，作者要能核对
+        toolTrace: [],
         // 消息字段叫 excludedRefIds（已剔除列表），入参叫 excludeRefIds，
         // 这里必须显式赋值：写成简写会引用一个不存在的变量，点发送直接 ReferenceError。
         excludedRefIds: excludeRefIds,
@@ -132,6 +137,7 @@ export default function AssistantSidebar() {
       const controller = new AbortController();
       abortRef.current = controller;
       streamBufRef.current = '';
+      toolTraceRef.current = [];
       // 本次请求有没有拿到过实质回复。
       // 流正常结束却没收到 action 事件时，占位消息会一直是空的——
       // 必须兜底给作者一句看得见的话，不能留一个空气泡。
@@ -174,6 +180,52 @@ export default function AssistantSidebar() {
                   memoryReason: event.reason || '',
                 },
               });
+            } else if (event.type === 'agent_thinking') {
+              // 进入多步循环的信号。作者此刻还看不到任何 token，
+              // 没有这个提示就只有一个不动的空占位。
+              dispatch({
+                type: 'message/update',
+                id: assistantId,
+                patch: { thinking: event.label || '正在判断需要查什么' },
+              });
+            } else if (event.type === 'tool_start') {
+              toolTraceRef.current = [
+                ...toolTraceRef.current,
+                { tool: event.tool, label: event.label, status: 'running' },
+              ];
+              dispatch({
+                type: 'message/update',
+                id: assistantId,
+                patch: { thinking: '', toolTrace: toolTraceRef.current },
+              });
+            } else if (event.type === 'tool_done') {
+              // tool_done 是把 tool_start 那一条**补全**，不是新增一条。
+              // 两次都往后追加的话，过程条里会出现两行「伏笔盘点」——
+              // 一行永远停在"正在跑"，作者会以为卡住了。
+              const done = {
+                tool: event.tool,
+                label: event.label,
+                status: 'done',
+                summary: event.summary || '',
+                detail: event.detail || [],
+                degraded: !!event.degraded,
+                error: event.error || '',
+              };
+              const idx = toolTraceRef.current.findIndex(
+                (t) => t.tool === event.tool && t.status === 'running'
+              );
+              if (idx >= 0) {
+                toolTraceRef.current = toolTraceRef.current.map((t, i) =>
+                  i === idx ? done : t
+                );
+              } else {
+                toolTraceRef.current = [...toolTraceRef.current, done];
+              }
+              dispatch({
+                type: 'message/update',
+                id: assistantId,
+                patch: { toolTrace: toolTraceRef.current },
+              });
             } else if (event.type === 'action') {
               gotReply = true;
               dispatch({
@@ -191,6 +243,11 @@ export default function AssistantSidebar() {
                   target: event.target,
                   reason: event.reason,
                   citations: event.citations,
+                  // 工具过程的最终态：以 action 事件里的 skills 为准，
+                  // 它是落库的同一份数据，重载消息时也能恢复。
+                  toolTrace: event.skills && event.skills.length
+                    ? event.skills.map((s) => ({ ...s, status: 'done' }))
+                    : toolTraceRef.current,
                 },
               });
             } else if (event.type === 'done') {
