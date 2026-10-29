@@ -26,40 +26,9 @@ const memory = require('../services/memory/retriever');
 const indexer = require('../services/memory/indexer');
 const memoryConv = require('../services/memory/conversation');
 const memorySources = require('../services/memory/sources');
+const { parseModelJson } = require('../services/agent/parse');
 
 const router = express.Router();
-
-/**
- * 解析模型的 JSON 输出。
- * 模型可能返回带 markdown 代码块的 JSON，需要剥掉。
- */
-function parseModelJson(text) {
-  if (!text) return null;
-
-  let candidate = text.trim();
-
-  // 剥掉 ```json ... ``` 包裹
-  const fence = candidate.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) {
-    candidate = fence[1].trim();
-  }
-
-  try {
-    return JSON.parse(candidate);
-  } catch (e) {
-    // 退而求其次：截取第一个 { 到最后一个 }
-    const start = candidate.indexOf('{');
-    const end = candidate.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(candidate.slice(start, end + 1));
-      } catch (e2) {
-        return null;
-      }
-    }
-    return null;
-  }
-}
 
 /**
  * 把模型给的字段转成可显示的文本。
