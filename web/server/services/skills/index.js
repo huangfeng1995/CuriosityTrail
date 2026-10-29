@@ -80,3 +80,6 @@ async function runSkill(name, params, ctx) {
 }
 
 module.exports = { register, listSkills, getSkill, runSkill, REGISTRY };
+
+const auditForeshadowing = require('./auditForeshadowing');
+register(auditForeshadowing);
