@@ -4,29 +4,29 @@
 
 ## T1 生产环境变量默认关闭记忆层
 
-- [ ] `deploy/deploy.sh` 生成 `.env.production` 的 heredoc 末尾追加 `MEMORY_ENABLED=false` 及注释
-- [ ] `deploy/deploy.sh` 在 `if/else` 之后追加幂等补齐：缺 `MEMORY_ENABLED=` 时追加一行
-- [ ] 末尾「接下来」提示追加一条：记忆层当前关闭及开启条件
+- [x] `deploy/deploy.sh` 生成 `.env.production` 的 heredoc 末尾追加 `MEMORY_ENABLED=false` 及注释
+- [x] `deploy/deploy.sh` 在 `if/else` 之后追加幂等补齐：缺 `MEMORY_ENABLED=` 时追加一行
+- [x] 末尾「接下来」提示追加一条：记忆层当前关闭及开启条件
 
 验收：`bash -n deploy/deploy.sh` 通过；模拟全新/已存在两种环境文件，结果都含唯一一行 `MEMORY_ENABLED=false`。
 
 ## T2 部署文档说明原因与开启路径
 
-- [ ] `deploy/README.md` 新增「长期记忆（viking）线上为什么是关的」一节（现象、根因、现状、开启条件）
+- [x] `deploy/README.md` 新增「长期记忆（viking）线上为什么是关的」一节（现象、根因、现状、开启条件）
 
 验收：文档能独立解释「为什么关」「关有什么影响」「怎么打开」。
 
 ## T3 提交并推送
 
-- [ ] `git diff --check`
-- [ ] 提交信息说明：线上默认关闭记忆层 + 原因
-- [ ] 推送到 `origin/main`
+- [x] `git diff --check`
+- [x] 提交信息说明：线上默认关闭记忆层 + 原因（ebdd35c）
+- [x] 推送到 `origin/main`
 
 验收：`git status` 除 `.claude/worktrees/web-version`、`.trae-html-share-packages/` 外干净；推送成功。
 
 ## T4 部署（需用户执行或提供服务器访问）
 
-- [ ] 在服务器 `/opt/curiosity-trail` 执行 `bash deploy/deploy.sh`
+- [ ] 在服务器 `/opt/curiosity-trail` 执行 `bash deploy/deploy.sh`（阻塞：本机无服务器地址与 SSH 凭据）
 - [ ] 确认 `http://127.0.0.1:8080/api/health` 返回 200
 - [ ] 确认 `deploy/.env.production` 含 `MEMORY_ENABLED=false`
 
