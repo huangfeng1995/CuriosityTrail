@@ -5,6 +5,7 @@ import { Square, Brain, EyeOff } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
+import { planApply } from './applyPlan';
 import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
@@ -30,6 +31,7 @@ export default function AssistantSidebar() {
     dispatch,
     updateBlock,
     insertBlock,
+    removeBlock,
   } = useWorkspace();
 
   const [roles, setRoles] = useState([]);
@@ -307,49 +309,39 @@ export default function AssistantSidebar() {
 
   /**
    * 把 AI 的结构化输出写进正文。
-   * replace 覆盖目标块，append 追加到目标块尾，insert 在目标块后插新块。
+   *
+   * 落笔规则放在 applyPlan.js 里：target 可能是块 ID，也可能是原文片段，
+   * 还得处理"整章还没有正文"这种情况。这里只负责执行算好的方案。
    */
   const applyAction = useCallback(
     (msg) => {
-      const targetId = msg.target;
-      const index = blocks.findIndex((b) => b.id === targetId);
+      const plan = planApply(blocks, msg.action, msg.target, msg.content);
 
-      if (msg.action === 'replace') {
-        if (index < 0) {
-          toast.warning('找不到要替换的段落，AI 给出的 target 与当前正文不匹配');
-          return;
-        }
+      if (plan.kind === 'error') {
+        toast.warning(plan.message);
+        return;
+      }
+
+      if (plan.kind === 'replace' || plan.kind === 'append') {
+        const before = blocks.find((b) => b.id === plan.blockId);
         dispatch({
           type: 'message/update',
           id: msg.id,
           patch: {
             applied: true,
-            snapshot: { id: blocks[index].id, content: blocks[index].content },
+            snapshot: { id: plan.blockId, content: before ? before.content : '' },
           },
         });
-        updateBlock(blocks[index].id, { content: msg.content });
-      } else if (msg.action === 'append') {
-        // 没有明确目标就追加到最后一个有内容的块
-        const target =
-          index >= 0 ? blocks[index] : [...blocks].reverse().find((b) => b.content);
-
-        if (!target) {
-          toast.warning('当前章节还没有正文');
-          return;
-        }
+        updateBlock(plan.blockId, { content: plan.text });
+      } else if (plan.kind === 'insert') {
+        const block = createBlock('paragraph', { content: plan.text });
+        insertBlock(plan.index, block);
+        // 记下新块的 id：撤销时要把整块删掉，而不是只清空内容
         dispatch({
           type: 'message/update',
           id: msg.id,
-          patch: {
-            applied: true,
-            snapshot: { id: target.id, content: target.content },
-          },
+          patch: { applied: true, snapshot: { id: block.id, inserted: true } },
         });
-        updateBlock(target.id, { content: target.content + msg.content });
-      } else if (msg.action === 'insert') {
-        const at = index >= 0 ? index + 1 : blocks.length;
-        insertBlock(at, createBlock('paragraph', { content: msg.content }));
-        dispatch({ type: 'message/update', id: msg.id, patch: { applied: true } });
       }
 
       toast.success('已写入正文');
@@ -359,16 +351,21 @@ export default function AssistantSidebar() {
 
   /**
    * 撤销一次应用：把被改的块退回原样。
+   * 插入的新块要整个删掉——只清空内容的话，正文里会多出一个空段。
    */
   const revertAction = useCallback(
     (msg) => {
-      if (msg.snapshot) {
+      if (!msg.snapshot) return;
+
+      if (msg.snapshot.inserted) {
+        removeBlock(msg.snapshot.id);
+      } else {
         updateBlock(msg.snapshot.id, { content: msg.snapshot.content });
-        dispatch({ type: 'message/update', id: msg.id, patch: { applied: false } });
-        toast.info('已撤销');
       }
+      dispatch({ type: 'message/update', id: msg.id, patch: { applied: false } });
+      toast.info('已撤销');
     },
-    [updateBlock, dispatch, toast]
+    [updateBlock, removeBlock, dispatch, toast]
   );
 
   /**

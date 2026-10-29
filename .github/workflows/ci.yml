@@ -36,6 +36,9 @@ jobs:
       - name: 安装依赖
         working-directory: web/client
         run: npm ci
+      - name: 跑单测
+        working-directory: web/client
+        run: npm test
       - name: 构建
         working-directory: web/client
         run: npm run build

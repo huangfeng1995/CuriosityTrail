@@ -372,6 +372,18 @@ async function assembleContext(params = {}) {
       systemParts.push(
         `## 当前章节正文\n${truncate(body, CONTENT_LIMIT)}`
       );
+    } else {
+      // 本章还没有正文。
+      //
+      // 不说清楚的话，模型只能靠猜：它会给出 action="append" 加一个
+      // 指向不存在段落的 target，前端回写时找不到落点，作者看到的是
+      // "当前章节还没有正文"，AI 写的内容就这么丢了。
+      // 这里直接告诉它该怎么写：正文会作为本章第一段插入进去。
+      systemParts.push(
+        '## 当前章节正文\n（本章还没有正文。）\n\n' +
+          '你要写的正文会作为本章的第一段插入进去，所以：' +
+          'action 填 "insert"（或 "append"），target 留空字符串，不要编造块ID。'
+      );
     }
   }
 
