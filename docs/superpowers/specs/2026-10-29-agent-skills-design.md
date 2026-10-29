@@ -89,7 +89,7 @@
 | 技能触发 | **不需作者确认**。技能全部只读，无副作用。作者的控制感靠可展开的过程条满足，不靠弹窗打断心流。 |
 | 伏笔盘点范围 | 默认只处理作者点名的那张卡（`params.target` 有值）。追问「还有哪些没收」才触发全书盘点。 |
 | 过程可见性 | 折叠式过程条，位置与现有记忆面板一致。 |
-| 工具调用落库 | 中间过程不落库。只有最终那条 assistant 消息进 `messages` 表；技能调用摘要写进该消息的 `payload.skills` 字段。 |
+| 工具调用落库 | 中间过程不落库。只有最终那条 assistant 消息进 `messages` 表；技能调用摘要写进该消息的 `payload.skills` 字段。**落库前必须扩展现有的字段归一化白名单**——`normalizeAction` 目前只输出 `action` / `target` / `content` / `reason` / `citations` 五个字段，未列入的字段会被静默丢弃（不报错）。 |
 | `reasoning_content` 回传 | 一律不回传。DeepSeek 文档明确「不含 tool call 的多轮对话，reasoning_content 可不回传」，换取三个 provider 行为一致。代价是思考连续性略降。 |
 
 ## 3. 架构
@@ -145,13 +145,16 @@ services/skills/  ← 技能注册表 + 技能实现
 
 | 模块 | 职责 | 依赖 | 不碰 |
 | --- | --- | --- | --- |
-| `services/agent/loop.js` | 驱动多步循环、识别 `call_tool`、喂回结果 | provider、skills 注册表、回调 | 数据库、HTTP、Express |
+| `services/agent/loop.js` | 驱动多步循环、识别 `call_tool`、喂回结果 | provider、skills 注册表、`agent/parse.js`、回调 | 数据库、HTTP、Express |
+| `services/agent/parse.js` | 把模型原文解析成结构化对象（含 markdown 围栏剥离、截取兜底） | 无 | 其它一切 |
 | `services/skills/index.js` | 技能注册表：列技能、按名取、执行 | 具体技能模块 | provider、HTTP |
 | `services/skills/auditForeshadowing.js` | 伏笔盘点 | database、provider（内部判定用）、plotCards | Express |
 | `services/context.js` | 追加「可用技能」到 system prompt | skills 注册表 | — |
-| `routes/ai.js` | 编排：装配上下文 → 调 loop → 落库 → 下发 SSE | context、agent/loop、database | — |
+| `routes/ai.js` | 编排：装配上下文 → 调 loop → 归一化 → 落库 → 下发 SSE | context、agent/loop、database | — |
 
-每个模块都能独立测试：`loop.js` 不碰 IO，可以用一个假 provider 喂它预设响应序列；`auditForeshadowing.js` 可以用临时库测。
+**`services/agent/parse.js` 是必需的搬迁，不是可选优化。** 现有的 `parseModelJson`（`routes/ai.js` 第 36–62 行）是路由文件内的私有函数，文件末尾只导出 router，循环层无法引用。它必须被提取成独立模块，由 `loop.js` 与 `routes/ai.js` 共用，否则要么复制出两份实现，要么让循环层反向依赖 HTTP 层。
+
+每个模块都能独立测试：`loop.js` 不碰 IO，可以用一个假 provider 喂它预设响应序列；`auditForeshadowing.js` 可以用临时库测；`parse.js` 是纯函数，直接喂字符串。
 
 ## 4. 技能体系
 
@@ -215,20 +218,42 @@ tool 填技能名，params 填技能参数。
 **规则层（本地、免费、立刻出结果）**
 
 1. 取 `plot_cards` 中 `kind = 'foreshadow'` 的卡片，连同其 `chapter_id` 指向的章节。
-2. 若 `params.target` 非空，先按标题匹配筛出目标卡。
-3. 取全书章节正文，在内存里做子串匹配，定位每张卡的候选章节。
+2. 若 `params.target` 非空，先把目标卡筛出来（标题或备注包含 `target` 即算命中）。
+3. 取全书章节正文，按**多关键词**召回候选章节，而不是只做标题子串匹配：
+   - 关键词来源 = 卡片 `title` 与 `content` 两部分分别抽取（标题整串 + 备注中出现的名词性短语）。
+   - 每个关键词独立命中，命中结果做并集，并按「命中关键词数量」降序排序。
+   - 同时记录**首次出场章**与**后续再次出场章**——伏笔的价值在于"埋下的地方"与"回收的地方"这一对，只看有没有出现是不够的。
 
-   chapters 表**没有** FTS 索引（只有 materials 表有，见 [database.js](../../../web/server/database.js) 第 202–215 行），所以这里走内存匹配：一部长篇几十章、几十万字，全量读入内存做 `String.includes` 完全够用。
+   chapters 表**没有** FTS 索引（只有 materials 表有，见 [database.js](../../../web/server/database.js) 第 202–215 行），所以这里走内存匹配：一部长篇几十章、几十万字，分批读入内存做 `String.includes` 完全够用。
 
-4. 若一张卡的候选章节为空，判定为「未找到任何回收迹象」，直接进结论，不再花钱问模型。
+   **为什么不能只匹配标题**：卡片标题是作者写的短标签（例如「铜钥匙」），而正文常用变体指代（例如「那把钥匙」「铁盒里的东西」）。只做标题子串匹配，这类伏笔会被判成"没找到"，而作者据此去补写已经交代过的情节，直接损害正文质量。卡片 `content`（备注）里往往写着更接近正文的措辞，必须一起用上。
+
+4. 若一张卡的关键词一个都没命中，**不能直接判定为「未回收」**。这类卡要单独归入「未定位到原文」一档，明确告诉作者"没有在正文里找到相关段落"，并建议补充卡片关键词。把"没搜到"和"没回收"混为一谈是这个技能最容易造成误导的地方。
 
 **模型层（花钱，只喂候选片段）**
 
 只把候选章节的正文片段 + 卡片信息交给模型判定，每批最多 8 张卡：
 
-- 判定结果三选一：`已回收` / `未回收` / `有隐患`
+- 判定结果三选一：`已回收` / `未回收` / `未定位到原文`
 - 必须给出**章节引用**，作者要能核对
 - 模型只判「找到了什么」，不判「该怎么改」——改法由主对话给出
+
+**这次内部调用必须显式限定参数**，不能跟随角色或全局设置：
+
+- `thinking: 'disabled'` —— 任务只是对少量片段做三态归类，不需要长链推理。开启思考会让每一批判定多付一份思考 token 并多等数秒，叠加在多步循环上作者会明显感到卡顿。
+- `jsonOutput: true` —— 复用现有 JSON 输出约束。
+- `maxTokens` 限制在判定所需的量级。
+
+这个做法在项目里已有先例：[extractor.js](../../../web/server/services/memory/extractor.js) 第 147–159 行的 `extractFacts` 就是同类内部小判定，显式传了 `thinking: 'disabled'` 与 `jsonOutput: true`、`maxTokens: 800`。
+
+**provider 降级规则**
+
+技能的 `ctx.provider` 可能就是降级后的 provider。`resolveProvider` 会在 DeepSeek 未配置时按 `FALLBACK_ORDER` 退到 `openaiCompat` 或 `ollama`，并带 `degraded: true`（见 [providers/index.js](../../../web/server/services/providers/index.js) 第 16–72 行）。本地 Ollama 的结构化输出只是 `format: 'json'`，无 usage 统计，判定质量明显弱于云端。
+
+因此：
+
+- `ctx` 必须把 provider 的 `degraded` 状态一并传进来，技能据此决定是否走模型层。
+- **降级时仍走模型层，但过程条必须标注「本次判定由本地模型完成，可信度有限」**——不能静默降级，否则作者会把本地小模型的结论当成云端结论，一次判错就摧毁对整套巡检能力的信任。
 
 **成本控制**：作者问「铜钥匙收了吗」时，`params.target` 命中，只处理这一张卡、只喂它的候选片段。全书盘点时才走批量，且只喂命中片段，不喂全书。
 
@@ -244,7 +269,7 @@ async function runAgentLoop({ provider, messages, options, onToken, onToolStart,
 每一步：
 
 1. 调 `provider.chatStream({ messages, jsonOutput: true, onToken })`。
-2. `parseModelJson(result.content)` 解析出结构化输出。
+2. `parse.js` 的 `parseModelJson(result.content)` 解析出结构化输出（该函数从 `routes/ai.js` 提取，不在此复制）。
 3. 若 `parsed.action === 'call_tool'`：
    - 查注册表拿技能。**技能不存在 → 不中断**，把「没有这个技能」作为工具结果喂回，让模型自己向作者解释它做不到什么。
    - 执行技能。**技能抛错 → 同样不中断**，把错误信息喂回模型。
@@ -288,19 +313,24 @@ async function runAgentLoop({ provider, messages, options, onToken, onToolStart,
 
 现有事件序列（[routes/ai.js](../../../web/server/routes/ai.js) 第 670–841 行）：`notice` → `memory` → `token` → `action` → `done`，异常时 `error` → `done`。
 
-新增两个事件：
+新增三个事件：
 
 ```json
+{ "type": "agent_thinking", "label": "正在判断需要查什么" }
 { "type": "tool_start", "tool": "audit_foreshadowing", "label": "伏笔盘点" }
 { "type": "tool_done", "tool": "audit_foreshadowing", "label": "伏笔盘点",
-  "summary": "读了第 3、7、12 章 · 8.2k 字", "detail": [ { "label": "第 3 章", "text": "…" } ] }
+  "summary": "读了第 3、7、12 章 · 8.2k 字", "detail": [ { "label": "第 3 章", "text": "…" } ],
+  "degraded": false }
 ```
 
-- `tool_start` 在技能开始执行时下发，早于模型层判定——作者立刻知道「它去查了」，不用对着空白等待。
-- `tool_done` 在技能返回后下发，带摘要与明细。
-- 两者都**只对当前这条 assistant 消息生效**，挂在消息的 `toolTrace` 数组上。
+- `agent_thinking` 在**进入循环、发起第一次模型调用之前**下发。这是必需的：第一次调用期间 token 被全部缓冲（§5.2），若不在此处给一个信号，作者从发出提问到 `tool_start` 到达之间，界面上只有一个不会动、没有任何字的空占位气泡——恰恰是本节要避免的体验。文案说明「正在判断需要查什么」，不暴露技能、工具调用这些概念。
+- `tool_start` 在技能开始执行时下发。注意它只能等到第一次模型调用结束、识别出 `call_tool` 之后才可能发出，所以它**不能**承担「消除空白等待」的职责，那个职责属于 `agent_thinking`。
+- `tool_done` 在技能返回后下发，带摘要与明细；`degraded: true` 时前端在过程条上标注「本次判定由本地模型完成，可信度有限」（见 §4.3）。
+- 这三个事件都**只对当前这条 assistant 消息生效**，挂在消息的 `toolTrace` 数组上。
 
-完整顺序：`notice` → `memory` → （第一轮缓冲期，无 token 下发）→ `tool_start` → `tool_done` → （第二轮的）`token` → `action` → `done`。
+完整顺序：`notice` → `memory` → `agent_thinking` →（第一轮缓冲期，**无 token 下发**）→ `tool_start` → `tool_done` →（第二轮的）`token` → `action` → `done`。
+
+若模型第一轮就直接作答（没有 `call_tool`），`agent_thinking` 之后紧接缓冲释放的 `token`，过程条不出现——多出的这一个事件对作者只是一句极短的提示，不影响正常对话。
 
 ## 7. 前端改动
 
@@ -310,7 +340,7 @@ async function runAgentLoop({ provider, messages, options, onToken, onToolStart,
 | --- | --- |
 | `components/Assistant/ToolPanel.jsx` | **新建**。折叠条组件，与 `MemoryPanel.jsx` 同构：`collapsed` 态显示 `label · summary`，展开态显示 `detail` 列表。 |
 | `components/Assistant/MessageList.jsx` | 在记忆面板位置（正文上方）挂 `ToolPanel`。 |
-| `components/Assistant/Sidebar.jsx` | 处理 `tool_start` / `tool_done`，把 `toolTrace` 写进 assistant message。 |
+| `components/Assistant/Sidebar.jsx` | 处理 `agent_thinking` / `tool_start` / `tool_done`，把 `toolTrace` 写进 assistant message。 |
 | `store/workspace.jsx` | assistant message 初始态加 `toolTrace: []`。 |
 | `styles/theme.css` | 新增 `.ct-tool` 系列样式，沿用 `.ct-memory` 的视觉语言（[theme.css](../../../web/client/src/styles/theme.css) 第 2047 行起）。 |
 
@@ -364,7 +394,9 @@ async function runAgentLoop({ provider, messages, options, onToken, onToolStart,
 
 - 规则层：造几张伏笔卡和章节正文，断言候选章节定位正确。
 - `params.target` 命中时只处理那一张卡。
-- 无候选章节的卡直接进「未找到回收迹象」，不调模型。
+- 关键词一个都没命中的卡归入「未定位到原文」，不调模型，且**不得**断言为「未回收」。
+- 卡片备注（`content`）里的关键词能被召回（只匹配标题会漏召的用例）。
+- 降级 provider 下走模型层时，结果带 `degraded` 标记。
 
 ### 9.3 前端
 
@@ -372,11 +404,12 @@ async function runAgentLoop({ provider, messages, options, onToken, onToolStart,
 
 ### 9.4 人工验收清单
 
-1. 问「第三章那个铜钥匙最后收了吗」→ 过程条出现，作者看不到任何 JSON 片段。
+1. 问「第三章那个铜钥匙最后收了吗」→ 先看到 `agent_thinking` 提示，随后过程条出现；**工具轮次的 JSON 片段完全不可见**。最终回答轮仍沿用现有的原始流式显示（本版不修，见 §5.2），验收这一轮时不要把它当新问题。
 2. 展开过程条 → 能看到读了哪几章。
-3. 问「还有哪些伏笔没收」→ 走全书盘点路径。
+3. 问「还有哪些伏笔没收」→ 走全书盘点路径；未定位到原文的卡单独成一档，不被说成「未回收」。
 4. 问一个与伏笔无关的问题（「这段怎么改」）→ **不触发**技能，无过程条。
-5. 断网 / 改坏 API key → 可见错误，不是空白气泡。
+5. 断网 / 改坏 API key / 清空 DeepSeek key 触发降级 → 可见错误或明确标注的降级提示，不是空白气泡。
+6. 问一句之后立刻看界面：从发出到 `agent_thinking` 到达之间不应出现无提示的长时间空等。
 
 ## 10. 不做与后续
 
@@ -397,9 +430,10 @@ async function runAgentLoop({ provider, messages, options, onToken, onToolStart,
 
 ## 11. 实施顺序建议
 
-1. `services/skills/index.js` + `services/agent/loop.js` 骨架 + 单元测试（先跑通纯逻辑，不接路由）
-2. `context.js` 注入技能清单
-3. `routes/ai.js` 接 loop + token 延迟推送 + SSE 两个新事件
-4. `auditForeshadowing.js` 规则层 + 模型层
-5. 前端 `ToolPanel` + 接线
-6. 人工验收清单逐条走
+1. **`services/agent/parse.js`** —— 把 `routes/ai.js` 里的 `parseModelJson` 原样搬出并按纯函数导出，`routes/ai.js` 改为引用它。这一步不改变任何行为，先做它是为了让后续所有工作有一个共享的解析入口，避免复制出两份实现。
+2. `services/skills/index.js` + `services/agent/loop.js` 骨架 + 单元测试（先跑通纯逻辑，不接路由）
+3. `context.js` 注入技能清单
+4. `routes/ai.js` 接 loop + token 延迟推送 + SSE 三个新事件（含 `agent_thinking`）+ 扩展字段归一化白名单以保住 `payload.skills`
+5. `auditForeshadowing.js` 规则层（多关键词召回 + 未定位到原文分档）+ 模型层（显式关闭思考、降级标注）
+6. 前端 `ToolPanel` + 接线（含 `agent_thinking` 与降级标注）
+7. 人工验收清单逐条走
