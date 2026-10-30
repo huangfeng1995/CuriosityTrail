@@ -16,7 +16,8 @@ URI 由 Node 侧拼装，这里只校验前缀格式并原样透传。
   所以写入一律「先删后写」。
 - `rm()` 只回收文件，目录自身的向量记录要额外 `remove_by_uri` 才能清掉。
 - 查询必须走底层 `storage.search()` + prefix 过滤：上层 `find()` 不做硬前缀
-  隔离，实测会跨用户泄漏。
+  隔离，实测会跨用户泄漏。向量记录里没有 `is_leaf` 字段（写库时丢了），
+  正文叶子只能靠 `level == 2` 区分（目录的 L0/L1 摘要是 0/1）。
 - 底层 `_score` 是稳定的原始余弦相似度，可直接当阈值用。
 - MarkdownParser 默认会按 token 数二次切分正文，切完叶子文件的 parent_uri 就变了，
   台账对不上。切分阈值与 frontmatter 抽取都通过配置段 `markdown` 控制。
@@ -246,7 +247,10 @@ class VikingStore:
                 "op": "and",
                 "conds": [
                     {"op": "prefix", "field": "uri", "prefix": target_uri},
-                    {"op": "must", "field": "is_leaf", "conds": [True]},
+                    # 0.2.11 的记录里没有 is_leaf 字段（虽然 Context 有这个属性，
+                    # 序列化进向量库时被丢掉了）。目录的 L0/L1 摘要有单独记录，
+                    # level 分别是 0/1；正文叶子是 L2=2。用 level 过滤才能只留正文。
+                    {"op": "must", "field": "level", "conds": [2]},
                 ],
             },
             limit=limit,
