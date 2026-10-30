@@ -37,6 +37,24 @@ from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
+import xxhash
+
+# openviking 0.2.11 的本地向量库写记录时用 xxhash 算主键，
+# 但 `str_to_uint64` 把 str 直接传给 `xxhash.xxh64`（只收 bytes），
+# 结果每次 upsert 都 TypeError，向量一条也写不进去（召回恒为空）。
+# 上游到 0.4.19 才改成 `.encode("utf-8")`。这里补一层幂等包装：
+# str 自动编码、bytes 原样透传，不改变任何调用方语义。
+_xxh64 = xxhash.xxh64
+
+
+def _xxh64_accept_str(data, *args, **kwargs):
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return _xxh64(data, *args, **kwargs)
+
+
+xxhash.xxh64 = _xxh64_accept_str
+
 # 记忆索引只允许落在用户命名空间下，防止 Node 侧拼错前缀写到公共区。
 URI_ROOT = "viking://resources/u/"
 
@@ -177,9 +195,9 @@ class VikingStore:
     async def index(self, uri: str, text: str) -> Dict[str, Any]:
         """写入一块正文，返回实际落盘路径。
 
-        openviking 不允许对同一个 target 重复写入，所以先删后写。
+        openviking 不允许对同一个 URI 重复写入，所以先删后写。
         """
-        base, name = split_uri(uri)
+        _, name = split_uri(uri)
         if self._client is None:
             raise VikingError("记忆服务尚未初始化")
 
@@ -189,8 +207,10 @@ class VikingStore:
         try:
             source = Path(tmp_dir) / f"{name}.md"
             source.write_text(text, encoding="utf-8")
+            # 0.2.x 的 `to` 是「精确目标 URI」，不是父目录：
+            # 传 base 的话 root_uri 会少一层（落在 base 上而不是 base/name）。
             result = await self._client.add_resource(
-                str(source), to=base, wait=True, timeout=self._index_timeout
+                str(source), to=uri, wait=True, timeout=self._index_timeout
             )
         except Exception as exc:  # noqa: BLE001 - 统一转成可重试错误
             raise VikingError(f"写入失败：{exc}") from exc
