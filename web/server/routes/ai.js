@@ -10,6 +10,8 @@
  *   DELETE /api/ai/prompts/:roleKey 恢复默认
  *   GET  /api/ai/status    provider 连通状态
  *   POST /api/ai/messages/:messageId/remember  把一条消息记入长期记忆
+ *   GET  /api/ai/conversations            历史对话列表
+ *   GET  /api/ai/conversations/:id/messages  一条历史对话的消息
  */
 
 const express = require('express');
@@ -665,6 +667,16 @@ router.post('/chat', async (req, res) => {
         'INSERT INTO messages (id, conversation_id, role, content, role_key, created_at) VALUES (?, ?, ?, ?, ?, ?)',
         [insertedUserMessageId, conversation.id, 'user', String(message), roleKey, now]
       );
+
+      // 用第一句话当会话标题。历史列表里一屏都是「新对话」的话，
+      // 作者只能逐条点开去找，等于没有历史。
+      if (!conversation.title || conversation.title === '新对话') {
+        const title = makePreview(message).slice(0, 24);
+        if (title) {
+          await run('UPDATE conversations SET title = ? WHERE id = ?', [title, conversation.id]);
+          conversation.title = title;
+        }
+      }
     }
 
     const chatMessages = [
@@ -1010,6 +1022,149 @@ router.post('/messages/:messageId/remember', async (req, res) => {
     }
 
     res.json({ ok: true, messageId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/ai/conversations —— 历史对话列表
+// ---------------------------------------------------------------------------
+
+/** 历史列表里预览文案的长度上限 */
+const PREVIEW_LIMIT = 80;
+
+/**
+ * 只保留有内容的消息预览。
+ *
+ * 助手消息存的是结构化输出，content 可能是空串、也可能是整段正文；
+ * 折成一行并截断，才能在列表里一眼看出这轮聊了什么。
+ */
+function makePreview(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, PREVIEW_LIMIT);
+}
+
+router.get('/conversations', async (req, res) => {
+  const { workId } = req.query;
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+
+  try {
+    // 按作品筛选时也要校验归属：不能拿别人的 workId 探出"这里有没有对话"
+    if (workId && !(await ownedWork(workId, req.userId))) {
+      return res.json([]);
+    }
+
+    // 只列有消息的会话：点开就空的会话在历史里没有意义
+    const params = workId ? [req.userId, workId, limit] : [req.userId, limit];
+    const rows = await all(
+      `SELECT c.id, c.work_id, c.title, c.created_at, c.updated_at,
+              (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count,
+              (SELECT m.content FROM messages m WHERE m.conversation_id = c.id
+                ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) AS last_content
+         FROM conversations c
+        WHERE c.user_id = ?
+          AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
+          ${workId ? 'AND c.work_id = ?' : ''}
+        ORDER BY c.updated_at DESC
+        LIMIT ?`,
+      params
+    );
+
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        workId: row.work_id,
+        title: row.title || '新对话',
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        messageCount: row.message_count,
+        preview: makePreview(row.last_content),
+      }))
+    );
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/ai/conversations/:id/messages —— 一条历史对话的全部消息
+// ---------------------------------------------------------------------------
+router.get('/conversations/:id/messages', async (req, res) => {
+  try {
+    // 归属校验写进 SQL：别人的会话 id 一律当作不存在
+    const conversation = await get(
+      'SELECT * FROM conversations WHERE id = ? AND user_id = ?',
+      [req.params.id, req.userId]
+    );
+    if (!conversation) {
+      return res.status(404).json({ error: '对话不存在' });
+    }
+
+    const rows = await all(
+      `SELECT id, role, content, role_key, action, payload, citations, created_at
+         FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at, rowid`,
+      [conversation.id]
+    );
+
+    // 角色名要显示在气泡上。一次取全表再映射，避免逐条查库。
+    const roleList = await roles.listRoles(req.userId);
+    const roleMap = new Map(roleList.map((r) => [r.key, r]));
+
+    const messages = rows.map((row) => {
+      const role = roleMap.get(row.role_key);
+      let payload = null;
+      if (row.payload) {
+        try {
+          payload = JSON.parse(row.payload);
+        } catch (e) {
+          payload = null;
+        }
+      }
+
+      let citations = [];
+      if (row.citations) {
+        try {
+          const parsed = JSON.parse(row.citations);
+          if (Array.isArray(parsed)) citations = parsed;
+        } catch (e) {
+          citations = [];
+        }
+      }
+
+      if (row.role === 'user') {
+        return { id: row.id, role: 'user', content: row.content, roleKey: row.role_key };
+      }
+
+      return {
+        id: row.id,
+        role: 'assistant',
+        content: row.content,
+        roleKey: row.role_key,
+        roleLabel: role ? `${role.icon} ${role.name}` : '',
+        action: (payload && payload.action) || row.action || '',
+        target: (payload && payload.target) || '',
+        reason: (payload && payload.reason) || '',
+        citations,
+        // 工具过程落库在 payload.skills 里，重载时一并还原：
+        // 作者回到旧对话，仍然能核对当时 AI 现查了什么
+        toolTrace: Array.isArray(payload && payload.skills)
+          ? payload.skills.map((s) => ({ ...s, status: 'done' }))
+          : [],
+      };
+    });
+
+    res.json({
+      id: conversation.id,
+      workId: conversation.work_id,
+      title: conversation.title || '新对话',
+      updatedAt: conversation.updated_at,
+      messages,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

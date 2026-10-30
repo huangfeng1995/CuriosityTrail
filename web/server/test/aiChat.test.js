@@ -249,6 +249,94 @@ test('模型的正文不是字符串时（数组/对象），照样能显示出�
 });
 
 // ---------------------------------------------------------------------------
+// 历史对话：作者要能翻回之前聊过什么
+// ---------------------------------------------------------------------------
+
+test('历史对话：聊完能在列表里看到，标题取第一句话', async () => {
+  fakeModel.setDefault({
+    content: JSON.stringify({
+      action: 'comment',
+      content: '可以让陈默先发现线索，再让对手主动出手。',
+      reason: '给了冲突升级的方向',
+      citations: [],
+    }),
+    finishReason: 'stop',
+  });
+
+  const events = await chat('帮我想想第三章的冲突怎么升级');
+  const done = events.find((e) => e.type === 'done' && e.conversationId);
+  assert.ok(done, '正常对话应当带回 conversationId');
+
+  const res = await server.request('/api/ai/conversations');
+  assert.strictEqual(res.status, 200);
+
+  const list = await res.json();
+  const item = list.find((c) => c.id === done.conversationId);
+  assert.ok(item, '刚聊完的会话必须出现在历史列表里');
+  assert.match(item.title, /第三章的冲突/, '标题应当取自作者的第一句话');
+  assert.ok(item.messageCount >= 2, '一问一答至少两条消息');
+  assert.ok(item.preview.length > 0, '列表要给出一段预览');
+});
+
+test('历史对话：能取回完整的问答，保留动作与角色信息', async () => {
+  fakeModel.setDefault({
+    content: JSON.stringify({
+      action: 'comment',
+      content: '先把雨声写足，再让敲门声进来。',
+      reason: '重写了开头',
+      citations: [],
+    }),
+    finishReason: 'stop',
+  });
+
+  const events = await chat('这段开头还能怎么改');
+  const done = events.find((e) => e.type === 'done' && e.conversationId);
+
+  const res = await server.request(
+    `/api/ai/conversations/${done.conversationId}/messages`
+  );
+  assert.strictEqual(res.status, 200);
+
+  const data = await res.json();
+  assert.strictEqual(data.id, done.conversationId);
+
+  const user = data.messages.find((m) => m.role === 'user');
+  assert.ok(user, '要能取回作者的提问');
+  assert.match(user.content, /这段开头还能怎么改/);
+
+  const assistant = data.messages.find((m) => m.role === 'assistant');
+  assert.ok(assistant, '要能取回 AI 的回答');
+  assert.strictEqual(assistant.action, 'comment');
+  assert.match(assistant.content, /敲门声/);
+  assert.ok(assistant.roleLabel, '回答要带上角色名，否则历史里分不清是谁说的');
+});
+
+test('历史对话：别人的会话既看不到列表也打不开', async () => {
+  fakeModel.setDefault({
+    content: JSON.stringify({ action: 'comment', content: '好。', reason: '', citations: [] }),
+    finishReason: 'stop',
+  });
+
+  const events = await chat('这条只属于我自己');
+  const done = events.find((e) => e.type === 'done' && e.conversationId);
+
+  const otherCookie = await server.loginAs('13900000099');
+
+  const listRes = await server.requestAs(otherCookie, '/api/ai/conversations');
+  const list = await listRes.json();
+  assert.ok(
+    !list.find((c) => c.id === done.conversationId),
+    '别人的历史列表里不能出现我的会话'
+  );
+
+  const detailRes = await server.requestAs(
+    otherCookie,
+    `/api/ai/conversations/${done.conversationId}/messages`
+  );
+  assert.strictEqual(detailRes.status, 404, '别人的会话 id 应当当作不存在');
+});
+
+// ---------------------------------------------------------------------------
 // 行内操作：空回复不能把正文改成空白
 // ---------------------------------------------------------------------------
 

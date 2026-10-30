@@ -129,6 +129,19 @@ function reducer(state, action) {
     case 'conversation/set':
       return { ...state, conversationId: action.conversationId };
 
+    // 打开一条历史对话：整体换掉消息流，之后继续发消息会接在这个会话上。
+    // 流式状态必须清空——上一轮如果正卡在输出里，留着它会把旧气泡和新历史混在一起。
+    case 'conversation/load':
+      return {
+        ...state,
+        conversationId: action.conversationId,
+        messages: action.messages,
+        streaming: '',
+        sending: false,
+        notice: '',
+        error: '',
+      };
+
     case 'message/add':
       return { ...state, messages: [...state.messages, action.message] };
 

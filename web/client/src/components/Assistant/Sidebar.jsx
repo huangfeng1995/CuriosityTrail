@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Input, Button, Spin, Tooltip, App as AntApp } from 'antd';
 import { SendOutlined, ClearOutlined } from '@ant-design/icons';
-import { Square, Brain, EyeOff } from 'lucide-react';
+import { Square, Brain, EyeOff, History } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
@@ -9,6 +9,7 @@ import { planApply } from './applyPlan';
 import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
+import HistoryPanel from './HistoryPanel';
 import EmptyState from '../EmptyState';
 
 /**
@@ -36,6 +37,8 @@ export default function AssistantSidebar() {
 
   const [roles, setRoles] = useState([]);
   const [input, setInput] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const abortRef = useRef(null);
   const listRef = useRef(null);
   // 流式累加器：token 回调闭包里的 streaming 永远是旧值，必须用 ref 累
@@ -492,6 +495,96 @@ export default function AssistantSidebar() {
     dispatch({ type: 'message/clear' });
   };
 
+  /**
+   * 打开一条历史对话。
+   *
+   * 服务端存的是结构化输出，这里转成消息流要的形状：
+   * 重新生成依赖 prompt（这一轮问了什么）与 serverMessageId，
+   * 缺了它们，历史里的回答只能看不能重来。
+   */
+  const openHistoryConversation = useCallback(
+    async (id) => {
+      if (sending) {
+        toast.warning('正在生成回复，等这一轮结束再切换对话');
+        return;
+      }
+
+      setHistoryLoading(true);
+      try {
+        const res = await fetch(
+          `/api/ai/conversations/${encodeURIComponent(id)}/messages`,
+          { credentials: 'include' }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || '加载失败');
+        }
+
+        let lastPrompt = '';
+        const list = (data.messages || []).map((m) => {
+          if (m.role === 'user') {
+            lastPrompt = m.content;
+            return {
+              id: m.id,
+              role: 'user',
+              content: m.content,
+              serverMessageId: m.id,
+            };
+          }
+
+          const role = roles.find((r) => r.key === m.roleKey);
+          return {
+            id: m.id,
+            role: 'assistant',
+            content: m.content,
+            action: m.action,
+            target: m.target || '',
+            reason: m.reason || '',
+            citations: m.citations || [],
+            roleLabel:
+              m.roleLabel || (role ? `${role.icon} ${role.name}` : ''),
+            toolTrace: m.toolTrace || [],
+            applied: false,
+            prompt: lastPrompt,
+            serverMessageId: m.id,
+            memoryRefs: [],
+            memoryDegraded: false,
+            memoryReason: '',
+            excludedRefIds: [],
+          };
+        });
+
+        dispatch({ type: 'conversation/load', conversationId: data.id, messages: list });
+
+        // 沿用这条对话最后用的角色：切回旧对话却换了人设，
+        // 接着问下去的回答风格会突然变掉。
+        const lastRoleKey = (data.messages || [])
+          .map((m) => m.roleKey)
+          .filter(Boolean)
+          .pop();
+        if (lastRoleKey) {
+          dispatch({ type: 'role/set', roleKey: lastRoleKey });
+        }
+
+        setHistoryOpen(false);
+      } catch (e) {
+        toast.error(e.message || '加载历史对话失败');
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [sending, roles, dispatch, toast]
+  );
+
+  const startNewConversation = useCallback(() => {
+    if (sending) {
+      toast.warning('正在生成回复，等这一轮结束再开新对话');
+      return;
+    }
+    dispatch({ type: 'message/clear' });
+    setHistoryOpen(false);
+  }, [sending, dispatch, toast]);
+
   const stop = () => {
     abortRef.current?.abort();
   };
@@ -556,6 +649,15 @@ export default function AssistantSidebar() {
           className="ct-ai-textarea"
         />
         <div className="ct-ai-actions">
+          <Tooltip title="历史对话">
+            <Button
+              size="small"
+              type="text"
+              icon={<History size={14} />}
+              onClick={() => setHistoryOpen(true)}
+              disabled={sending}
+            />
+          </Tooltip>
           <Tooltip title="清空当前对话">
             <Button
               size="small"
@@ -603,6 +705,16 @@ export default function AssistantSidebar() {
           )}
         </div>
       </div>
+
+      <HistoryPanel
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        workId={work?.id}
+        currentId={conversationId}
+        busy={historyLoading}
+        onSelect={openHistoryConversation}
+        onNew={startNewConversation}
+      />
     </div>
   );
 }

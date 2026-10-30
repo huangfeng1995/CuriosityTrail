@@ -1916,6 +1916,76 @@ body.ct-resizing * {
   animation: ct-suggest-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* ---------- 历史对话 ---------- */
+.ct-history-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.ct-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ct-history-item {
+  text-align: left;
+  width: 100%;
+  border: 1px solid var(--border-faint);
+  background: transparent;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease;
+}
+.ct-history-item:hover:not(:disabled) {
+  border-color: var(--cinnabar-glow);
+  background: var(--accent-dim);
+}
+.ct-history-item.is-active {
+  border-color: var(--cinnabar-glow);
+  background: var(--accent-dim);
+}
+.ct-history-item:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.ct-history-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ct-history-item-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-history-item-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.ct-history-item-preview {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ct-history-item-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 /* ---------- 消息流 ---------- */
 .ct-ai-scroll {
   flex: 1;
