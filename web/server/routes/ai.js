@@ -1348,18 +1348,40 @@ router.post('/inline', async (req, res) => {
       .filter(Boolean)
       .join('；');
 
-    const result = await provider.chat({
-      messages: [
-        ...messages,
-        { role: 'user', content: String(selection) },
-      ],
-      temperature: role?.temperature,
-      model: role?.model && name === 'deepseek' ? role.model : undefined,
-      thinking: role?.thinking === null || role?.thinking === undefined
-        ? undefined
-        : (role.thinking ? 'enabled' : 'disabled'),
-      jsonOutput: true,
-    });
+    // 行内操作走 provider.chat（非流式），但上游同样会偶发返回 200 空内容。
+    // 与 /chat 路径一致：空回复自动重试一次，重试时在末尾补一句提醒。
+    const callInline = async (msgList) =>
+      provider.chat({
+        messages: msgList,
+        temperature: role?.temperature,
+        model: role?.model && name === 'deepseek' ? role.model : undefined,
+        thinking: role?.thinking === null || role?.thinking === undefined
+          ? undefined
+          : (role.thinking ? 'enabled' : 'disabled'),
+        jsonOutput: true,
+      });
+
+    const baseMessages = [...messages, { role: 'user', content: String(selection) }];
+    let result = await callInline(baseMessages);
+
+    const isEmpty =
+      !String(result.content || '').trim() &&
+      !parseModelJson(result.content || '') &&
+      !String(result.reasoning || '').trim();
+
+    if (isEmpty) {
+      // 原样重发没有意义：让模型退化成空白的条件还在。
+      // 在最后一条消息后补一句提醒，强制模型走"输出 JSON"的路径。
+      const retryMessages = [...baseMessages];
+      const last = retryMessages[retryMessages.length - 1];
+      retryMessages[retryMessages.length - 1] = {
+        ...last,
+        content:
+          String(last.content || '') +
+          '\n\n（上一次没有返回任何内容。请直接按约定 JSON 回答，把正文写进 content 字段。）',
+      };
+      result = await callInline(retryMessages);
+    }
 
     const rawText = result.content || '';
     const parsed = parseModelJson(rawText);
@@ -1367,7 +1389,14 @@ router.post('/inline', async (req, res) => {
     if (!parsed) {
       // 模型没给出任何内容：不能返回空正文，那会让行内工具"改写"成空白段落。
       if (!rawText.trim()) {
-        return res.status(502).json({ error: describeEmptyReply(result, result.reasoning) });
+        // 三类空回复要分开报，否则作者只会干等着重复重试：
+        //   1. 被长度截断（finishReason=length）
+        //   2. 只思考无正文（reasoning 非空）
+        //   3. 真空响应（既无 content 也无 reasoning）
+        const reason = describeEmptyReply(result, result.reasoning);
+        return res.status(502).json({
+          error: isEmpty ? `已自动重试一次，模型仍然没有返回内容。${reason}` : reason,
+        });
       }
       return res.json({
         action: 'comment',
