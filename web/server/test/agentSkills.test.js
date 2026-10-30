@@ -105,6 +105,88 @@ test('技能不存在时不中断，错误被喂回模型', async () => {
   assert.match(fed.content, /失败|没有/, '要说明技能没跑起来');
 });
 
+test('技能抛错时错误被喂回模型，整轮对话不中断', async () => {
+  const unregister = skills.register({
+    name: 'boom_skill',
+    label: '会炸的技能',
+    description: '测试用：执行时必定抛错。',
+    parameters: { type: 'object', properties: {}, required: [] },
+    run: async () => {
+      throw new Error('技能内部炸了');
+    },
+  });
+
+  try {
+    const rounds = [];
+    const errors = [];
+    let callNo = 0;
+
+    const result = await runAgentLoop({
+      provider: {
+        async chatStream({ messages, onToken }) {
+          callNo += 1;
+          rounds.push(messages);
+          const content = callNo === 1
+            ? '{"action":"call_tool","tool":"boom_skill"}'
+            : '{"action":"comment","content":"这个技能跑不起来"}';
+          onToken(content);
+          return { content, reasoning: '', finishReason: 'stop' };
+        },
+      },
+      messages: [{ role: 'user', content: '查一下' }],
+      onToken: () => {},
+      onToolError: ({ error }) => errors.push(error),
+    });
+
+    assert.strictEqual(rounds.length, 2, '应当跑了两轮');
+    assert.strictEqual(errors.length, 1, '工具失败要回调一次');
+    assert.match(errors[0], /技能内部炸了/);
+
+    const fed = rounds[1][rounds[1].length - 1];
+    assert.strictEqual(fed.role, 'user');
+    assert.match(fed.content, /工具结果/, '要把工具结果喂回模型');
+    assert.match(fed.content, /执行失败/, '要说明技能没跑起来');
+    assert.match(fed.content, /技能内部炸了/, '要把原始错误带回去');
+
+    assert.strictEqual(result.parsed.action, 'comment', '模型仍能给出最终回答');
+  } finally {
+    unregister();
+  }
+});
+
+test('模型连续要技能超过 maxSteps 时停下并抛 MAX_STEPS', async () => {
+  const unregister = skills.register({
+    name: 'noop_skill',
+    label: '空技能',
+    description: '测试用：只返回空结果。',
+    parameters: { type: 'object', properties: {}, required: [] },
+    run: async () => ({ label: '空技能', summary: '', detail: [], findings: [] }),
+  });
+
+  try {
+    let calls = 0;
+    const err = await runAgentLoop({
+      provider: {
+        async chatStream({ onToken }) {
+          calls += 1;
+          const content = '{"action":"call_tool","tool":"noop_skill"}';
+          onToken(content);
+          return { content, reasoning: '', finishReason: 'stop' };
+        },
+      },
+      messages: [{ role: 'user', content: '一直查' }],
+      onToken: () => {},
+      maxSteps: 3,
+    }).then(() => null, (e) => e);
+
+    assert.ok(err, '用尽步数必须抛错，不能静默停在一半');
+    assert.strictEqual(err.code, 'MAX_STEPS');
+    assert.strictEqual(calls, 3, '不该超过 maxSteps 次模型调用');
+  } finally {
+    unregister();
+  }
+});
+
 test('技能清单注入到 system prompt 末尾，行内操作不注入', async () => {
   const unregister = skills.register({
     name: 'audit_foreshadowing',

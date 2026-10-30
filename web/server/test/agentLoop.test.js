@@ -22,7 +22,7 @@ const { startFakeModel } = require('./fakeModel');
 const env = setupTempEnv();
 
 const app = require('../app');
-const { ready } = require('../database');
+const { ready, all } = require('../database');
 const aiConfig = require('../services/aiConfig');
 
 let server;
@@ -119,4 +119,25 @@ test('模型没给 JSON 时，原文当回复内容（回归）', async () => {
   assert.ok(action, '应当下发 action 事件');
   assert.strictEqual(action.action, 'comment');
   assert.match(action.content, /自然语言回复/);
+});
+
+test('模型反复要技能时下发可见错误，历史里不留孤立消息', async () => {
+  // 每一轮都要技能，模型永远不给出最终答案。
+  // 必须停下来并给作者一个看得见的错误，不能静默卡住，也不能留下
+  // "作者问了但没人答"的孤立消息。
+  fakeModel.setDefault({
+    content: '{"action":"call_tool","tool":"audit_foreshadowing","params":{}}',
+    finishReason: 'stop',
+  });
+
+  const events = await chat('一直查一直查');
+
+  const error = events.find((e) => e.type === 'error');
+  assert.ok(error, '要下发可见的错误事件');
+  assert.match(error.message, /没能查完|反复调用技能/);
+
+  // 失败的这轮不能留下孤立用户消息
+  const rows = await all('SELECT role, content FROM messages');
+  const orphan = rows.filter((r) => r.role === 'user' && r.content === '一直查一直查');
+  assert.strictEqual(orphan.length, 0, '失败的这轮不该留下孤立用户消息');
 });
