@@ -245,9 +245,26 @@ export default function AssistantSidebar() {
                   citations: event.citations,
                   // 工具过程的最终态：以 action 事件里的 skills 为准，
                   // 它是落库的同一份数据，重载消息时也能恢复。
+                  //
+                  // 但必须按技能名**合并**，不能整体替换：
+                  // 流式阶段 tool_done 已经写进来的章节明细与失败原因，
+                  // 一旦这里换成一份精简列表就被冲掉了，
+                  // 作者点开过程条只会看到一行技能名。
                   toolTrace: event.skills && event.skills.length
-                    ? event.skills.map((s) => ({ ...s, status: 'done' }))
+                    ? event.skills.map((s) => {
+                        const prev = toolTraceRef.current.find((t) => t.tool === s.tool) || {};
+                        return {
+                          ...prev,
+                          ...s,
+                          // skills 里 detail 为空数组时，保留流式阶段收到的那份
+                          detail: s.detail && s.detail.length ? s.detail : (prev.detail || []),
+                          error: s.error || prev.error || '',
+                          status: 'done',
+                        };
+                      })
                     : toolTraceRef.current,
+                  // 回答已经落地，占位提示要撤掉，否则它会一直挂在气泡上
+                  thinking: '',
                 },
               });
             } else if (event.type === 'done') {

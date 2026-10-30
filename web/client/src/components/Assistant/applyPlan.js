@@ -223,6 +223,19 @@ export function planApply(blocks, action, target, content) {
   const hasBody = lastProse >= 0;
 
   if (action === 'replace') {
+    // 命中的块必须是能写散文的那种。
+    //
+    // 段落索引把所有块连同块 ID 都交给了模型，插图、设定引用、分场也在里面。
+    // 模型完全可能拿插图块的 ID 当 target——这时若无条件整块替换，
+    // 图注就变成了一段小说正文，作者点「已写入正文」还以为改对了地方。
+    // append 分支早就有这道校验，replace 不能漏。
+    if (index >= 0 && !isProseBlock(list[index])) {
+      return {
+        kind: 'error',
+        message: '这条改动指向的是插图/设定/分场的段落，不能直接改写。请在正文段落上重试。',
+      };
+    }
+
     if (index >= 0) {
       const block = list[index];
       const spot = locateSnippet(block.content, (target || '').trim());

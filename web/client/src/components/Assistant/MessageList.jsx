@@ -56,6 +56,15 @@ export default function MessageList({
   onRegenerate,
   onRemember,
 }) {
+  // 占位提示的文案。
+  //
+  // 服务端进入多步循环时会先发一条 agent_thinking，说明「正在判断要不要查资料」。
+  // 这个字段必须在这里真正读出来，否则服务端那段注释承诺的反馈等于没做：
+  // 作者看到的还是固定的「正在思考…」，感知不到 AI 在判断。
+  const last = messages.length ? messages[messages.length - 1] : null;
+  const pendingLabel =
+    (last && last.role === 'assistant' && last.thinking) || '正在思考…';
+
   if (!messages.length && !streaming) {
     return (
       <EmptyState
@@ -148,7 +157,7 @@ export default function MessageList({
           <div className="ct-msg-body">
             <div className="ct-msg-bubble is-ai is-thinking">
               <Spin size="small" />
-              <span>正在思考…</span>
+              <span>{pendingLabel}</span>
             </div>
           </div>
         </div>

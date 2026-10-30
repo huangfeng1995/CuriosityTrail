@@ -207,6 +207,27 @@ test('planApply: replace 找不到目标且章里有正文 → 明确报错', ()
   assert.match(plan.message, /找不到要替换的段落/);
 });
 
+test('planApply: replace 命中插图块时拒绝，不把图注换成正文', () => {
+  // 段落索引把所有块 ID 都交给了模型，插图块也在其中。
+  // 无条件整块替换会把图注变成小说段落，而作者看到的是「已写入正文」。
+  const blocks = [
+    { id: 'b1', type: 'paragraph', content: '十点整，雨落下来。' },
+    { id: 'img1', type: 'image', content: '雨夜的小巷', url: '/a.png', fileName: 'a.png' },
+  ];
+  const plan = planApply(blocks, 'replace', 'img1', '十点整，雨点砸在窗玻璃上。');
+  assert.equal(plan.kind, 'error');
+  assert.match(plan.message, /插图|设定|分场/);
+});
+
+test('planApply: replace 命中设定引用块时同样拒绝', () => {
+  const blocks = [
+    { id: 'b1', type: 'paragraph', content: '十点整，雨落下来。' },
+    { id: 's1', type: 'setting_ref', content: '雨城·常年阴雨' },
+  ];
+  const plan = planApply(blocks, 'replace', 's1', '陈默把伞收了。');
+  assert.equal(plan.kind, 'error');
+});
+
 test('planApply: insert 有目标时插在目标后面', () => {
   const blocks = [
     { id: 'b1', type: 'paragraph', content: '十点整。' },
