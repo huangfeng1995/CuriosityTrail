@@ -102,12 +102,22 @@ function normalizeAction(payload) {
 
   // 工具调用摘要。技能执行结果由 loop.js 收集，通过 payload.skills 传进来。
   // 这一列必须在白名单里，否则会被静默丢弃——不报错，只是数据不见了。
+  //
+  // detail（读了哪些章、命中了哪些词）与 error（失败原因）也要带上：
+  // 只留 label/summary 的话，回答落地后过程条就只剩一行字，
+  // 作者没法再核对「这次到底读了哪些章」。
   const skills = Array.isArray(payload.skills)
     ? payload.skills.map((s) => ({
         tool: String(s.tool || ''),
         label: String(s.label || ''),
         summary: String(s.summary || ''),
         degraded: Boolean(s.degraded),
+        detail: Array.isArray(s.detail)
+          ? s.detail
+              .filter((d) => d && (d.label || d.text))
+              .map((d) => ({ label: String(d.label || ''), text: String(d.text || '') }))
+          : [],
+        error: String(s.error || ''),
       }))
     : [];
 
@@ -683,8 +693,6 @@ router.post('/chat', async (req, res) => {
     // 没有这个信号，作者从发问到看到任何反馈之间只有一个不动的空占位。
     send({ type: 'agent_thinking', label: '正在判断需要查什么' });
 
-    const toolCalls = [];
-
     const loopResult = await runAgentLoop({
       provider,
       messages: chatMessages,
@@ -712,12 +720,9 @@ router.post('/chat', async (req, res) => {
         send({ type: 'tool_start', tool, label });
       },
       onToolDone: ({ tool, result }) => {
-        toolCalls.push({
-          tool,
-          label: result.label || tool,
-          summary: result.summary || '',
-          degraded: Boolean(result.degraded),
-        });
+        // 工具调用的记账由 loop.js 负责，这里只负责把事件推给前端。
+        // 两处都记一份的话，字段形状会慢慢分叉（失败项带不带 error、
+        // 摘要里要不要带明细），改一处漏一处就是静默丢数据。
         send({
           type: 'tool_done',
           tool,
@@ -728,14 +733,13 @@ router.post('/chat', async (req, res) => {
         });
       },
       onToolError: ({ tool, error }) => {
-        toolCalls.push({ tool, label: tool, summary: '', degraded: false });
         send({ type: 'tool_done', tool, label: tool, summary: '', detail: [], degraded: false, error });
       },
     });
 
     const rawText = loopResult.raw || fullText;
     const parsed = loopResult.parsed;
-    const payload = normalizeAction({ ...(parsed || {}), skills: toolCalls });
+    const payload = normalizeAction({ ...(parsed || {}), skills: loopResult.toolCalls });
 
     // 模型没给 JSON 时，把原文当对话回复
     if (!parsed && rawText.trim()) {

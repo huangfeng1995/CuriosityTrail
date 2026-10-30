@@ -33,6 +33,15 @@ const CONTENT_LIMIT = 12000;
 const INSPIRATION_LIMIT = 10;
 
 /**
+ * 能写散文的块类型。
+ *
+ * 与前端 applyPlan.js 的 PROSE_TYPES 保持一致：只有这三类块的 content
+ * 是正文。插图是图注、设定引用是引用内容、分场是分隔符，
+ * 都不能被当作改写目标。
+ */
+const PROSE_BLOCK_TYPES = new Set(['paragraph', 'dialogue', 'inner']);
+
+/**
  * 解析章节的 blocks JSON。
  * @param {string} blocksJson
  * @returns {Array}
@@ -390,17 +399,24 @@ async function assembleContext(params = {}) {
 
   // ---- 6.5 块索引 ----
   // 让 AI 能把结构化输出的 target 指向具体某个块，否则回写无从下手。
+  //
+  // 只列能写散文的块（正文/对白/独白）。插图、设定引用、分场也在 blocks 里，
+  // 但它们的 content 是图注 / 引用内容 / 空串。把它们的 ID 也给出去，
+  // 模型就会拿这些 ID 当 target，回写时把图注变成一段小说正文。
   if (scope !== 'inline' && chapterBlocks.length) {
     const index = chapterBlocks
-      .map((b, i) => {
+      .filter((b) => PROSE_BLOCK_TYPES.has((b && b.type) || 'paragraph'))
+      .map((b) => {
         const preview = (b.content || '').replace(/\s+/g, ' ').slice(0, 30);
         const speaker = b.type === 'dialogue' && b.speaker ? `${b.speaker}：` : '';
         return `[${b.id}] ${speaker}${preview}`;
       })
       .join('\n');
-    systemParts.push(
-      `## 段落索引\n每个 [块ID] 对应正文中的一段。当你要续写某段时，target 填该段的块ID；要在某段后插入新段时，target 也填该段块ID。\n${index}`
-    );
+    if (index) {
+      systemParts.push(
+        `## 段落索引\n每个 [块ID] 对应正文中的一段。当你要续写某段时，target 填该段的块ID；要在某段后插入新段时，target 也填该段块ID。\n${index}`
+      );
+    }
   }
 
   // ---- 7. 衔接层（侧边栏续写场景） ----

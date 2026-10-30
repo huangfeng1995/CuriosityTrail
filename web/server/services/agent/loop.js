@@ -164,7 +164,15 @@ async function runAgentLoop(params) {
 
     if (outcome.ok) {
       const result = outcome.result || {};
-      toolCalls.push({ tool: toolName, label: result.label || toolName, summary: result.summary || '', degraded: !!result.degraded });
+      // 这里是工具调用的**唯一**记账点：摘要要落库、要重放，
+      // 路由只负责把事件推给前端，不再自己记一份。
+      toolCalls.push({
+        tool: toolName,
+        label: result.label || toolName,
+        summary: result.summary || '',
+        detail: result.detail || [],
+        degraded: !!result.degraded,
+      });
       onToolDone({ tool: toolName, result });
       // 喂回：assistant 侧保留模型原始 JSON 原文，user 侧放工具结果
       convo.push({ role: 'assistant', content: round.raw });
@@ -173,7 +181,14 @@ async function runAgentLoop(params) {
         content: `【工具结果：${result.label || toolName}】\n${JSON.stringify(result.findings || result)}`,
       });
     } else {
-      toolCalls.push({ tool: toolName, label: toolName, summary: '', degraded: false, error: outcome.error });
+      toolCalls.push({
+        tool: toolName,
+        label: toolName,
+        summary: '',
+        detail: [],
+        degraded: false,
+        error: outcome.error,
+      });
       onToolError({ tool: toolName, error: outcome.error });
       convo.push({ role: 'assistant', content: round.raw });
       convo.push({
