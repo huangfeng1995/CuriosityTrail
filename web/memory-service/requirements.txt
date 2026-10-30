@@ -8,6 +8,10 @@
 # 又提供 cp310-abi3-manylinux_2_31_x86_64 轮子的版本，且自带 AGFS 原生库。
 openviking==0.2.11
 
-fastapi==0.109.0
-uvicorn==0.27.0
+# openviking 0.2.11 自己要求 fastapi>=0.128 / uvicorn>=0.39 / pydantic>=2，
+# 原来钉的 0.109 + 0.27 会直接依赖冲突（ResolutionImpossible）。
+# 侧边服务只用基础能力（lifespan + HTTPException + pydantic 模型），
+# 跟着上游下限走即可，不额外钉死小版本。
+fastapi>=0.128.0,<1.0
+uvicorn>=0.39.0,<1.0
 python-dotenv==1.2.1
