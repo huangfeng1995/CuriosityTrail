@@ -37,6 +37,7 @@ const plotCardsRouter = require('./routes/plotCards');
 const progressRouter = require('./routes/progress');
 const consistencyRouter = require('./routes/consistency');
 const memoryRouter = require('./routes/memory');
+const styleRouter = require('./routes/style');
 
 const app = express();
 
@@ -93,6 +94,7 @@ app.use('/api/plot-cards', plotCardsRouter);
 app.use('/api/progress', progressRouter);
 app.use('/api/consistency', consistencyRouter);
 app.use('/api/memory', memoryRouter);
+app.use('/api/style', styleRouter);
 
 // 图片目录同样纳入鉴权
 app.use('/uploads', requireAuth, express.static(config.uploadsDir));
