@@ -336,6 +336,43 @@ test('历史对话：别人的会话既看不到列表也打不开', async () =>
   assert.strictEqual(detailRes.status, 404, '别人的会话 id 应当当作不存在');
 });
 
+test('模型第一次返回空响应时自动重试一次', async () => {
+  // DeepSeek 的 JSON 模式偶发空白完成：用量照算，正文一个字都没有。
+  // 作者不该为供应商的抖动买单——服务端自己再要一次。
+  fakeModel.setQueue([
+    { content: '', reasoning: '', finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'comment',
+        content: '重试之后拿到的回答。',
+        reason: '',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+
+  const events = await chat('这段再帮我改改');
+
+  const action = events.find((e) => e.type === 'action');
+  assert.ok(action, '重试成功时应当正常下发回答');
+  assert.match(action.content, /重试之后拿到/);
+  assert.ok(!events.find((e) => e.type === 'error'), '能重试成功就不该给作者报错');
+});
+
+test('重试后仍为空时，明确告知已自动重试过', async () => {
+  fakeModel.setQueue([
+    { content: '', reasoning: '', finishReason: 'stop' },
+    { content: '', reasoning: '', finishReason: 'stop' },
+  ]);
+
+  const events = await chat('还是没反应');
+
+  const error = events.find((e) => e.type === 'error');
+  assert.ok(error, '连续两次空响应必须给出可见错误');
+  assert.match(error.message, /已自动重试一次/, '要说明已经替作者重试过');
+});
+
 // ---------------------------------------------------------------------------
 // 行内操作：空回复不能把正文改成空白
 // ---------------------------------------------------------------------------

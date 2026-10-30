@@ -178,6 +178,11 @@ function describeEmptyReply(result = {}, reasoning = '') {
   if (result.finishReason === 'length') {
     return '这次输出被长度上限截断了，正文没写完。可以把要求说得更短一点再试。';
   }
+  // 内容审核拦下时，模型照常计费但一个字都不返回。
+  // 不单独说明的话，作者会以为是网络或产品故障，一直重试同一段。
+  if (result.finishReason === 'content_filter') {
+    return '这段内容可能触发了模型的内容审核，没能给出正文。可以换个说法，或先把可能敏感的段落改一改再试。';
+  }
   if (reasoning && reasoning.trim()) {
     return '模型这次只做了思考，没有给出正文。请再试一次，或把要求说得更具体些。';
   }
@@ -742,54 +747,84 @@ router.post('/chat', async (req, res) => {
     // 没有这个信号，作者从发问到看到任何反馈之间只有一个不动的空占位。
     send({ type: 'agent_thinking', label: '正在判断需要查什么' });
 
-    const loopResult = await runAgentLoop({
-      provider,
-      messages: chatMessages,
-      options: {
-        temperature: role?.temperature,
-        // 角色模型只在 DeepSeek 下生效——别的 provider 用的是自己的模型名，
-        // 硬套 DeepSeek 的模型名会直接报"模型不存在"。
-        model: role?.model && name === 'deepseek' ? role.model : undefined,
-        thinking: role?.thinking === null || role?.thinking === undefined
-          ? undefined
-          : (role.thinking ? 'enabled' : 'disabled'),
-        // 取消/超时信号一路传到 provider：客户端断开时请求立刻停掉
-        signal: roundSignal,
-      },
-      ctx: {
-        userId: req.userId,
-        workId: conversation.work_id,
-        // 当前章节：技能要检查「这一章写得符不符合文风」时需要它。
-        chapterId: chapterId || '',
-        providerName: name,
-        degraded,
-        role: roleKey,
-        signal: roundSignal,
-      },
-      onToken: (token) => {
-        fullText += token;
-        send({ type: 'token', content: token });
-      },
-      onToolStart: ({ tool, label }) => {
-        send({ type: 'tool_start', tool, label });
-      },
-      onToolDone: ({ tool, result }) => {
-        // 工具调用的记账由 loop.js 负责，这里只负责把事件推给前端。
-        // 两处都记一份的话，字段形状会慢慢分叉（失败项带不带 error、
-        // 摘要里要不要带明细），改一处漏一处就是静默丢数据。
-        send({
-          type: 'tool_done',
-          tool,
-          label: result.label || tool,
-          summary: result.summary || '',
-          detail: result.detail || [],
-          degraded: Boolean(result.degraded),
-        });
-      },
-      onToolError: ({ tool, error }) => {
-        send({ type: 'tool_done', tool, label: tool, summary: '', detail: [], degraded: false, error });
-      },
-    });
+    const runChat = () =>
+      runAgentLoop({
+        provider,
+        messages: chatMessages,
+        options: {
+          temperature: role?.temperature,
+          // 角色模型只在 DeepSeek 下生效——别的 provider 用的是自己的模型名，
+          // 硬套 DeepSeek 的模型名会直接报"模型不存在"。
+          model: role?.model && name === 'deepseek' ? role.model : undefined,
+          thinking: role?.thinking === null || role?.thinking === undefined
+            ? undefined
+            : (role.thinking ? 'enabled' : 'disabled'),
+          // 取消/超时信号一路传到 provider：客户端断开时请求立刻停掉
+          signal: roundSignal,
+        },
+        ctx: {
+          userId: req.userId,
+          workId: conversation.work_id,
+          // 当前章节：技能要检查「这一章写得符不符合文风」时需要它。
+          chapterId: chapterId || '',
+          providerName: name,
+          degraded,
+          role: roleKey,
+          signal: roundSignal,
+        },
+        onToken: (token) => {
+          fullText += token;
+          send({ type: 'token', content: token });
+        },
+        onToolStart: ({ tool, label }) => {
+          send({ type: 'tool_start', tool, label });
+        },
+        onToolDone: ({ tool, result }) => {
+          // 工具调用的记账由 loop.js 负责，这里只负责把事件推给前端。
+          // 两处都记一份的话，字段形状会慢慢分叉（失败项带不带 error、
+          // 摘要里要不要带明细），改一处漏一处就是静默丢数据。
+          send({
+            type: 'tool_done',
+            tool,
+            label: result.label || tool,
+            summary: result.summary || '',
+            detail: result.detail || [],
+            degraded: Boolean(result.degraded),
+          });
+        },
+        onToolError: ({ tool, error }) => {
+          send({ type: 'tool_done', tool, label: tool, summary: '', detail: [], degraded: false, error });
+        },
+      });
+
+    let finalResult = await runChat();
+
+    // 空回复重试一次。
+    //
+    // DeepSeek 的 JSON 模式偶尔会给出一次完全空白的完成：finish_reason 是 stop、
+    // 用量照常计费，正文一个字都没有。也可能是流在第一个正文 token 之前就被掐断。
+    // 这两种情况重发一次通常就好了；让作者自己反复点重试，等于把服务端的不稳定
+    // 转嫁给他。只在「一个字都没上屏」时重试——已经推给前端的 token 不能重来。
+    const isEmptyReply =
+      !String(finalResult.raw || '').trim() &&
+      !finalResult.parsed &&
+      !fullText.trim();
+
+    if (isEmptyReply) {
+      console.log(
+        JSON.stringify({
+          event: 'ai_empty',
+          traceId,
+          userId: req.userId,
+          provider: name,
+          role: roleKey,
+          finishReason: finalResult.finishReason || '',
+          usage: finalResult.usage,
+        })
+      );
+
+      finalResult = await runChat();
+    }
 
     // 结构化运行记录：一次对话一行，方便排查"为什么慢 / 为什么停"。
     // 只记元信息，不落对话正文。
@@ -797,19 +832,23 @@ router.post('/chat', async (req, res) => {
       JSON.stringify({
         event: 'ai_chat',
         traceId,
+        userId: req.userId,
         provider: name,
         role: roleKey,
         durationMs: Date.now() - startedAt,
-        stopReason: loopResult.stopReason,
-        finishReason: loopResult.finishReason || '',
-        tools: loopResult.toolCalls.map((t) => t.tool),
-        usage: loopResult.usage,
+        stopReason: finalResult.stopReason,
+        finishReason: finalResult.finishReason || '',
+        retried: isEmptyReply,
+        rawLength: String(finalResult.raw || '').length,
+        reasoningLength: String(finalResult.reasoning || '').length,
+        tools: finalResult.toolCalls.map((t) => t.tool),
+        usage: finalResult.usage,
       })
     );
 
-    const rawText = loopResult.raw || fullText;
-    const parsed = loopResult.parsed;
-    const payload = normalizeAction({ ...(parsed || {}), skills: loopResult.toolCalls });
+    const rawText = finalResult.raw || fullText;
+    const parsed = finalResult.parsed;
+    const payload = normalizeAction({ ...(parsed || {}), skills: finalResult.toolCalls });
 
     // 模型没给 JSON 时，把原文当对话回复
     if (!parsed && rawText.trim()) {
@@ -837,7 +876,7 @@ router.post('/chat', async (req, res) => {
     //   2. 模型只做了思考没写正文（reasoning 非空）。
     //   3. 真空响应（既无 JSON 也无思考）。
     if (!payload.content.trim()) {
-      const reasoning = (loopResult.reasoning || '').trim();
+      const reasoning = (finalResult.reasoning || '').trim();
       let reason;
       if (parsed) {
         // 模型返回了有效 JSON（通常是 action=none），只是没正文。
@@ -848,9 +887,15 @@ router.post('/chat', async (req, res) => {
         // 无有效 JSON：交给 describeEmptyReply 区分
         // 被长度截断 / 只思考无正文 / 真空响应三类。
         reason = describeEmptyReply(
-          { finishReason: loopResult.finishReason },
+          { finishReason: finalResult.finishReason },
           reasoning
         );
+      }
+
+      // 重试过一次还是空：告诉作者这不是他的问题，也省得他反复点。
+      // 不说明的话，"请再试一次"等于让他继续撞同一堵墙。
+      if (isEmptyReply) {
+        reason = `已自动重试一次，模型仍然没有返回内容。${reason}`;
       }
 
       // 这次调用没产生任何回复，别把孤零零的用户消息留在历史里——
@@ -869,7 +914,7 @@ router.post('/chat', async (req, res) => {
         type: 'done',
         conversationId: conversation.id,
         provider: name,
-        stopReason: loopResult.stopReason,
+        stopReason: finalResult.stopReason,
         traceId,
       });
       return;
@@ -936,7 +981,7 @@ router.post('/chat', async (req, res) => {
       conversationId: conversation.id,
       provider: name,
       // 这次为什么停：final=正常出结果；前端可据此区分"写完"与"被截断"
-      stopReason: loopResult.stopReason,
+      stopReason: finalResult.stopReason,
       traceId,
     });
   } catch (err) {
