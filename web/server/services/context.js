@@ -22,6 +22,7 @@
 const { all, get } = require('../database');
 const { getRole } = require('./roles');
 const skills = require('./skills');
+const style = require('./style');
 
 /** 大纲最多注入的字符数 */
 const OUTLINE_LIMIT = 4000;
@@ -57,18 +58,23 @@ const PRIORITY = {
  * 不改变分区顺序（顺序决定了模型读到的先后），只把低优先级分区
  * 整段丢弃或截断。返回新数组，不修改入参。
  *
- * @param {Array<{text: string, priority: number}>} parts
+ * `fixed` 的分区例外：它不计入总量、也不参与截断。
+ * 技能清单与文风要求都用这个机制——它们是「模型怎么调技能」「写成什么样」
+ * 的唯一说明，被裁掉模型就只能瞎猜。
+ *
+ * @param {Array<{text: string, priority: number, fixed?: boolean}>} parts
  * @param {number} budget 字符预算
  * @returns {Array<{text: string, priority: number}>}
  */
 function applyBudget(parts, budget) {
   const fitted = parts.map((p) => ({ ...p }));
-  let total = fitted.reduce((sum, p) => sum + p.text.length, 0);
+  let total = fitted.reduce((sum, p) => (p.fixed ? sum : sum + p.text.length), 0);
   if (total <= budget) return fitted;
 
   // 低优先级先让位（priority 数字越大越先牺牲）；同优先级保持原始顺序
   const order = fitted
     .map((p, index) => ({ p, index }))
+    .filter(({ p }) => !p.fixed)
     .sort((a, b) => b.p.priority - a.p.priority || a.index - b.index);
 
   for (const { p } of order) {
@@ -325,13 +331,20 @@ async function assembleContext(params = {}) {
   const role = await getRole(roleKey, userId);
   // 带优先级的分区表。最终超预算时按优先级让位，见 applyBudget。
   const parts = [];
-  const addPart = (text, priority) => {
-    if (text) parts.push({ text, priority });
+  const addPart = (text, priority, fixed) => {
+    if (text) parts.push({ text, priority, fixed });
   };
 
   if (role) {
     addPart(role.systemPrompt, PRIORITY.ROLE);
   }
+
+  // ---- 0. 文风要求 ----
+  // 紧跟在角色提示词之后：模型先知道「你是谁」，再知道「写成什么样」。
+  //
+  // fixed：作者定的硬约束，被裁掉模型就只能瞎猜。
+  // 与技能清单同一套做法。
+  const styleText = userId ? await style.getStylePrompt(userId, workId) : '';
 
   const meta = {
     work: null,
@@ -340,7 +353,12 @@ async function assembleContext(params = {}) {
     settings: [],
     inspirations: 0,
     retrievalCount: retrieval.length,
+    styleRules: Boolean(styleText),
   };
+
+  if (styleText) {
+    addPart(styleText, PRIORITY.ROLE, true);
+  }
 
   // ---- 1. 作品层 ----
   // 必须按 user_id 取：workId 是客户端传的，换个 id 不能读到别人的作品。
@@ -595,7 +613,10 @@ async function assembleContext(params = {}) {
     }
   }
 
-  const fitted = applyBudget(parts, Math.max(2000, CONTEXT_BUDGET - skillsText.length));
+  const fitted = applyBudget(
+    parts,
+    Math.max(2000, CONTEXT_BUDGET - skillsText.length - styleText.length)
+  );
   const segments = fitted.map((p) => p.text).filter(Boolean);
   if (skillsText) segments.push(skillsText);
 

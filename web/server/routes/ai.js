@@ -747,6 +747,8 @@ router.post('/chat', async (req, res) => {
       ctx: {
         userId: req.userId,
         workId: conversation.work_id,
+        // 当前章节：技能要检查「这一章写得符不符合文风」时需要它。
+        chapterId: chapterId || '',
         providerName: name,
         degraded,
         role: roleKey,

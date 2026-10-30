@@ -212,3 +212,6 @@ register(auditForeshadowing);
 
 const checkConsistency = require('./checkConsistency');
 register(checkConsistency);
+
+const checkStyle = require('./checkStyle');
+register(checkStyle);
