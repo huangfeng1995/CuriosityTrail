@@ -946,6 +946,11 @@ router.post('/chat', async (req, res) => {
     // 作者才知道是自己问得太绕，而不是平台坏了。
     if (err.code === 'MAX_STEPS') {
       err.message = '这次没能查完：模型反复调用技能但没有拿到结果。请换个说法再问一次。';
+    } else if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+      // 整轮 120s 上限或流式读取中途被中止时，抛的是 DOMException，
+      // message 是英文（"The operation was aborted due to timeout"）。
+      // 原样透给作者既看不懂，还会让他以为平台坏了。
+      err.message = 'AI 这次没能及时返回（请求超时），请重试一次；长文可以分几次写。';
     }
 
     // 失败的这轮同样不能留下孤立消息。
