@@ -94,6 +94,14 @@ function ownedConversation(id, userId) {
 }
 
 /**
+ * 取当前用户名下的文风规则卡。
+ */
+function ownedStyleCard(id, userId) {
+  if (!id || !userId) return Promise.resolve(null);
+  return get('SELECT * FROM style_cards WHERE id = ? AND user_id = ?', [id, userId]);
+}
+
+/**
  * 判断某个用户是不是管理员（只有管理员能整库备份/恢复）。
  * @param {string} userId
  * @returns {Promise<boolean>}
@@ -112,5 +120,6 @@ module.exports = {
   ownedPlotCard,
   ownedMaterial,
   ownedConversation,
+  ownedStyleCard,
   isAdmin,
 };

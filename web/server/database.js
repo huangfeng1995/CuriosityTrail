@@ -24,8 +24,9 @@ let db = new sqlite3.Database(config.dbPath);
  *
  * 版本 1 → 2：多用户（users / login_codes），业务表补 user_id。
  * 版本 2 → 3：长期记忆台账（memory_chunks / memory_index_meta）。
+ * 版本 3 → 4：文风规则卡（style_cards）。
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 /**
  * 版本号之前的老库遗留表。
@@ -305,6 +306,36 @@ CREATE TABLE IF NOT EXISTS memory_index_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- 文风规则卡。
+--
+-- 作者存下「我心中的好文章」「我讨厌的文章」，系统把它蒸馏成可执行的规则
+-- （句长区间、对白占比、比喻密度、禁用词表），规则常驻注入 AI 上下文。
+--
+-- **原文不入库**。这张表只存蒸馏后的规则、来源标注与摘要。
+-- 理由：坏样例最可能来自别人的作品，原文入库等于长期持有他人版权内容；
+-- 而且规则才是 AI 真正要用的东西，原文留着只会让人误以为它会被喂给模型。
+-- 摘要只给「从自己章节选的样例」留（≤100 字），粘贴的样例不留——
+-- 粘贴的原文很可能来自别人，留片段也是替对方保管。
+--
+-- work_id 为 NULL 表示全局规则卡；作品级卡片整类替换同 kind 的全局卡片
+-- （叠加会产生「既要 A 又要非 A」的矛盾要求）。
+CREATE TABLE IF NOT EXISTS style_cards (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  work_id      TEXT REFERENCES works(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL CHECK (kind IN ('good','bad')),
+  title        TEXT NOT NULL,
+  source       TEXT NOT NULL DEFAULT 'paste' CHECK (source IN ('paste','chapter')),
+  chapter_id   TEXT,
+  excerpt      TEXT,
+  rules        TEXT NOT NULL,
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL,
+  modified_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_style_cards_user
+  ON style_cards (user_id, work_id, kind);
 `;
 
 /**
@@ -327,6 +358,7 @@ const USER_SCOPED_TABLES = [
   'inspirations',
   'conversations',
   'prompt_overrides',
+  'style_cards',
 ];
 
 /**
