@@ -31,6 +31,95 @@ const CONTINUITY_LIMIT = 500;
 const CONTENT_LIMIT = 12000;
 /** 灵感速记最多注入多少条 */
 const INSPIRATION_LIMIT = 10;
+/** system 上下文总字符预算：约 2.4 万字，超了按优先级让位，给回复留出空间 */
+const CONTEXT_BUDGET = 24000;
+/** 侧边栏历史消息的字符预算（只保留最近的部分，更早的省略） */
+const HISTORY_BUDGET = 12000;
+
+/**
+ * 各分区的优先级：数字越小越不可牺牲。
+ *
+ * 超预算时从数字大的开始截断/丢弃——灵感速记可以整段不要，
+ * 角色提示词和当前章节正文不行。
+ */
+const PRIORITY = {
+  ROLE: 1,        // 角色提示词、本次任务要求
+  CONTENT: 2,     // 作品/章节信息、当前正文、段落索引、衔接
+  FACT: 3,        // 人物卡、设定卡
+  MEMORY: 4,      // 长期记忆
+  RETRIEVAL: 5,   // 检索资料
+  INSPIRATION: 6, // 灵感速记
+};
+
+/**
+ * 按优先级把分区裁进预算。
+ *
+ * 不改变分区顺序（顺序决定了模型读到的先后），只把低优先级分区
+ * 整段丢弃或截断。返回新数组，不修改入参。
+ *
+ * @param {Array<{text: string, priority: number}>} parts
+ * @param {number} budget 字符预算
+ * @returns {Array<{text: string, priority: number}>}
+ */
+function applyBudget(parts, budget) {
+  const fitted = parts.map((p) => ({ ...p }));
+  let total = fitted.reduce((sum, p) => sum + p.text.length, 0);
+  if (total <= budget) return fitted;
+
+  // 低优先级先让位（priority 数字越大越先牺牲）；同优先级保持原始顺序
+  const order = fitted
+    .map((p, index) => ({ p, index }))
+    .sort((a, b) => b.p.priority - a.p.priority || a.index - b.index);
+
+  for (const { p } of order) {
+    if (total <= budget) break;
+
+    const overflow = total - budget;
+    if (p.text.length <= overflow) {
+      total -= p.text.length;
+      p.text = '';
+      continue;
+    }
+
+    const tail = '\n…（篇幅过长，已截断）';
+    const keep = Math.max(0, p.text.length - overflow - tail.length);
+    const next = keep > 0 ? p.text.slice(0, keep) + tail : '';
+    total -= p.text.length - next.length;
+    p.text = next;
+  }
+
+  return fitted;
+}
+
+/**
+ * 裁剪历史消息：只保留最近的一段，且从 user 消息开始。
+ *
+ * 从 assistant 消息开头截断的话，模型会看到"没有提问的回答"，
+ * 反而会顺着答下去，把历史里的旧答案当成这一轮的内容。
+ *
+ * @param {Array<{role: string, content: string}>} history
+ * @param {number} [budget]
+ * @returns {{rows: Array, omitted: number}} omitted = 被省略的条数
+ */
+function trimHistory(history, budget = HISTORY_BUDGET) {
+  if (!Array.isArray(history) || !history.length) return { rows: [], omitted: 0 };
+
+  let total = 0;
+  let start = history.length;
+
+  while (start > 0) {
+    const len = String(history[start - 1].content || '').length;
+    if (total + len > budget) break;
+    total += len;
+    start -= 1;
+  }
+
+  // 从 user 边界开始：缺了提问的回答没有意义
+  while (start < history.length && history[start].role !== 'user') start += 1;
+
+  return { rows: history.slice(start), omitted: start };
+}
+
 
 /**
  * 能写散文的块类型。
@@ -234,10 +323,14 @@ async function assembleContext(params = {}) {
   } = params;
 
   const role = await getRole(roleKey, userId);
-  const systemParts = [];
+  // 带优先级的分区表。最终超预算时按优先级让位，见 applyBudget。
+  const parts = [];
+  const addPart = (text, priority) => {
+    if (text) parts.push({ text, priority });
+  };
 
   if (role) {
-    systemParts.push(role.systemPrompt);
+    addPart(role.systemPrompt, PRIORITY.ROLE);
   }
 
   const meta = {
@@ -265,7 +358,7 @@ async function assembleContext(params = {}) {
     if (work.outline) {
       workLines.push(`大纲：\n${truncate(work.outline, OUTLINE_LIMIT)}`);
     }
-    systemParts.push(workLines.join('\n'));
+    addPart(workLines.join('\n'), PRIORITY.CONTENT);
   }
 
   // ---- 2. 章节层 ----
@@ -285,7 +378,7 @@ async function assembleContext(params = {}) {
       lines.push(`标题：${chapter.title}`);
       if (chapter.volume) lines.push(`卷：${chapter.volume}`);
       lines.push(`状态：${statusLabel(chapter.status)}`);
-      systemParts.push(lines.join('\n'));
+      addPart(lines.join('\n'), PRIORITY.CONTENT);
     }
   }
 
@@ -314,8 +407,9 @@ async function assembleContext(params = {}) {
     meta.characters = selected.map((c) => c.name);
 
     if (selected.length) {
-      systemParts.push(
-        `## 人物设定\n${selected.map(formatCharacter).join('\n\n')}`
+      addPart(
+        `## 人物设定\n${selected.map(formatCharacter).join('\n\n')}`,
+        PRIORITY.FACT
       );
     }
   }
@@ -331,8 +425,9 @@ async function assembleContext(params = {}) {
     meta.settings = selected.map((s) => s.name);
 
     if (selected.length) {
-      systemParts.push(
-        `## 世界观设定\n${selected.map(formatSetting).join('\n\n')}`
+      addPart(
+        `## 世界观设定\n${selected.map(formatSetting).join('\n\n')}`,
+        PRIORITY.FACT
       );
     }
   }
@@ -354,14 +449,14 @@ async function assembleContext(params = {}) {
       const lines = inspirations.map(
         (i, idx) => `[灵${idx + 1}] ${i.text}${i.tags ? `（${i.tags}）` : ''}`
       );
-      systemParts.push(`## 作者的灵感速记\n${lines.join('\n')}`);
+      addPart(`## 作者的灵感速记\n${lines.join('\n')}`, PRIORITY.INSPIRATION);
     }
   }
 
   // ---- 6. 正文内容层 ----
   if (scope === 'inline' && selection) {
     const context = buildInlineContext(chapterBlocks, blockId);
-    systemParts.push(
+    addPart(
       [
         '## 待修改内容',
         context.before ? `【前文】\n${context.before}` : '',
@@ -370,7 +465,8 @@ async function assembleContext(params = {}) {
         context.continuity ? `【上一场景结尾】\n${context.continuity}` : '',
       ]
         .filter(Boolean)
-        .join('\n\n')
+        .join('\n\n'),
+      PRIORITY.CONTENT
     );
   } else if (chapter) {
     const full = chapterBlocks
@@ -379,8 +475,9 @@ async function assembleContext(params = {}) {
       .join('\n\n');
     const body = full || chapter.content || '';
     if (body) {
-      systemParts.push(
-        `## 当前章节正文\n${truncate(body, CONTENT_LIMIT)}`
+      addPart(
+        `## 当前章节正文\n${truncate(body, CONTENT_LIMIT)}`,
+        PRIORITY.CONTENT
       );
     } else {
       // 本章还没有正文。
@@ -389,10 +486,11 @@ async function assembleContext(params = {}) {
       // 指向不存在段落的 target，前端回写时找不到落点，作者看到的是
       // "当前章节还没有正文"，AI 写的内容就这么丢了。
       // 这里直接告诉它该怎么写：正文会作为本章第一段插入进去。
-      systemParts.push(
+      addPart(
         '## 当前章节正文\n（本章还没有正文。）\n\n' +
           '你要写的正文会作为本章的第一段插入进去，所以：' +
-          'action 填 "insert"（或 "append"），target 留空字符串，不要编造块ID。'
+          'action 填 "insert"（或 "append"），target 留空字符串，不要编造块ID。',
+        PRIORITY.CONTENT
       );
     }
   }
@@ -413,8 +511,9 @@ async function assembleContext(params = {}) {
       })
       .join('\n');
     if (index) {
-      systemParts.push(
-        `## 段落索引\n每个 [块ID] 对应正文中的一段。当你要续写某段时，target 填该段的块ID；要在某段后插入新段时，target 也填该段块ID。\n${index}`
+      addPart(
+        `## 段落索引\n每个 [块ID] 对应正文中的一段。当你要续写某段时，target 填该段的块ID；要在某段后插入新段时，target 也填该段块ID。\n${index}`,
+        PRIORITY.CONTENT
       );
     }
   }
@@ -423,7 +522,7 @@ async function assembleContext(params = {}) {
   if (scope !== 'inline' && chapterBlocks.length) {
     const continuity = extractContinuity(chapterBlocks);
     if (continuity) {
-      systemParts.push(`## 上一场景结尾（用于衔接）\n${continuity}`);
+      addPart(`## 上一场景结尾（用于衔接）\n${continuity}`, PRIORITY.CONTENT);
     }
   }
 
@@ -435,7 +534,7 @@ async function assembleContext(params = {}) {
     const items = memoryRefs
       .map((ref, i) => `${i + 1}. 〔${ref.label}〕${ref.preview || ''}`)
       .join('\n');
-    systemParts.push(`## 长期记忆（自动召回）\n${items}`);
+    addPart(`## 长期记忆（自动召回）\n${items}`, PRIORITY.MEMORY);
   }
 
   // ---- 8. 检索层 ----
@@ -450,12 +549,12 @@ async function assembleContext(params = {}) {
         return `${head}\n${r.snippet || ''}`;
       })
       .join('\n\n');
-    systemParts.push(`## 检索到的参考资料\n${items}`);
+    addPart(`## 检索到的参考资料\n${items}`, PRIORITY.RETRIEVAL);
   }
 
   // ---- 附加指令 ----
   if (extraInstruction) {
-    systemParts.push(`## 本次任务要求\n${extraInstruction}`);
+    addPart(`## 本次任务要求\n${extraInstruction}`, PRIORITY.ROLE);
   }
 
   // ---- 技能清单 ----
@@ -464,6 +563,10 @@ async function assembleContext(params = {}) {
   //
   // 只对侧边栏对话注入：行内操作（inline）不做跨章查询，
   // 给它塞技能清单只会让模型多想。
+  //
+  // 技能清单不参与预算竞争：它是模型"怎么调技能"的唯一说明，
+  // 被裁掉模型就只能瞎猜。所以先从总预算里预留它的长度。
+  let skillsText = '';
   if (scope !== 'inline') {
     const list = skills.listSkills();
     if (list.length) {
@@ -488,11 +591,15 @@ async function assembleContext(params = {}) {
         tool: first.name,
         params: firstKeys.length ? { [firstKeys[0]]: '示例' } : {},
       }));
-      systemParts.push(lines.join('\n'));
+      skillsText = lines.join('\n');
     }
   }
 
-  const messages = [{ role: 'system', content: systemParts.join('\n\n---\n\n') }];
+  const fitted = applyBudget(parts, Math.max(2000, CONTEXT_BUDGET - skillsText.length));
+  const segments = fitted.map((p) => p.text).filter(Boolean);
+  if (skillsText) segments.push(skillsText);
+
+  const messages = [{ role: 'system', content: segments.join('\n\n---\n\n') }];
 
   return { messages, meta };
 }
@@ -535,4 +642,8 @@ module.exports = {
   formatCharacter,
   formatSetting,
   nameVariants,
+  trimHistory,
+  applyBudget,
+  CONTEXT_BUDGET,
+  HISTORY_BUDGET,
 };

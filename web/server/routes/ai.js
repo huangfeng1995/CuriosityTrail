@@ -17,7 +17,7 @@ const crypto = require('crypto');
 const { all, get, run } = require('../database');
 const aiConfig = require('../services/aiConfig');
 const { resolveProvider, checkAllProviders } = require('../services/providers');
-const { assembleContext } = require('../services/context');
+const { assembleContext, trimHistory } = require('../services/context');
 const roles = require('../services/roles');
 const localSearch = require('../services/search/local');
 const webSearch = require('../services/search/deepseekSearch');
@@ -499,6 +499,18 @@ router.post('/chat', async (req, res) => {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
+  // 客户端断开（关页面、点取消）时立刻中止模型调用，不让它在后台空转烧 token。
+  // 再兜一个 120s 的整轮上限：模型卡住时，作者至少能收到一条明确的错误。
+  const clientAbort = new AbortController();
+  const roundSignal = AbortSignal.any([clientAbort.signal, AbortSignal.timeout(120000)]);
+  let clientGone = false;
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      clientGone = true;
+      clientAbort.abort();
+    }
+  });
+
   // 本次新插入的用户消息。失败时要把它清掉，
   // 否则历史里会留下"作者问了、但没人答"的记录，污染下一轮的上下文。
   //
@@ -511,6 +523,9 @@ router.post('/chat', async (req, res) => {
   let reusedUserMessage = null;
 
   let conversation = null;
+
+  // 本次调用的追踪 id：日志和 done 事件都用它，排查时能把两边对上
+  const traceId = crypto.randomUUID();
 
   // 被摘掉的旧回答。失败时要原样放回去。
   let removedRows = [];
@@ -635,6 +650,10 @@ router.post('/chat', async (req, res) => {
           [conversation.id]
         );
 
+    // 历史可能很长。超出预算时只保留最近一段，并从 user 消息开始——
+    // 从 assistant 开头截断，模型会看到"没有提问的回答"，顺着它继续写。
+    const historyTrim = trimHistory(history);
+
     // 保存用户消息
     // id 记下来：这次调用失败时要把它删掉，否则历史里会留下一条
     // "作者问了、但没有任何回答"的孤立消息，污染下一轮的上下文。
@@ -650,9 +669,15 @@ router.post('/chat', async (req, res) => {
 
     const chatMessages = [
       ...messages,
-      ...history.map((m) => ({ role: m.role, content: m.content })),
+      ...historyTrim.rows.map((m) => ({ role: m.role, content: m.content })),
       { role: 'user', content: String(message) },
     ];
+
+    // 省掉的历史要明说：不说的话模型会以为对话刚刚开始，
+    // 作者谈过的事它一概装作没听过。
+    if (historyTrim.omitted > 0 && messages.length) {
+      messages[0].content += `\n\n（说明：更早的 ${historyTrim.omitted} 条历史消息因长度限制已省略。）`;
+    }
 
     const aiCfg = aiConfig.getConfig();
     const { provider, name, degraded, reason } = resolveProvider(aiCfg);
@@ -685,6 +710,18 @@ router.post('/chat', async (req, res) => {
 
     const role = await roles.getRole(roleKey, req.userId);
 
+    // 角色模型只在 DeepSeek 下生效——其他 provider 用的是自己配置的模型名，
+    // 硬套 DeepSeek 的模型名会直接报"模型不存在"。
+    // 不提示的话，作者会以为设置已经生效，实际用的是默认模型。
+    if (role && role.model && name !== 'deepseek') {
+      send({
+        type: 'notice',
+        content: `角色模型「${role.model}」仅在 DeepSeek 下生效，当前使用的是 ${name} 的默认模型。`,
+      });
+    }
+
+    const startedAt = Date.now();
+
     // 流式输出
     let fullText = '';
 
@@ -704,6 +741,8 @@ router.post('/chat', async (req, res) => {
         thinking: role?.thinking === null || role?.thinking === undefined
           ? undefined
           : (role.thinking ? 'enabled' : 'disabled'),
+        // 取消/超时信号一路传到 provider：客户端断开时请求立刻停掉
+        signal: roundSignal,
       },
       ctx: {
         userId: req.userId,
@@ -711,6 +750,7 @@ router.post('/chat', async (req, res) => {
         providerName: name,
         degraded,
         role: roleKey,
+        signal: roundSignal,
       },
       onToken: (token) => {
         fullText += token;
@@ -736,6 +776,22 @@ router.post('/chat', async (req, res) => {
         send({ type: 'tool_done', tool, label: tool, summary: '', detail: [], degraded: false, error });
       },
     });
+
+    // 结构化运行记录：一次对话一行，方便排查"为什么慢 / 为什么停"。
+    // 只记元信息，不落对话正文。
+    console.log(
+      JSON.stringify({
+        event: 'ai_chat',
+        traceId,
+        provider: name,
+        role: roleKey,
+        durationMs: Date.now() - startedAt,
+        stopReason: loopResult.stopReason,
+        finishReason: loopResult.finishReason || '',
+        tools: loopResult.toolCalls.map((t) => t.tool),
+        usage: loopResult.usage,
+      })
+    );
 
     const rawText = loopResult.raw || fullText;
     const parsed = loopResult.parsed;
@@ -795,7 +851,13 @@ router.post('/chat', async (req, res) => {
       await restoreRemoved();
 
       send({ type: 'error', message: reason });
-      send({ type: 'done', conversationId: conversation.id, provider: name });
+      send({
+        type: 'done',
+        conversationId: conversation.id,
+        provider: name,
+        stopReason: loopResult.stopReason,
+        traceId,
+      });
       return;
     }
 
@@ -859,6 +921,9 @@ router.post('/chat', async (req, res) => {
       userMessageId: insertedUserMessageId || (reusedUserMessage && reusedUserMessage.id) || '',
       conversationId: conversation.id,
       provider: name,
+      // 这次为什么停：final=正常出结果；前端可据此区分"写完"与"被截断"
+      stopReason: loopResult.stopReason,
+      traceId,
     });
   } catch (err) {
     console.error('AI chat 失败：', err.message);
@@ -880,11 +945,23 @@ router.post('/chat', async (req, res) => {
     // 重生成失败：把上一版问答放回去
     await restoreRemoved();
 
+    // 作者已经断开：没有接收方了，写事件既发不出去也没有意义。
+    // 这时候也别打"失败"日志——取消不是故障。
+    if (clientGone) {
+      res.end();
+      return;
+    }
+
     send({ type: 'error', message: err.message });
     // 补一个 done：前端靠它同步 conversationId，
     // 缺了这一条，作者下一句话会另起一个会话，前面的对话就断了。
     if (conversation) {
-      send({ type: 'done', conversationId: conversation.id });
+      send({
+        type: 'done',
+        conversationId: conversation.id,
+        stopReason: err.stopReason || 'error',
+        traceId,
+      });
     }
   } finally {
     res.end();
@@ -999,6 +1076,17 @@ router.post('/inline', async (req, res) => {
     const { provider, name, degraded, reason } = resolveProvider(aiCfg);
     const role = await roles.getRole(roleKey, req.userId);
 
+    // 角色模型只在 DeepSeek 下生效，非 DeepSeek 时提示作者（与侧边栏一致）。
+    // 合并进 notice 字段：行内操作没有独立的事件通道，多一个字段前端不认识。
+    const noticeText = [
+      reason,
+      role && role.model && name !== 'deepseek'
+        ? `角色模型「${role.model}」仅在 DeepSeek 下生效，当前使用的是 ${name} 的默认模型。`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('；');
+
     const result = await provider.chat({
       messages: [
         ...messages,
@@ -1027,7 +1115,7 @@ router.post('/inline', async (req, res) => {
         citations: [],
         provider: name,
         degraded,
-        notice: reason,
+        notice: noticeText,
         memoryRefs: memoryResult.refs,
         memoryDegraded: memoryResult.degraded,
       });
@@ -1054,7 +1142,7 @@ router.post('/inline', async (req, res) => {
       ...payload,
       provider: name,
       degraded,
-      notice: reason,
+      notice: noticeText,
       memoryRefs: memoryResult.refs,
       memoryDegraded: memoryResult.degraded,
     });

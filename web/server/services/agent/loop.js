@@ -20,6 +20,28 @@ const skills = require('../skills');
 /** 最多几轮模型调用 */
 const DEFAULT_MAX_STEPS = 4;
 
+/** 喂回模型的工具结果上限（字符）。完整明细只给界面看，不塞进下一轮上下文 */
+const TOOL_RESULT_LIMIT = 4000;
+
+/**
+ * 把工具结果序列化成喂回模型的一段文本。
+ *
+ * 技能结果可能很长（伏笔盘点会带上几十条判定），整段塞回下一轮会把
+ * 上下文预算吃光。摘要单独保留，明细按上限截断。
+ *
+ * @param {Object} result 技能返回对象
+ * @returns {string}
+ */
+function serializeToolResult(result) {
+  const summary = String(result.summary || '');
+  const body = JSON.stringify(result.findings || result);
+  if (body.length <= TOOL_RESULT_LIMIT) return body;
+
+  const truncated = body.slice(0, TOOL_RESULT_LIMIT);
+  const head = summary ? `【摘要】${summary}\n` : '';
+  return `${head}${truncated}\n…（结果过长，已截断；完整明细已在界面对作者展示）`;
+}
+
 /**
  * 判定缓冲区里的 action 取值。
  *
@@ -44,7 +66,7 @@ function detectAction(text) {
 /**
  * 跑一轮模型调用。
  *
- * @returns {Promise<{raw: string, parsed: Object|null, finishReason: string, reasoning: string}>}
+ * @returns {Promise<{raw: string, parsed: Object|null, finishReason: string, reasoning: string, usage: Object|null}>}
  */
 async function runRound({ provider, messages, options, onToken }) {
   let raw = '';         // 完整原文，用于解析
@@ -98,7 +120,13 @@ async function runRound({ provider, messages, options, onToken }) {
     emit(buffer);
   }
 
-  return { raw: rawText, parsed, finishReason: result.finishReason || '', reasoning };
+  return {
+    raw: rawText,
+    parsed,
+    finishReason: result.finishReason || '',
+    reasoning,
+    usage: result.usage || null,
+  };
 }
 
 /**
@@ -112,9 +140,9 @@ async function runRound({ provider, messages, options, onToken }) {
  * @param {Function} [params.onToolStart] 技能开始执行
  * @param {Function} [params.onToolDone] 技能执行结束
  * @param {Function} [params.onToolError] 技能失败
- * @param {Object} [params.ctx] 技能的执行上下文（userId/workId/provider/...）
+ * @param {Object} [params.ctx] 技能的执行上下文（userId/workId/provider/signal/...）
  * @param {number} [params.maxSteps]
- * @returns {Promise<{parsed: Object|null, raw: string, toolCalls: Array}>}
+ * @returns {Promise<{parsed: Object|null, raw: string, toolCalls: Array, stopReason: string, usage: Object|null}>}
  */
 async function runAgentLoop(params) {
   const {
@@ -131,9 +159,35 @@ async function runAgentLoop(params) {
 
   const convo = [...messages];
   const toolCalls = [];
+  const signal = options.signal || ctx.signal || null;
+
+  // 各轮用量累加。provider 不报用量时保持 null，别凭空造一个 0。
+  const usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let usageReported = false;
+
+  const accumulateUsage = (u) => {
+    if (!u) return;
+    usageReported = true;
+    usage.promptTokens += u.prompt_tokens || 0;
+    usage.completionTokens += u.completion_tokens || 0;
+    usage.totalTokens += u.total_tokens || 0;
+  };
 
   for (let step = 0; step < maxSteps; step++) {
-    const round = await runRound({ provider, messages: convo, options, onToken });
+    if (signal && signal.aborted) {
+      const err = new Error('这次请求已取消');
+      err.code = 'AI_ABORTED';
+      err.stopReason = 'aborted';
+      throw err;
+    }
+
+    const round = await runRound({
+      provider,
+      messages: convo,
+      options: signal && !options.signal ? { ...options, signal } : options,
+      onToken,
+    });
+    accumulateUsage(round.usage);
 
     const isToolCall = round.parsed && round.parsed.action === 'call_tool';
 
@@ -144,6 +198,8 @@ async function runAgentLoop(params) {
         finishReason: round.finishReason,
         reasoning: round.reasoning,
         toolCalls,
+        stopReason: 'final',
+        usage: usageReported ? usage : null,
       };
     }
 
@@ -174,11 +230,12 @@ async function runAgentLoop(params) {
         degraded: !!result.degraded,
       });
       onToolDone({ tool: toolName, result });
-      // 喂回：assistant 侧保留模型原始 JSON 原文，user 侧放工具结果
+      // 喂回：assistant 侧保留模型原始 JSON 原文，user 侧放工具结果。
+      // 工具结果要截断——完整明细是给界面看的，整段回灌只会挤占下一轮的上下文。
       convo.push({ role: 'assistant', content: round.raw });
       convo.push({
         role: 'user',
-        content: `【工具结果：${result.label || toolName}】\n${JSON.stringify(result.findings || result)}`,
+        content: `【工具结果：${result.label || toolName}】\n${serializeToolResult(result)}`,
       });
     } else {
       toolCalls.push({
@@ -202,6 +259,7 @@ async function runAgentLoop(params) {
   // 抛出去由路由层转成可见错误并清理孤立消息。
   const err = new Error('模型反复调用技能但没有拿到结果，这次没能查完。请换个说法再问一次。');
   err.code = 'MAX_STEPS';
+  err.stopReason = 'max_steps';
   throw err;
 }
 

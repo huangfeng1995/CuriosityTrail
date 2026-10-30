@@ -3,13 +3,13 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { setupTempEnv } = require('./helpers');
+const { setupTempEnv, createUser } = require('./helpers');
 
 // 必须在 require 业务模块之前设好 DATA_DIR
 const env = setupTempEnv();
 
 const { runAgentLoop, detectAction } = require('../services/agent/loop');
-const { ready, close } = require('../database');
+const { ready, close, run } = require('../database');
 const skills = require('../services/skills');
 const { assembleContext } = require('../services/context');
 
@@ -222,6 +222,120 @@ test('技能清单注入到 system prompt 末尾，行内操作不注入', async
   } finally {
     unregister();
   }
+});
+
+test('正常结束时标记 stopReason=final，并累计各轮 usage', async () => {
+  const result = await runAgentLoop({
+    provider: {
+      async chatStream({ onToken }) {
+        const content = '{"action":"comment","content":"好"}';
+        onToken(content);
+        return {
+          content,
+          reasoning: '',
+          finishReason: 'stop',
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        };
+      },
+    },
+    messages: [{ role: 'user', content: 'hi' }],
+    onToken: () => {},
+  });
+
+  assert.strictEqual(result.stopReason, 'final');
+  assert.deepStrictEqual(result.usage, {
+    promptTokens: 10,
+    completionTokens: 5,
+    totalTokens: 15,
+  });
+});
+
+test('技能参数不合规时直接返回错误，不执行技能', async () => {
+  let called = 0;
+  const unregister = skills.register({
+    name: 'param_skill',
+    label: '参数校验技能',
+    description: '测试用：要求必填的 count。',
+    parameters: {
+      type: 'object',
+      properties: { count: { type: 'number' } },
+      required: ['count'],
+    },
+    run: async () => {
+      called += 1;
+      return { label: '参数校验技能', summary: '', detail: [], findings: [] };
+    },
+  });
+
+  try {
+    const missing = await skills.runSkill('param_skill', {}, {});
+    assert.strictEqual(missing.ok, false);
+    assert.match(missing.error, /count/);
+
+    const wrongType = await skills.runSkill('param_skill', { count: { n: 1 } }, {});
+    assert.strictEqual(wrongType.ok, false);
+
+    // 模型常把数字写成字符串，这种要放行
+    const asString = await skills.runSkill('param_skill', { count: '3' }, {});
+    assert.strictEqual(asString.ok, true);
+    assert.strictEqual(called, 1, '只有合规的那次真正执行了技能');
+  } finally {
+    unregister();
+  }
+});
+
+test('技能超时被转成工具错误，不拖住整轮对话', async () => {
+  const unregister = skills.register({
+    name: 'slow_skill',
+    label: '慢技能',
+    description: '测试用：永远不返回。',
+    parameters: { type: 'object', properties: {}, required: [] },
+    run: () => new Promise(() => {}),
+  });
+
+  try {
+    const outcome = await skills.runSkill('slow_skill', {}, { timeoutMs: 30 });
+    assert.strictEqual(outcome.ok, false);
+    assert.match(outcome.error, /超时/);
+  } finally {
+    unregister();
+  }
+});
+
+test('一致性核对技能：能报出未登场的人物', async () => {
+  await ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-consistency';
+
+  await run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, ?, '', '', '', 0, ?, ?)`,
+    [workId, userId, '一致性测试', now, now]
+  );
+  await run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, ?, 1, '', 'draft', ?, '[]', '', 0, ?, ?)`,
+    ['ch-consistency', workId, '第一章', '正文里只提到陈默。', now, now]
+  );
+  await run(
+    `INSERT INTO characters (id, work_id, name, aliases, role, identity, personality, speech, goal, arc, relations, notes, created_at, modified_at)
+     VALUES (?, ?, ?, '', '', '', '', '', '', '', '', '', ?, ?)`,
+    ['char-consistency', workId, '从未露面的人', now, now]
+  );
+
+  const outcome = await skills.runSkill('check_consistency', {}, { userId, workId });
+  assert.strictEqual(outcome.ok, true);
+  assert.match(outcome.result.summary, /1 处/);
+  assert.ok(
+    outcome.result.findings.some((f) => f.type === 'unused_character'),
+    '未登场的人物要被报出来'
+  );
+
+  // 别人的作品查不到
+  const other = await skills.runSkill('check_consistency', {}, { userId: 'someone-else', workId });
+  assert.match(other.result.summary, /没有找到要查的作品/);
 });
 
 // 库初始化要放在 before 钩子里，不能塞进某个测试体。

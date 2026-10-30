@@ -63,6 +63,12 @@ class DeepSeekProvider extends Provider {
       body.response_format = { type: 'json_object' };
     }
 
+    // 流式响应默认不带用量统计。显式要求后，最后一个 chunk 会带 usage——
+    // 没有它，每次流式对话的 token 消耗就只能靠猜。
+    if (body.stream) {
+      body.stream_options = { include_usage: true };
+    }
+
     return body;
   }
 
@@ -131,8 +137,13 @@ class DeepSeekProvider extends Provider {
     let content = '';
     let reasoning = '';
     let finishReason = '';
+    let usage = null;
 
     await readSseStream(response, (event) => {
+      // 带 include_usage 时，最后一个 chunk 的 choices 是空数组、
+      // 只带 usage 字段——不单独接住它，这次调用的 token 数就丢了。
+      if (event.usage) usage = event.usage;
+
       const choice = event.choices && event.choices[0];
       if (!choice) return;
 
@@ -156,7 +167,7 @@ class DeepSeekProvider extends Provider {
       }
     });
 
-    return { content, reasoning, finishReason };
+    return { content, reasoning, finishReason, usage };
   }
 
   async checkStatus() {

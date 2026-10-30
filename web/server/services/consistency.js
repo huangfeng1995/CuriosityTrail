@@ -17,7 +17,20 @@
  */
 
 const { all, get } = require('../database');
-const { nameVariants } = require('./context');
+
+/**
+ * 取人物的所有可识别名称。
+ *
+ * 这里延迟 require：context.js 装配上下文时会加载技能注册表，
+ * 技能注册表又加载本模块（checkConsistency 技能）——形成循环依赖。
+ * 在顶层解构 nameVariants 会拿到尚未填充的 exports，运行时就是 undefined。
+ *
+ * @param {Object} character
+ * @returns {Array<string>}
+ */
+function nameVariants(character) {
+  return require('./context').nameVariants(character);
+}
 
 /**
  * 章节状态白名单

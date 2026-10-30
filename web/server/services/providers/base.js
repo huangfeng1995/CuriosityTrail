@@ -114,19 +114,60 @@ async function readNdjsonStream(response, onEvent) {
   }
 }
 
+/** 单次请求默认超时（毫秒）。流式长回答也不能无限挂着 */
+const DEFAULT_TIMEOUT_MS = 60000;
+
+/**
+ * 把取消信号 / 超时信号组合起来，并转成能直接显示给作者的中文错误。
+ *
+ * @param {AbortSignal} signal 已触发的组合信号
+ * @param {number} timeoutMs
+ * @returns {Error}
+ */
+function makeAbortError(signal, timeoutMs) {
+  const reason = signal && signal.reason;
+  if (reason && reason.name === 'TimeoutError') {
+    const err = new Error(`AI 请求超时（${Math.round(timeoutMs / 1000)} 秒未完成）`);
+    err.code = 'AI_TIMEOUT';
+    return err;
+  }
+  const err = new Error('这次请求已取消');
+  err.code = 'AI_ABORTED';
+  return err;
+}
+
 /**
  * 带重试的 fetch。5xx 与 429 指数退避重试，4xx 直接抛出。
+ *
+ * 超时与取消：
+ *   - 外部传入的 signal（客户端断开）原样透传，触发后立刻抛错、**不重试**；
+ *   - 未指定 timeoutMs 时给一个 60s 的整体上限，避免请求永久挂起。
  *
  * @param {string} url
  * @param {Object} init
  * @param {number} [retries]
+ * @param {number} [timeoutMs] 0/负数表示不设超时
  */
-async function fetchWithRetry(url, init = {}, retries = 3) {
+async function fetchWithRetry(url, init = {}, retries = 3, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const outerSignal = init.signal || null;
+  const signals = [];
+  if (outerSignal) signals.push(outerSignal);
+  if (timeoutMs > 0) signals.push(AbortSignal.timeout(timeoutMs));
+
+  const effectiveSignal =
+    signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+  const effectiveInit = effectiveSignal ? { ...init, signal: effectiveSignal } : init;
+
   let lastError = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    // 取消或超时后再重试没有意义，直接抛出去让上层收尾。
+    if (effectiveSignal && effectiveSignal.aborted) {
+      throw makeAbortError(effectiveSignal, timeoutMs);
+    }
+
     try {
-      const response = await fetch(url, init);
+      const response = await fetch(url, effectiveInit);
       if (response.ok) return response;
 
       if (response.status >= 400 && response.status < 500 && response.status !== 429) {
@@ -139,6 +180,9 @@ async function fetchWithRetry(url, init = {}, retries = 3) {
 
       lastError = new Error(`HTTP ${response.status}`);
     } catch (err) {
+      if (effectiveSignal && effectiveSignal.aborted) {
+        throw makeAbortError(effectiveSignal, timeoutMs);
+      }
       if (err.status && err.status < 500 && err.status !== 429) throw err;
       lastError = err;
     }
