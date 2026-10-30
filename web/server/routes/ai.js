@@ -747,10 +747,10 @@ router.post('/chat', async (req, res) => {
     // 没有这个信号，作者从发问到看到任何反馈之间只有一个不动的空占位。
     send({ type: 'agent_thinking', label: '正在判断需要查什么' });
 
-    const runChat = () =>
+    const runChat = (messagesForRound = chatMessages) =>
       runAgentLoop({
         provider,
-        messages: chatMessages,
+        messages: messagesForRound,
         options: {
           temperature: role?.temperature,
           // 角色模型只在 DeepSeek 下生效——别的 provider 用的是自己的模型名，
@@ -823,7 +823,21 @@ router.post('/chat', async (req, res) => {
         })
       );
 
-      finalResult = await runChat();
+      // 重发时在最后一条消息后补一句提醒。
+      // 同样的提示词原样再要一次，很可能得到同样的空白——
+      // 明确告诉模型"上一轮是空的、请直接给 JSON"，才有机会跳出这个状态。
+      const retryMessages = [...chatMessages];
+      const lastIndex = retryMessages.length - 1;
+      if (lastIndex >= 0) {
+        retryMessages[lastIndex] = {
+          ...retryMessages[lastIndex],
+          content:
+            String(retryMessages[lastIndex].content || '') +
+            '\n\n（上一次没有返回任何内容。请直接按约定 JSON 回答，把正文写进 content 字段。）',
+        };
+      }
+
+      finalResult = await runChat(retryMessages);
     }
 
     // 结构化运行记录：一次对话一行，方便排查"为什么慢 / 为什么停"。
@@ -891,6 +905,34 @@ router.post('/chat', async (req, res) => {
           reasoning
         );
       }
+
+      // 这一轮到底收到了什么，必须留下证据。
+      // 只记"空回复"没法定位：可能是真的一字未收、可能是一堆空白字符、
+      // 也可能是 JSON 解析成功但字段名不对。三条路的修法完全不同。
+      // 只截前 40 个字符，够看出字符种类，又不至于把正文写进日志。
+      const rawForLog = String(rawText || '');
+      const headCodes = Array.from(rawForLog.slice(0, 40))
+        .map((c) => c.codePointAt(0))
+        .join(',');
+      console.log(
+        JSON.stringify({
+          event: 'ai_empty_final',
+          traceId,
+          userId: req.userId,
+          role: roleKey,
+          finishReason: finalResult.finishReason || '',
+          retried: isEmptyReply,
+          rawLength: rawForLog.length,
+          trimmedLength: rawForLog.trim().length,
+          parsed: Boolean(parsed),
+          parsedKeys: parsed ? Object.keys(parsed).slice(0, 10) : [],
+          contentLength: String(payload.content || '').length,
+          reasonLength: String(payload.reason || '').length,
+          reasoningLength: reasoning.length,
+          headCodes,
+          usage: finalResult.usage,
+        })
+      );
 
       // 重试过一次还是空：告诉作者这不是他的问题，也省得他反复点。
       // 不说明的话，"请再试一次"等于让他继续撞同一堵墙。
