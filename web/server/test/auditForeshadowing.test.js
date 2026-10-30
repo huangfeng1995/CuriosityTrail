@@ -9,7 +9,7 @@ const env = setupTempEnv();
 
 const { ready, close, run } = require('../database');
 const skill = require('../services/skills/auditForeshadowing');
-const { extractKeywords, recallChapters, splitByFirstAppearance, STATUS } = skill._internal;
+const { extractKeywords, recallChapters, splitByFirstAppearance, STATUS, JUDGE_FAILED } = skill._internal;
 
 test.before(async () => {
   await ready;
@@ -62,6 +62,20 @@ test('能分出首次出场章与后续再次出场章', () => {
   assert.strictEqual(first.chapter.id, 'ch1', '卡片挂着的章就是埋下点');
   assert.strictEqual(later.length, 1);
   assert.strictEqual(later[0].chapter.id, 'ch2');
+});
+
+test('卡片没挂章节时，首次出场章取章节序号最早的那一章', () => {
+  // hits 的排序主键是命中关键词数，不是章节顺序：
+  // 末位恰恰是命中最少的一章，拿它当"最早"是错的。
+  const card = { id: 'c1', title: '铜钥匙', content: '' };
+  const hits = [
+    { chapter: { id: 'ch7', seq: 7 }, hitWords: ['铜钥匙', '铁盒'] },
+    { chapter: { id: 'ch1', seq: 1 }, hitWords: ['铜钥匙'] },
+  ];
+  const { first, later } = splitByFirstAppearance(card, hits);
+  assert.strictEqual(first.chapter.id, 'ch1', '不管命中多少，序号最早的就是埋下点');
+  assert.strictEqual(later.length, 1);
+  assert.strictEqual(later[0].chapter.id, 'ch7');
 });
 
 // ---------------------------------------------------------------------------
@@ -194,4 +208,57 @@ test('降级 provider 下结果带 degraded 标记', async () => {
 
   assert.strictEqual(result.degraded, true, '降级必须标出来，不能静默降级');
   assert.match(result.summary, /本地模型/, '摘要里要提示可信度有限');
+});
+
+test('模型没给出可解析的判定时标为「未能判定」，不得冒充「未定位到原文」', async () => {
+  // 模型这次被 1200 token 截断，JSON 是残缺的。
+  // 原来的实现会把整批卡片都填成「未定位到原文」——
+  // 作者读到的是"全书没有相关段落"这个事实错误，
+  // 而真实原因只是模型没写完。两者必须分开。
+  const { userId, workId } = await seedWork({
+    cards: [{ id: 'c1', title: '铜钥匙', content: '' }],
+    chapters: [{ id: 'ch1', title: '第三章', seq: 3, content: '陈默把铜钥匙收进铁盒。' }],
+  });
+
+  const provider = {
+    async chat() {
+      return { content: '{"results":[{"id":"', finishReason: 'length' };
+    },
+  };
+
+  const result = await skill.run({}, { userId, workId, provider });
+  const finding = result.findings.find((f) => f.card === '铜钥匙');
+
+  assert.strictEqual(finding.status, JUDGE_FAILED, '没判出来就是没判出来，不能落成结论');
+  assert.notStrictEqual(finding.status, STATUS.NOT_FOUND, '不得冒充「未定位到原文」');
+  assert.match(finding.evidence, /截断/, '要说明是截断导致的，作者才知道该怎么办');
+  assert.match(result.summary, /未能判定/, '摘要里要让作者看见有几条没判出来');
+});
+
+test('模型漏掉某张卡时，那张卡标为「未能判定」而不是「未定位到原文」', async () => {
+  const { userId, workId, tag } = await seedWork({
+    cards: [
+      { id: 'c1', title: '铜钥匙', content: '' },
+      { id: 'c2', title: '铁盒', content: '' },
+    ],
+    chapters: [{ id: 'ch1', title: '第三章', seq: 3, content: '陈默把铜钥匙收进铁盒。' }],
+  });
+
+  // 只回了第一张卡的判定，第二张被漏掉
+  const provider = {
+    async chat() {
+      return {
+        content: JSON.stringify({
+          results: [{ id: `c1_${tag}`, status: STATUS.RECOVERED, evidence: '证据' }],
+        }),
+        finishReason: 'stop',
+      };
+    },
+  };
+
+  const result = await skill.run({}, { userId, workId, provider });
+  const missed = result.findings.find((f) => f.id === `c2_${tag}`);
+
+  assert.strictEqual(missed.status, JUDGE_FAILED, '漏答的卡要标成未能判定');
+  assert.match(missed.evidence, /漏掉/, '要说明模型漏了这张卡');
 });
