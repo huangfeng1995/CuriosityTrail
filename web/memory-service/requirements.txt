@@ -1,9 +1,12 @@
 # 记忆服务 sidecar 的依赖。
 #
 # openviking 必须锁版本：它的写入语义（目录已存在会失败、向量记录层级、
-# filter DSL 支持范围）都随版本变化，sidecar 的实现是照着 0.1.12 的
+# filter DSL 支持范围）都随版本变化，sidecar 的实现是照着 0.2.11 的
 # 实测行为写的。升级前先跑一遍 web/memory-service 下的冒烟脚本。
-openviking==0.1.12
+#
+# 0.1.12 已从 PyPI 下架且只有 macOS 轮子；0.2.11 是第一个既有 stable 版本号、
+# 又提供 cp310-abi3-manylinux_2_31_x86_64 轮子的版本，且自带 AGFS 原生库。
+openviking==0.2.11
 
 fastapi==0.109.0
 uvicorn==0.27.0

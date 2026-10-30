@@ -140,10 +140,11 @@ async def delete(payload: DeleteRequest) -> Dict[str, Any]:
 if __name__ == "__main__":
     import uvicorn
 
-    # 只监听回环地址：这个服务不带鉴权，绝不能暴露到网络上。
+    # 默认只监听回环地址：这个服务不带鉴权，绝不能暴露到网络上。
+    # 容器里由 VIKING_HOST=0.0.0.0 放开，且不发布端口，只有 app 容器能访问。
     uvicorn.run(
         app,
-        host="127.0.0.1",
+        host=os.environ.get("VIKING_HOST", "127.0.0.1"),
         port=int(os.environ.get("VIKING_PORT", "8019")),
         workers=1,
     )

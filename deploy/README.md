@@ -257,30 +257,60 @@ ss -tlnp | grep -E ':80|:443'
 
 ---
 
-## 九、长期记忆（viking）线上为什么是关的
+## 九、长期记忆（viking）怎么开、怎么关
 
-**现象**：写作、AI 对话都正常，但侧边栏的「长期记忆」不生效，回忆不出前文。
+记忆服务是一个 Python sidecar（`web/memory-service`），现在钉 `openviking==0.2.11`
+（Linux 可装的稳定版，轮子自带 AGFS 原生库，不再需要 8018 端口）。
+它和 app 一起由 `docker compose` 管理，容器名 `curiosity-trail-memory`。
 
-**原因**：记忆服务是一个 Python sidecar（`web/memory-service`），它钉死了
-`openviking==0.1.12`。这个版本只有 macOS 构建（本机装的是
-`cp39-macosx_11_0_universal2` 轮子，里面的 `openviking/bin/agfs-server`
-是 arm64 的 Mach-O 二进制），**Linux 服务器上装不起来**。
-PyPI 上能下载的 openviking 版本（0.2.x 起）都要求 Python ≥ 3.10，
-而且 sidecar 的实现是照 0.1.12 的实测行为写的，换版本必须重新验证。
+### 9.1 两个独立的环境文件
 
-所以本轮的部署把 `MEMORY_ENABLED` 显式设成 `false`：
+| 文件 | 给谁用 | 内容 |
+| --- | --- | --- |
+| `deploy/.env.production` | app 容器 | `MEMORY_ENABLED`（总开关） |
+| `deploy/.env.memory` | memory 容器 | `ARK_API_KEY` 等 embedding 凭据 |
 
-```bash
-grep MEMORY_ENABLED /opt/curiosity-trail/deploy/.env.production
-# MEMORY_ENABLED=false
-```
+`ARK_API_KEY` 只给 sidecar，app 容器读不到。两个文件都由 `deploy.sh` 生成（权限 600），
+都不进版本库。
 
-关掉之后记忆层直接短路，不会每次请求都去连一个不存在的 sidecar，
-也不会在索引台账里堆失败记录。**本地开发不受影响**（本机 sidecar 照常跑在 8019）。
-
-**什么时候能打开**：sidecar 迁到 Linux 可安装的 openviking 版本并通过冒烟测试后，
-把 `deploy/.env.production` 里的这一行改成 `true`，然后：
+### 9.2 首次开启（三步）
 
 ```bash
-cd /opt/curiosity-trail && docker compose up -d
+cd /opt/curiosity-trail
+
+# 1) 填 embedding 凭据（deploy.sh 生成时留空）
+sudo sed -i 's|^ARK_API_KEY=.*|ARK_API_KEY=你的key|' deploy/.env.memory
+
+# 2) 冒烟测试（用临时目录，不碰生产数据），13 项应全 PASS
+docker compose run --rm -e VIKING_DATA_DIR=/tmp/viking-smoke memory python smoke_test.py
+
+# 3) 打开总开关并重启
+sed -i 's|^MEMORY_ENABLED=.*|MEMORY_ENABLED=true|' deploy/.env.production
+docker compose up -d
+curl -s http://127.0.0.1:8080/api/memory/status
 ```
+
+`/api/memory/status` 显示已启用、sidecar 可用即完成。
+
+### 9.3 关掉（回退）
+
+记忆层是加分项，出问题随时关，不用动代码：
+
+```bash
+cd /opt/curiosity-trail
+sed -i 's|^MEMORY_ENABLED=.*|MEMORY_ENABLED=false|' deploy/.env.production
+docker compose up -d app
+```
+
+之后召回直接短路（返回 degraded 空结果），写作与对话不受影响；
+`data/viking` 是派生数据，留着下次打开直接复用，删掉也不会影响稿件。
+
+### 9.4 注意事项
+
+- `memory` 服务**不发布端口**，只在 compose 内网被 app 访问（它没有鉴权）。
+- `app` 不 `depends_on` memory：sidecar 挂了 app 必须照常起。
+- 构建 `memory` 镜像较重，2 核 / 1.7G 的机器上失败不影响 app 上线
+  （`deploy.sh` 会跳过 memory 并提示）。
+- 老服务器的 `.env.production` 里如果没有 `MEMORY_ENABLED`，`deploy.sh` 会补一行
+  `false`，避免误连不存在的 sidecar；确认冒烟通过后再手动改 `true`。
+- 排查：`docker compose logs --tail=100 memory`。

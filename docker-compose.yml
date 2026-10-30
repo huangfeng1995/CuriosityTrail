@@ -38,6 +38,9 @@ services:
       # 不配这一行的话备份只留在 data/ 里（与数据库同盘，不算异地）。
       BACKUP_OFFSITE_DIR: /app/offsite
       BACKUP_OFFSITE_KEEP: "30"
+      # 记忆服务 sidecar 的地址。容器内 127.0.0.1 是 app 自己，
+      # 必须走 compose 的服务名。这里显式覆盖 .env.production 里的值。
+      VIKING_BASE_URL: http://memory:8019
     env_file:
       # 存放 JWT_SECRET / 阿里云短信 / DEEPSEEK_API_KEY，不进版本库。
       # required: false —— 文件不存在时不报错，容器照常起（只是登录验证码和 AI key 都没有）。
@@ -54,6 +57,40 @@ services:
       - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # viking 长期记忆 sidecar（FastAPI + openviking）。
+  #
+  # 三条约束：
+  # 1. **不发布端口**。这个服务没有鉴权，只在 compose 内网里被 app 访问。
+  # 2. app 不 depends_on 它。记忆是加分项，sidecar 起不来也必须让 app 正常服务。
+  # 3. 数据是派生数据（可重建），单独放 ./data/viking，不与 SQLite 混在一起。
+  memory:
+    build:
+      context: .
+      dockerfile: web/memory-service/Dockerfile
+    image: curiosity-trail-memory:latest
+    container_name: curiosity-trail-memory
+    restart: unless-stopped
+    env_file:
+      # ARK_API_KEY 等只给 sidecar，不进 app 容器。deploy.sh 会生成。
+      - path: deploy/.env.memory
+        required: false
+    environment:
+      VIKING_HOST: 0.0.0.0
+      VIKING_DATA_DIR: /app/data/viking
+    volumes:
+      - ./data/viking:/app/data/viking
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8019/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3

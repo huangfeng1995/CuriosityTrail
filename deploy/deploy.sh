@@ -145,10 +145,9 @@ SMS_FIXED_PHONE=
 # 没有它 AI 对话不可用，会回退到本地 Ollama。
 DEEPSEEK_API_KEY=
 
-# 长期记忆（viking sidecar）：线上默认关闭。
-# sidecar 依赖的 openviking==0.1.12 只有 macOS arm64 构建，
-# Linux 服务器装不起来。本轮先关，等 sidecar 迁到 Linux 可安装版本后改回 true。
-MEMORY_ENABLED=false
+# 长期记忆（viking sidecar）。sidecar 已迁到 openviking 0.2.11（Linux 可装），
+# 默认开启；sidecar 起不来时 Node 侧自动降级，对话照常。
+MEMORY_ENABLED=true
 EOF
 	chmod 600 "$ENV_FILE"
 	echo "    已生成 $ENV_FILE"
@@ -158,20 +157,67 @@ else
 fi
 
 # 老服务器上的 .env.production 是之前生成的，没有 MEMORY_ENABLED。
-# 补一行默认关闭，保证这次部署不会去连不存在的 sidecar。
+# 补一行默认关闭：老机器的 /opt/curiosity-trail/data 未必有 sidecar 依赖，
+# 先别自动打开。确认冒烟测试通过后手动改成 true 即可。
 # 已经有这个键就不动——用户主动改过的值不能被覆盖。
 if ! grep -q '^MEMORY_ENABLED=' "$ENV_FILE"; then
 	echo 'MEMORY_ENABLED=false' >> "$ENV_FILE"
 fi
 
+# 记忆服务自己的环境文件：ARK key 只给 sidecar，绝不进 app 容器。
+MEM_FILE="$INSTALL_DIR/deploy/.env.memory"
+if [[ ! -f "$MEM_FILE" ]]; then
+	log "生成记忆服务环境变量文件"
+	# 复用 app 环境文件里已有的 ARK key（通常没有，那就留空待填）
+	ark=$(grep -m1 '^ARK_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
+	cat > "$MEM_FILE" <<EOF
+# 自动生成于 $(date '+%Y-%m-%d %H:%M:%S')
+# 只给记忆服务容器使用，不进 app 容器，也不进版本库。
+
+# 火山方舟 embedding 凭据（vision 模型，唯一可用的一类）
+ARK_API_KEY=${ark}
+ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+ARK_EMBEDDING_MODEL=doubao-embedding-vision-251215
+ARK_EMBEDDING_INPUT=multimodal
+ARK_EMBEDDING_DIM=2048
+
+# 索引数据目录（派生数据，可随时重建）
+VIKING_DATA_DIR=/app/data/viking
+VIKING_PORT=8019
+VIKING_EMBED_TIMEOUT_SECONDS=10
+VIKING_INDEX_TIMEOUT_SECONDS=8
+VIKING_LOG_LEVEL=WARNING
+EOF
+	chmod 600 "$MEM_FILE"
+	echo "    已生成 $MEM_FILE"
+	if [[ -z "$ark" ]]; then
+		warn "记忆服务还缺 ARK_API_KEY：填进 $MEM_FILE 后 docker compose up -d memory。"
+		warn "在此之前记忆层不可用（对话、写作不受影响）"
+	fi
+else
+	log "记忆服务环境变量文件已存在，保留原值"
+fi
+
 # ---------------------------------------------------------------------------
 # 4. 构建并启动
 # ---------------------------------------------------------------------------
-log "构建镜像（首次约 3-8 分钟，取决于服务器到 npm 源的速度）"
-docker compose build
+log "构建 app 镜像（首次约 3-8 分钟，取决于服务器到 npm 源的速度）"
+docker compose build app
+
+# 记忆服务单独构建：openviking 的依赖较重，2 核 / 1.7G 的机器上有可能失败。
+# 它失败了不能连累 app 上线，所以单独 try 一次，只做降级提示。
+memory_ok=1
+log "构建记忆服务镜像"
+docker compose build memory || memory_ok=0
+if [[ "$memory_ok" -eq 0 ]]; then
+	warn "记忆服务镜像构建失败：本次只启动 app，记忆层不可用（对话与写作不受影响）"
+fi
 
 log "启动服务"
-docker compose up -d
+docker compose up -d app
+if [[ "$memory_ok" -eq 1 ]]; then
+	docker compose up -d memory
+fi
 
 # ---------------------------------------------------------------------------
 # 5. Caddy
@@ -226,8 +272,9 @@ if [[ "$ok" -eq 1 ]]; then
 	echo "  2. 设置 DeepSeek key：sudo sed -i 's|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=sk-你的key|' $ENV_FILE && cd $INSTALL_DIR && docker compose up -d"
 	echo "  3. 认领老数据：cd $INSTALL_DIR && docker compose exec app node scripts/migrate-owner.js 你的手机号"
 	echo "  4. 配置异地备份：见 deploy/README.md"
-	echo "  5. 长期记忆（viking）线上默认关闭：sidecar 依赖的 openviking 0.1.12 没有 Linux 构建，"
-	echo "     等它迁到 Linux 可安装版本并通过冒烟测试后，把 $ENV_FILE 的 MEMORY_ENABLED 改为 true 再重启容器"
+	echo "  5. 长期记忆（viking）：sidecar 已迁到 openviking 0.2.11。先确认 $MEM_FILE 里 ARK_API_KEY 已填，"
+	echo "     跑一次冒烟（docker compose run --rm -e VIKING_DATA_DIR=/tmp/viking-smoke memory python smoke_test.py），"
+	echo "     通过后再把 $ENV_FILE 的 MEMORY_ENABLED 改为 true 并 docker compose up -d"
 else
 	die "服务没起来，看日志：cd $INSTALL_DIR && docker compose logs --tail=50 app"
 fi

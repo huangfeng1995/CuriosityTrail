@@ -3,17 +3,23 @@
 sidecar 只做四件事：写入、召回、删除、探活。它不认识 user/work 概念，
 URI 由 Node 侧拼装，这里只校验前缀格式并原样透传。
 
-实测约束（openviking 0.1.12，本机验证）：
-- AGFS 的 `port` 与 `url` 必须同时配置且一致，否则队列客户端会去连默认的 8080，
-  向量根本不会生成。
-- `add_resource` 对同一个 target 重复调用会报 "directory already exists"，
+实测约束（openviking 0.2.11）：
+- 0.1.12 已从 PyPI 下架且只有 macOS 轮子，Linux 上只能用 0.2.x。
+  0.2.11 轮子自带 `libagfsbinding.so`，默认 `agfs.mode=binding-client`，
+  不再拉起 AGFS 子进程，也就不需要 8018 端口。
+- 配置不再传给构造函数：先写全局单例 `OpenVikingConfigSingleton`，
+  再 `AsyncOpenViking()`。存储路径只有 `storage.workspace` 一个。
+- 底层向量库按账号分区，`search` / `remove_by_uri` 都要求 `ctx: RequestContext`。
+  这个 ctx 必须和 `LocalClient` 内部的一致（`the_default_user()` + `Role.USER`），
+  否则会落到另一个账号的后端，召回永远是空的。
+- `add_resource` 对同一个 to 重复调用会报 "directory already exists"，
   所以写入一律「先删后写」。
 - `rm()` 只回收文件，目录自身的向量记录要额外 `remove_by_uri` 才能清掉。
 - 查询必须走底层 `storage.search()` + prefix 过滤：上层 `find()` 不做硬前缀
   隔离，实测会跨用户泄漏。
 - 底层 `_score` 是稳定的原始余弦相似度，可直接当阈值用。
 - MarkdownParser 默认会按 token 数二次切分正文，切完叶子文件的 parent_uri 就变了，
-  台账对不上。启动时把切分阈值调大，并关掉 frontmatter 抽取。
+  台账对不上。切分阈值与 frontmatter 抽取都通过配置段 `markdown` 控制。
 """
 
 from __future__ import annotations
@@ -27,7 +33,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.async_client import AsyncOpenViking
-from openviking.utils.config import OpenVikingConfig
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
 # 记忆索引只允许落在用户命名空间下，防止 Node 侧拼错前缀写到公共区。
 URI_ROOT = "viking://resources/u/"
@@ -59,7 +67,7 @@ def sanitize_for_path(text: str) -> str:
 def split_uri(uri: str) -> Tuple[str, str]:
     """把请求 URI 拆成 (落盘基址, 文件名)。
 
-    `add_resource(target=base)` 会把临时文件名拼到 target 后面，所以只要临时
+    `add_resource(to=base)` 会把临时文件名拼到 base 后面，所以只要临时
     文件名用 URI 的末段，落盘结果就正好等于请求 URI。
     """
     if not uri or not uri.startswith(URI_ROOT):
@@ -86,6 +94,9 @@ class VikingStore:
         self._client: Optional[AsyncOpenViking] = None
         self._storage: Any = None
         self._embedder: Any = None
+        # 必须与 LocalClient 内部上下文一致（account/user/agent 全为 default），
+        # 否则向量库会路由到另一个账号分区。
+        self._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
         self._model: str = settings.get("model", "")
         self._dim: int = int(settings.get("dim", 2048))
         self._embed_timeout: float = float(settings.get("embedTimeoutSeconds", 10))
@@ -95,25 +106,24 @@ class VikingStore:
 
     async def start(self) -> None:
         data_dir = Path(self._settings["dataDir"]).resolve()
-        agfs_port = int(self._settings["agfsPort"])
 
-        config = OpenVikingConfig.from_dict(
-            {
-                "user": "curiositytrail",
+        # 0.2.x 的配置是全局单例，构造函数不再收 config 对象。
+        # workspace 是唯一落盘路径，agfs / vectordb 的 path 会被它覆盖。
+        OpenVikingConfigSingleton.initialize(
+            config_dict={
                 "storage": {
-                    # port 与 url 必须成对出现且一致，队列客户端只认 url。
+                    "workspace": str(data_dir),
+                    # binding-client 直接用轮子自带的 libagfsbinding.so，
+                    # 不拉起子进程，也就不占端口。
                     "agfs": {
                         "backend": "local",
-                        "path": str(data_dir / "agfs"),
-                        "port": agfs_port,
-                        "url": f"http://localhost:{agfs_port}",
+                        "mode": "binding-client",
                         "log_level": "warn",
                         "timeout": 30,
                     },
                     "vectordb": {
                         "backend": "local",
-                        "path": str(data_dir / "vectordb"),
-                        "name": "context",
+                        "dimension": self._dim,
                     },
                 },
                 "embedding": {
@@ -126,40 +136,36 @@ class VikingStore:
                         # 豆包 vision 模型只接受 multimodal 接口，且一次只返回一个向量。
                         # 禁止走批量接口，批量会因响应结构不同而失败。
                         "input": self._settings.get("inputType", "multimodal"),
-                    }
+                        "batch_size": 1,
+                    },
+                    # 不生成 L0/L1 摘要，向量只能来自正文本身。
+                    "text_source": "content_only",
+                    "max_input_chars": 4000,
                 },
-                # 不生成 L0/L1 摘要，省掉每块的额外 embedding 调用。
+                # 阻止 MarkdownParser 按 token 数二次切分正文：切完叶子文件的
+                # parent_uri 就变了，台账对不上。顺便关掉 frontmatter 抽取，
+                # 正文里出现 `---` 会被误当元数据吃掉。
+                "markdown": {
+                    "max_content_length": 2_000_000,
+                    "max_section_size": 100_000,
+                    "max_section_chars": 200_000,
+                    "extract_frontmatter": False,
+                },
                 "auto_generate_l0": False,
                 "auto_generate_l1": False,
                 # 记忆衰减会把老向量标成 inactive，索引是派生数据，宁可整体重建。
                 "enable_memory_decay": False,
-                "log_level": self._settings.get("logLevel", "WARNING"),
+                "log": {"level": self._settings.get("logLevel", "WARNING"), "output": "stdout"},
             }
         )
 
-        self._client = AsyncOpenViking(config=config)
+        self._client = AsyncOpenViking()
         await self._client.initialize()
 
-        self._storage = self._client.viking_fs._get_vector_store()
-        self._embedder = self._client.viking_fs._get_embedder()
-        self._relax_parser()
-
-    @staticmethod
-    def _relax_parser() -> None:
-        """阻止 MarkdownParser 把正文切成多块。
-
-        切分后一块正文会散落到子目录，叶子文件的 parent_uri 不再等于台账里的
-        viking_uri，召回结果就对不上源了。这里把阈值抬到实际不会触发的大小，
-        并关掉 frontmatter 抽取（正文里出现 `---` 会被误当元数据吃掉）。
-        """
-        from openviking.parse.registry import get_registry
-        from openviking.utils.config.parser_config import ParserConfig
-
-        parser = get_registry().get_parser("markdown")
-        if parser is None:
-            return
-        parser.config = ParserConfig(max_section_size=100000, max_content_length=2000000)
-        parser.extract_frontmatter = False
+        # viking_fs 属性在不同小版本间挪过位置，两条路径都试。
+        viking_fs = getattr(self._client, "viking_fs", None) or self._client._client.service.viking_fs
+        self._storage = viking_fs._get_vector_store()
+        self._embedder = viking_fs._get_embedder()
 
     async def stop(self) -> None:
         if self._client is not None:
@@ -184,7 +190,7 @@ class VikingStore:
             source = Path(tmp_dir) / f"{name}.md"
             source.write_text(text, encoding="utf-8")
             result = await self._client.add_resource(
-                str(source), target=base, wait=True, timeout=self._index_timeout
+                str(source), to=base, wait=True, timeout=self._index_timeout
             )
         except Exception as exc:  # noqa: BLE001 - 统一转成可重试错误
             raise VikingError(f"写入失败：{exc}") from exc
@@ -215,7 +221,6 @@ class VikingStore:
         vector = await self._embed(query)
 
         records = await self._storage.search(
-            collection="context",
             query_vector=vector,
             filter={
                 "op": "and",
@@ -225,6 +230,7 @@ class VikingStore:
                 ],
             },
             limit=limit,
+            ctx=self._ctx,
         )
 
         results: List[Dict[str, Any]] = []
@@ -290,7 +296,7 @@ class VikingStore:
                 raise VikingError(f"删除失败：{exc}") from exc
         if self._storage is not None:
             # rm 只回收文件，目录自身的向量记录要单独清。
-            await self._storage.remove_by_uri("context", uri)
+            await self._storage.remove_by_uri(uri, ctx=self._ctx)
 
 
 def load_settings(base_dir: Path) -> Dict[str, Any]:
@@ -310,7 +316,6 @@ def load_settings(base_dir: Path) -> Dict[str, Any]:
         "dim": int(os.environ.get("ARK_EMBEDDING_DIM", "2048")),
         "inputType": os.environ.get("ARK_EMBEDDING_INPUT", "multimodal"),
         "dataDir": str(data_dir),
-        "agfsPort": int(os.environ.get("VIKING_AGFS_PORT", "8018")),
         "embedTimeoutSeconds": float(os.environ.get("VIKING_EMBED_TIMEOUT_SECONDS", "10")),
         # 写入超时必须**短于** Node 侧的 VIKING_INDEX_TIMEOUT_MS（默认 10 秒）。
         #

@@ -62,26 +62,43 @@ data/viking/（豆包 embedding 向量）
 
 只做四件事，不理解业务：
 
-- `POST /index`：入参 `{ uri, text }`，把文本写入临时 md 文件后调用 `add_resource(path, target=uri)`，返回 `{ ok, rootUri }`。
+- `POST /index`：入参 `{ uri, text }`，把文本写入临时 md 文件后调用 `add_resource(path, to=uri)`，返回 `{ ok, rootUri }`。
 - `POST /query`：入参 `{ query, targetUri, limit, minScore }`，返回 `{ results: [{ uri, score, text }] }`。
 - `DELETE /index`：入参 `{ uri }`，删除对应资源，返回 `{ ok }`。
 - `GET /health`：返回 `{ ok, model, dim }`，供 Node 探活与启动校验。
 
-**实测修正（openviking 0.1.12，2026-10-28）**：
+**实测修正（openviking 0.1.12 → 0.2.11，2026-10-30）**：
 
-- `rootUri` **等于**请求的 `uri`，不多一层。做法是把 URI 拆成 base + 末段：`add_resource(target=base)` + 临时文件名 `{末段}.md`，落盘后的 `root_uri` 就正好等于请求 URI。
+0.1.12 已从 PyPI 下架且只有 macOS 轮子，Linux 服务器装不起来。sidecar 已迁到
+`openviking==0.2.11`（第一个既有稳定版号、又有 `cp310-abi3-manylinux_2_31_x86_64` 轮子的版本）。
+迁移后与 0.1.12 的差异如下，其余行为沿用下面的结论：
+
+| 位置 | 0.2.11 之后 |
+| --- | --- |
+| 配置 | 不再传给构造函数：先 `OpenVikingConfigSingleton.initialize(config_dict=...)`，再 `AsyncOpenViking()` |
+| 落盘路径 | 只有 `storage.workspace` 一个；`agfs.path` / `vectordb.path` 会被覆盖 |
+| AGFS | 默认 `mode="binding-client"`，用轮子自带的 `libagfsbinding.so`，**不再拉子进程、不再占端口**（`VIKING_AGFS_PORT` 已删除） |
+| 写入 | `add_resource(path, to=base, ...)`（`target=` 已改名） |
+| 召回 | `storage.search(query_vector, filter, limit, *, ctx=RequestContext)`，无 `collection=` |
+| 删除向量 | `storage.remove_by_uri(uri, *, ctx=RequestContext)` |
+| 向量库分区 | 按账号分区，`ctx` 必须与 `LocalClient` 内部一致（`the_default_user()` + `Role.USER`），否则召回永远为空 |
+| 切块阈值 / frontmatter | 由配置段 `markdown` 控制（`max_section_size`、`extract_frontmatter=False`），不再运行时改 parser |
+
+0.1.12 时代的实测约束（规则本身未变，规则里的 API 名已按上表替换）：
+
+- `rootUri` **等于**请求的 `uri`，不多一层。做法是把 URI 拆成 base + 末段：`add_resource(to=base)` + 临时文件名 `{末段}.md`，落盘后的 `root_uri` 就正好等于请求 URI。
 - 查询**不能**用上层 `find()`——它不做硬前缀隔离，实测会跨用户泄漏。必须走底层 `storage.search()` + prefix 过滤，`is_leaf=True` 也要一起过滤（目录记录本身也会被向量化）。
 - 底层 `_score` 是稳定的原始余弦相似度，可直接当阈值用。
-- `add_resource` 对同一 target 重复调用报 "directory already exists" → 写入一律**先删后写**。
+- `add_resource` 对同一 `to` 重复调用报 "directory already exists" → 写入一律**先删后写**。
 - `rm()` 只回收文件，目录自身的向量记录要额外 `remove_by_uri` 才能清掉。
-- MarkdownParser 默认按 token 二次切分正文 → 启动时把 `max_section_size` 抬到 100000，并关掉 `extract_frontmatter`。
-- AGFS 的 `port` 与 `url` 必须同时配置且一致，否则队列客户端连默认 8080，向量根本不生成。但 AGFS 独占端口（`_check_port_available()` 会 bind 测试），**不能跟 sidecar 的 `VIKING_PORT` 用同一个**。
-- ARK SDK 是**同步阻塞**的，multimodal 模式一次只返回一个向量 → 禁止调用批量接口。
+- MarkdownParser 默认按 token 二次切分正文 → 配置段 `markdown` 把 `max_section_size` 抬到 100000，并关掉 `extract_frontmatter`。
+- ARK SDK 是**同步阻塞**的，multimodal 模式一次只返回一个向量 → 禁止调用批量接口（`batch_size=1`）。
 
 约束：
 
 - 只监听 `127.0.0.1`，不对外暴露；Ark key 只存在于 sidecar 环境变量。
 - 固定 openviking 版本（`requirements.txt` 锁定），避免上游行为漂移。
+- 容器化后由 compose 的 `memory` 服务提供：不发布端口、只走内网、`VIKING_HOST=0.0.0.0` 仅容器内可见。
 - 不实现切块、不实现排序、不认识 user/work 概念，避免业务逻辑双份维护。
 
 ### 3.2 Node 记忆层职责
@@ -447,11 +464,11 @@ Python 侧只保留一个冒烟脚本（索引一段文本、查询、删除）�
 
 | 风险 | 影响 | 应对 |
 | --- | --- | --- |
-| openviking 0.1.12 打包/入口不稳定（缺 `openviking.server`） | sidecar 无法启动 | ✅ 已解决：锁版本；sidecar 自建，不依赖其 server 模块 |
-| `add_resource` 自行二次切块 | 我们拿不回自己的块粒度 | ✅ 已解决：启动时把 `max_section_size` 抬到 100000、关掉 `extract_frontmatter` |
+| openviking 版本不可得（0.1.12 已下架且只有 macOS 轮子） | Linux 服务器装不起来，记忆层静默失效 | ✅ 已解决：迁到 `openviking==0.2.11`（manylinux x86_64 轮子自带 AGFS 原生库） |
+| `add_resource` 自行二次切块 | 我们拿不回自己的块粒度 | ✅ 已解决：配置段 `markdown` 把 `max_section_size` 抬到 100000、`extract_frontmatter=False` |
 | 上层 `find()` 不做硬前缀隔离 | **跨用户泄漏** | ✅ 已解决：改走底层 `storage.search()` + prefix 过滤 + `is_leaf=True` |
-| AGFS `port`/`url` 不一致 | 向量根本不生成（静默失败） | ✅ 已解决：sidecar 启动时强制两者成对一致，并校验 |
-| AGFS 与 sidecar 抢同一个端口 | sidecar 起不来（`AGFS port is already in use`） | ✅ 已解决：AGFS 独占 8018，sidecar 走 8019；两个端口必须不同 |
+| 0.2.11 向量库按账号分区，`ctx` 与 `LocalClient` 不一致 | 召回永远为空 | ✅ 已解决：sidecar 用 `the_default_user()` + `Role.USER` 构造同一份 `RequestContext` |
+| AGFS 子进程独占端口 | sidecar 与其它服务抢 8018 | ✅ 已消除：0.2.11 默认 `binding-client`，不拉子进程、不占端口 |
 | 一根全局阈值卡不住所有类型 | 卡片噪音挤进来，或对话真命中被砍光 | ✅ 已解决：门槛分类型定（卡片 ×1.7），见 §6.2.1 |
 | 先按原始分过滤、后加权 | 卡片类在有机会参与加权之前就被砍掉 | ✅ 已解决：准入判断挪到 Node 侧、拿加权分做；sidecar 只粗筛 |
 | 当前章霸占召回名额 | 真正该想起的旧章节被挤出去 | ✅ 已解决：召回时排除当前章 |
@@ -482,6 +499,7 @@ Python 侧只保留一个冒烟脚本（索引一段文本、查询、删除）�
 | P1 基座 | ✅ | `web/memory-service/`（Python sidecar）、`web/server/services/memory/client.js` |
 | P2 索引 | ✅ | `database.js` schema v3、`indexer.js`、`chunker.js`、`uris.js`、`sources.js` |
 | P3 召回 | ✅ | `retriever.js`、`routes/memory.js`、`MemoryPanel.jsx`、`useMemoryPref.js` |
+| P4 Linux 化 | ✅ | `openviking==0.2.11`、`web/memory-service/Dockerfile`、compose `memory` 服务、`deploy/.env.memory` |
 | P4 对话记忆 | ✅ | `conversation.js`、`extractor.js`、`routes/ai.js` 接线、`POST /api/ai/messages/:messageId/remember`、前端「记入记忆」按钮 |
 | P5 调优 | ✅ | 分类型门槛 `TYPE_THRESHOLD_FACTORS`、加权后过滤、粗筛下限 `coarseFloor()`、排除当前章、`MEMORY_MIN_SCORE=0.24`；标定工具 `web/server/scripts/calibrate-memory.js`；部署说明 `web/memory-service/README.md` |
 | P5 评审修订 | ✅ | 9 条评审发现全部修完（见 §11.1.1）；重建走 `force` 并覆盖对话三层、元信息按用户分键、切块去掉重复尾巴、对话原文门槛系数 ×0.575、章节去重按章计、指令优先保留、`rebuildAll()`、超时三处对齐、抽取回调 await |

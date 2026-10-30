@@ -35,6 +35,10 @@ dist-local/
 
 # 生产环境变量（deploy/deploy.sh 自动生成，含登录密码与 JWT 密钥）
 deploy/.env.production
+# 记忆服务 sidecar 的 ARK key（同样由 deploy.sh 生成，不进版本库）
+deploy/.env.memory
+# 记忆服务的本地开发配置
+web/memory-service/.env
 
 # 异地备份暂存目录
 data-offsite/
