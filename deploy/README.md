@@ -313,4 +313,7 @@ docker compose up -d app
   （`deploy.sh` 会跳过 memory 并提示）。
 - 老服务器的 `.env.production` 里如果没有 `MEMORY_ENABLED`，`deploy.sh` 会补一行
   `false`，避免误连不存在的 sidecar；确认冒烟通过后再手动改 `true`。
-- 排查：`docker compose logs --tail=100 memory`。
+- 排查：`docker compose logs --tail=100 memory`。若出现
+  `PermissionError: '/app/data/viking/_system'`，是宿主机目录属主不对
+  （sidecar 容器内以 uid 10001 运行）：`chown -R 10001:10001 data/viking`。
+  `deploy.sh` 已自动处理，只有手工建目录时才会遇到。

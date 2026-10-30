@@ -115,6 +115,10 @@ fi
 
 mkdir -p data data-offsite
 
+# 记忆服务的落盘目录。容器内以 uid 10001 运行（见 web/memory-service/Dockerfile），
+# 宿主机目录若归 root，sidecar 启动会 PermissionError: '/app/data/viking/_system'。
+mkdir -p data/viking && chown -R 10001:10001 data/viking
+
 # ---------------------------------------------------------------------------
 # 3. 环境变量
 # ---------------------------------------------------------------------------

@@ -90,14 +90,19 @@
 
 ### T5.5 服务器验收
 
-- [ ] `docker compose build memory` 成功
-- [ ] `docker compose run --rm -e VIKING_DATA_DIR=/tmp/viking-smoke memory python smoke_test.py` 13 项全 PASS
-- [ ] `docker compose up -d memory app`，两服务 healthy
-- [ ] `deploy/.env.production` 改 `MEMORY_ENABLED=true`，`git pull` + 重建
-- [ ] `/api/memory/status` 显示已启用且 sidecar 可用；写一段正文后索引台账不再 `failed`
+- [x] `docker compose build memory` 成功
+- [x] `docker compose run --rm -e VIKING_DATA_DIR=/tmp/viking-smoke memory python smoke_test.py` 全部 PASS（17 项）
+- [x] `docker compose up -d memory app`，两服务 healthy
+- [x] `deploy/.env.production` 改 `MEMORY_ENABLED=true`，`git pull` + 重建
+- [x] `/api/memory/status` 显示已启用且 sidecar 可用；写一段正文后索引台账不再 `failed`
+
+> 冒烟暴露并修掉三个 0.2.11 专有坑：`xxhash.xxh64(str)` TypeError（猴补编码）、
+> `add_resource` 的 `to` 是精确 URI（改为 `to=uri`）、记录里没有 `is_leaf`
+> 字段（改用 `level == 2` 选正文叶子）。另修宿主目录属主（uid 10001）。
+> 生产实测：6 章全量重建 → `total 8 / indexed 8 / failed 0`，真实召回命中第 1 章正文。
 
 ### T5.6 回退与文档回写
 
-- [ ] 回退演练：`MEMORY_ENABLED=false` + `docker compose up -d app`，`/api/memory/status` 立即未启用
-- [ ] `docs/superpowers/specs/2026-10-27-viking-memory-design.md` 中「固定 0.1.12」改为「0.2.11 + binding-client」
-- [ ] `docs/superpowers/specs/2026-10-29-memory-production/tasks.md` 勾选完成项
+- [x] 回退演练：`MEMORY_ENABLED=false` + `docker compose up -d app`，`/api/memory/status` 立即未启用
+- [x] `docs/superpowers/specs/2026-10-27-viking-memory-design.md` 中「固定 0.1.12」改为「0.2.11 + binding-client」
+- [x] `docs/superpowers/specs/2026-10-29-memory-production/tasks.md` 勾选完成项

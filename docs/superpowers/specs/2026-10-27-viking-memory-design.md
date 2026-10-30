@@ -78,7 +78,7 @@ data/viking/（豆包 embedding 向量）
 | 配置 | 不再传给构造函数：先 `OpenVikingConfigSingleton.initialize(config_dict=...)`，再 `AsyncOpenViking()` |
 | 落盘路径 | 只有 `storage.workspace` 一个；`agfs.path` / `vectordb.path` 会被覆盖 |
 | AGFS | 默认 `mode="binding-client"`，用轮子自带的 `libagfsbinding.so`，**不再拉子进程、不再占端口**（`VIKING_AGFS_PORT` 已删除） |
-| 写入 | `add_resource(path, to=base, ...)`（`target=` 已改名） |
+| 写入 | `add_resource(path, to=uri, ...)`（`target=` 已改名；`to` 是精确目标 URI，必须不存在；父目录用 `parent=`） |
 | 召回 | `storage.search(query_vector, filter, limit, *, ctx=RequestContext)`，无 `collection=` |
 | 删除向量 | `storage.remove_by_uri(uri, *, ctx=RequestContext)` |
 | 向量库分区 | 按账号分区，`ctx` 必须与 `LocalClient` 内部一致（`the_default_user()` + `Role.USER`），否则召回永远为空 |
@@ -86,8 +86,9 @@ data/viking/（豆包 embedding 向量）
 
 0.1.12 时代的实测约束（规则本身未变，规则里的 API 名已按上表替换）：
 
-- `rootUri` **等于**请求的 `uri`，不多一层。做法是把 URI 拆成 base + 末段：`add_resource(to=base)` + 临时文件名 `{末段}.md`，落盘后的 `root_uri` 就正好等于请求 URI。
-- 查询**不能**用上层 `find()`——它不做硬前缀隔离，实测会跨用户泄漏。必须走底层 `storage.search()` + prefix 过滤，`is_leaf=True` 也要一起过滤（目录记录本身也会被向量化）。
+- `rootUri` **等于**请求的 `uri`，不多一层。0.2.x 直接把请求 URI 传给 `to=`（`to` 是精确目标 URI，不是父目录；传 base 会让 `rootUri` 少一层）。
+- 查询**不能**用上层 `find()`——它不做硬前缀隔离，实测会跨用户泄漏。必须走底层 `storage.search()` + prefix 过滤。向量记录里**没有 `is_leaf` 字段**（Context 有这个属性，但写库时丢了），正文叶子靠 `level == 2` 区分（目录的 L0/L1 摘要是 0/1）。
+- 0.2.11 的 `str_to_uint64` 把 str 直接传给 `xxhash.xxh64`（只收 bytes），本地向量库 upsert 每次 TypeError、召回恒为空。上游到 0.4.19 才修（那时已删 `async_client`），所以在 `store.py` 顶部猴补 `xxhash.xxh64`（str 自动 encode）。
 - 底层 `_score` 是稳定的原始余弦相似度，可直接当阈值用。
 - `add_resource` 对同一 `to` 重复调用报 "directory already exists" → 写入一律**先删后写**。
 - `rm()` 只回收文件，目录自身的向量记录要额外 `remove_by_uri` 才能清掉。
@@ -372,7 +373,7 @@ VIKING_LOG_LEVEL=INFO
 - **查询必须走底层 `storage.search()` + prefix 过滤**：上层 `find()` 不做硬前缀隔离，实测会跨用户泄漏。底层 `_score` 是稳定的原始余弦相似度，可直接当阈值用。
 - **MarkdownParser 默认会二次切分正文**（按 token），所以 sidecar 启动时把 `max_section_size` 抬到 100000 并关掉 `extract_frontmatter`——否则 Node 侧切好的块会被 viking 再次切碎，一块变多块，权重与去重全乱。
 - viking 会对传入文件做内部再切分（见上条）；base+stem 方案下 `root_uri` 精确等于请求 URI，台账记它、删除时用它。
-- **目录记录也被向量化**（`is_leaf=False`）→ 查询 filter 必须加 `{"op":"must","field":"is_leaf","conds":[True]}`。
+- **目录记录也被向量化**（L0/L1 摘要，`level` 为 0/1）→ 查询 filter 必须加 `{"op":"must","field":"level","conds":[2]}` 只要正文叶子（0.2.11 的记录里没有 `is_leaf` 字段）。
 - 未配置 VLM 时 abstract/overview 为空，不影响召回；正文由 sidecar 读取命中文件返回。
 
 ## 10. 测试策略
@@ -466,7 +467,7 @@ Python 侧只保留一个冒烟脚本（索引一段文本、查询、删除）�
 | --- | --- | --- |
 | openviking 版本不可得（0.1.12 已下架且只有 macOS 轮子） | Linux 服务器装不起来，记忆层静默失效 | ✅ 已解决：迁到 `openviking==0.2.11`（manylinux x86_64 轮子自带 AGFS 原生库） |
 | `add_resource` 自行二次切块 | 我们拿不回自己的块粒度 | ✅ 已解决：配置段 `markdown` 把 `max_section_size` 抬到 100000、`extract_frontmatter=False` |
-| 上层 `find()` 不做硬前缀隔离 | **跨用户泄漏** | ✅ 已解决：改走底层 `storage.search()` + prefix 过滤 + `is_leaf=True` |
+| 上层 `find()` 不做硬前缀隔离 | **跨用户泄漏** | ✅ 已解决：改走底层 `storage.search()` + prefix 过滤 + `level == 2`（只要正文叶子） |
 | 0.2.11 向量库按账号分区，`ctx` 与 `LocalClient` 不一致 | 召回永远为空 | ✅ 已解决：sidecar 用 `the_default_user()` + `Role.USER` 构造同一份 `RequestContext` |
 | AGFS 子进程独占端口 | sidecar 与其它服务抢 8018 | ✅ 已消除：0.2.11 默认 `binding-client`，不拉子进程、不占端口 |
 | 一根全局阈值卡不住所有类型 | 卡片噪音挤进来，或对话真命中被砍光 | ✅ 已解决：门槛分类型定（卡片 ×1.7），见 §6.2.1 |
