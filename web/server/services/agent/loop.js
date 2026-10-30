@@ -115,7 +115,10 @@ async function runRound({ provider, messages, options, onToken }) {
 
   // 兜底：模型没按契约输出 JSON（判不出 action），也得让作者看到内容，
   // 不能留一个空气泡。反过来，解析出来确实是工具调用就整轮丢弃。
-  if (!isToolCall && !released) {
+  //
+  // 纯空白不发：模型偶尔会吐几千个空格加换行（JSON 模式长上下文下会这样退化），
+  // 这些字符上屏看不见，却会把"这次有没有收到内容"的判断搅浑。
+  if (!isToolCall && !released && buffer.trim()) {
     released = true;
     emit(buffer);
   }

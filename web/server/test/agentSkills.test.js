@@ -224,6 +224,32 @@ test('技能清单注入到 system prompt 末尾，行内操作不注入', async
   }
 });
 
+test('模型只吐空白时不下发 token，原文留给上层判定', async () => {
+  // JSON 模式在长上下文下会退化成只输出空格和换行。
+  // 这些字符上屏看不见，却会让"这一轮到底有没有内容"变得难以判断。
+  const tokens = [];
+  const result = await runAgentLoop({
+    provider: {
+      async chatStream({ onToken }) {
+        onToken('          \n\n');
+        onToken('        ');
+        return {
+          content: '          \n\n        ',
+          reasoning: '',
+          finishReason: 'stop',
+          usage: null,
+        };
+      },
+    },
+    messages: [{ role: 'user', content: 'hi' }],
+    onToken: (t) => tokens.push(t),
+  });
+
+  assert.strictEqual(tokens.length, 0, '纯空白不该推给前端');
+  assert.strictEqual(result.parsed, null);
+  assert.strictEqual(result.raw.trim(), '', '原文要保留，让路由据此判空并重试');
+});
+
 test('正常结束时标记 stopReason=final，并累计各轮 usage', async () => {
   const result = await runAgentLoop({
     provider: {

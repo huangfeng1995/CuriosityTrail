@@ -823,19 +823,28 @@ router.post('/chat', async (req, res) => {
         })
       );
 
-      // 重发时在最后一条消息后补一句提醒。
-      // 同样的提示词原样再要一次，很可能得到同样的空白——
-      // 明确告诉模型"上一轮是空的、请直接给 JSON"，才有机会跳出这个状态。
-      const retryMessages = [...chatMessages];
-      const lastIndex = retryMessages.length - 1;
-      if (lastIndex >= 0) {
-        retryMessages[lastIndex] = {
-          ...retryMessages[lastIndex],
-          content:
-            String(retryMessages[lastIndex].content || '') +
-            '\n\n（上一次没有返回任何内容。请直接按约定 JSON 回答，把正文写进 content 字段。）',
-        };
-      }
+      // 重试时压掉较老的历史，并在最后一条消息后补一句提醒。
+      //
+      // 复现实验（同一段对话、同样的提问）：
+      //   完整历史 + JSON 模式 → 稳定返回两三千个空格和换行，一个字正文都没有；
+      //   只留最近几轮      → 正常返回 JSON。
+      // 所以原样重发没有意义，必须换掉"让模型退化成空白"的那个条件。
+      const retryMessages = (() => {
+        const hasSystem = chatMessages[0] && chatMessages[0].role === 'system';
+        const system = hasSystem ? [chatMessages[0]] : [];
+        const rest = hasSystem ? chatMessages.slice(1) : [...chatMessages];
+        const recent = rest.slice(-RETRY_HISTORY_KEEP);
+        const last = recent[recent.length - 1];
+        if (last) {
+          recent[recent.length - 1] = {
+            ...last,
+            content:
+              String(last.content || '') +
+              '\n\n（上一次没有返回任何内容。请直接按约定 JSON 回答，把正文写进 content 字段。）',
+          };
+        }
+        return [...system, ...recent];
+      })();
 
       finalResult = await runChat(retryMessages);
     }
@@ -1125,6 +1134,9 @@ router.post('/messages/:messageId/remember', async (req, res) => {
 
 /** 历史列表里预览文案的长度上限 */
 const PREVIEW_LIMIT = 80;
+
+/** 空回复重试时保留多少条最近消息（含本轮提问）。见下面重试处的复现说明 */
+const RETRY_HISTORY_KEEP = 5;
 
 /**
  * 只保留有内容的消息预览。
