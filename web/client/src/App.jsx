@@ -7,7 +7,7 @@ import {
   Spin,
   App as AntApp,
 } from 'antd';
-import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather } from 'lucide-react';
+import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather, Palette } from 'lucide-react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './store/auth';
 import { WorkspaceProvider } from './store/workspace';
@@ -16,6 +16,7 @@ import Login from './pages/Login';
 import Works from './pages/Works';
 import Workspace from './pages/Workspace';
 import Materials from './pages/Materials';
+import StylePage from './pages/Style';
 import SettingsPage from './pages/SettingsPage';
 import BrandLogo from './components/BrandLogo';
 
@@ -87,6 +88,7 @@ function AppShell({ isDark, setIsDark }) {
   const navItems = [
     { key: '/works', icon: <Feather size={15} />, label: '作品' },
     { key: '/materials', icon: <Library size={15} />, label: '素材库' },
+    { key: '/style', icon: <Palette size={15} />, label: '文风' },
     { key: '/settings', icon: <SettingsIcon size={15} />, label: '设置' },
   ];
 
@@ -180,6 +182,14 @@ function AppShell({ isDark, setIsDark }) {
             element={
               <div className="ct-page">
                 <Materials />
+              </div>
+            }
+          />
+          <Route
+            path="/style"
+            element={
+              <div className="ct-page">
+                <StylePage />
               </div>
             }
           />
