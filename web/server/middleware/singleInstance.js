@@ -109,7 +109,20 @@ function startHeartbeat() {
   heartbeatTimer.unref();
 }
 
-/** 进程正常退出时释放锁，避免下次启动需要等锁过期 */
+/**
+ * 进程退出时释放锁，避免下次启动需要等锁过期。
+ *
+ * 这里只挂 'exit'，**不要**自己处理 SIGTERM/SIGINT。
+ *
+ * 原因：Node 按注册顺序调用同一信号的监听器，而本模块在 index.js 顶部
+ * 就被调用（早于 index.js 注册优雅停机的 shutdown）。
+ * 如果这里也监听 SIGTERM 并调 process.exit(0)，它会先执行，
+ * 进程当场死掉——优雅停机（在途请求收尾、停机记录落盘）一次都跑不到。
+ * 曾经就是这样：容器收到 SIGTERM 后立刻退出，日志和记录全丢。
+ *
+ * 退出路径交给 index.js 的 shutdown() 统一负责；
+ * 进程最终退出时 'exit' 事件照常触发，这里照样把锁清掉。
+ */
 function registerCleanup() {
   const release = () => {
     try {
@@ -122,14 +135,6 @@ function registerCleanup() {
     }
   };
   process.once('exit', release);
-  process.once('SIGINT', () => {
-    release();
-    process.exit(0);
-  });
-  process.once('SIGTERM', () => {
-    release();
-    process.exit(0);
-  });
 }
 
 module.exports = { checkSingleInstance };
