@@ -2791,3 +2791,308 @@ body.ct-resizing * {
 .ant-slider-handle::after {
   box-shadow: 0 0 0 2px var(--cinnabar) !important;
 }
+
+/* ============================================================
+   写作统计 / 写作指纹 / 徽章
+   ============================================================ */
+.ct-insight-loading {
+  display: flex;
+  justify-content: center;
+  padding: 40px 0;
+}
+
+.ct-insight-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.ct-insight-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.ct-insight-card-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.05em;
+}
+.ct-insight-card-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 4px 0 2px;
+  font-family: var(--font-serif, serif);
+}
+.ct-insight-card-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.ct-insight-section {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.ct-insight-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.ct-insight-section-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+.ct-insight-section-head .ct-insight-section-title {
+  margin-bottom: 0;
+}
+.ct-insight-note {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 8px;
+}
+
+.ct-insight-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ct-insight-label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-faint);
+  border-radius: 999px;
+  padding: 4px 11px;
+}
+.ct-insight-label.is-word {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.ct-insight-label-count {
+  font-size: 11px;
+  color: var(--text-quaternary);
+}
+
+.ct-insight-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ct-insight-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.ct-insight-bar-label {
+  width: 48px;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+.ct-insight-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-sunken);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ct-insight-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+.ct-insight-bar-value {
+  width: 46px;
+  text-align: right;
+  color: var(--text-tertiary);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-insight-works {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ct-insight-work-title {
+  font-size: 13.5px;
+  color: var(--text-primary);
+}
+.ct-insight-work-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-left: 8px;
+}
+
+.ct-insight-badges {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+.ct-insight-badge {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--bg-container);
+  opacity: 0.66;
+}
+.ct-insight-badge.is-on {
+  opacity: 1;
+  border-color: var(--gold);
+  background: var(--gold-dim);
+}
+.ct-insight-badge-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ct-insight-badge.is-on .ct-insight-badge-name {
+  color: var(--gold);
+}
+.ct-insight-badge-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 3px 0 6px;
+}
+
+/* 反馈 */
+.ct-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ct-feedback-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--bg-container);
+}
+.ct-feedback-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ct-feedback-item-content {
+  margin: 0 0 4px !important;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+.ct-feedback-item-reply {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  background: var(--bamboo-dim);
+  border-left: 2px solid var(--bamboo);
+  padding: 7px 10px;
+  border-radius: 0 6px 6px 0;
+  margin-top: 6px;
+}
+
+/* 使用手册 */
+.ct-manual {
+  display: flex;
+  gap: 26px;
+  align-items: flex-start;
+}
+.ct-manual-nav {
+  flex: 0 0 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 70px;
+}
+.ct-manual-nav-item {
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  padding: 7px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ct-manual-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.ct-manual-nav-item.is-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.ct-manual-body {
+  flex: 1;
+  min-width: 0;
+}
+.ct-manual-section {
+  display: none;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+}
+.ct-manual-section.is-active {
+  display: block;
+}
+.ct-manual-title {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ct-manual-item {
+  margin-bottom: 18px;
+}
+.ct-manual-item:last-child {
+  margin-bottom: 0;
+}
+.ct-manual-item-h {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.ct-manual-item-p {
+  margin: 0 !important;
+  font-size: 13.5px;
+  color: var(--text-tertiary);
+  line-height: 1.75;
+}
+.ct-manual-extra {
+  margin: 0 !important;
+  font-size: 13.5px;
+  color: var(--text-tertiary);
+  line-height: 1.75;
+}
+
+@media (max-width: 768px) {
+  .ct-manual {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .ct-manual-nav {
+    flex: none;
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .ct-manual-nav-item {
+    white-space: nowrap;
+  }
+  .ct-insight-cards {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+}

@@ -507,9 +507,14 @@ router.post('/chat', async (req, res) => {
   };
 
   // 客户端断开（关页面、点取消）时立刻中止模型调用，不让它在后台空转烧 token。
-  // 再兜一个 120s 的整轮上限：模型卡住时，作者至少能收到一条明确的错误。
+  // 再兜一个 300s 的整轮上限：模型卡住时，作者至少能收到一条明确的错误。
+  //
+  // 为什么是 300s 不是 120s：一轮可能包含多次模型调用（技能循环最多 4 步），
+  // 写一章长文本来就要几分钟。120s 会把写到一半的长文掐掉，
+  // 作者拿到的只有半章——比慢一点糟糕得多。
+  // provider 的单次调用超时（180s）在下面一层，两层一起兜底。
   const clientAbort = new AbortController();
-  const roundSignal = AbortSignal.any([clientAbort.signal, AbortSignal.timeout(120000)]);
+  const roundSignal = AbortSignal.any([clientAbort.signal, AbortSignal.timeout(300000)]);
   let clientGone = false;
   res.on('close', () => {
     if (!res.writableEnded) {

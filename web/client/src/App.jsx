@@ -7,7 +7,7 @@ import {
   Spin,
   App as AntApp,
 } from 'antd';
-import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather, Palette } from 'lucide-react';
+import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather, Palette, BarChart, BookOpen, MessageSquare } from 'lucide-react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './store/auth';
 import { WorkspaceProvider } from './store/workspace';
@@ -18,6 +18,9 @@ import Workspace from './pages/Workspace';
 import Materials from './pages/Materials';
 import StylePage from './pages/Style';
 import SettingsPage from './pages/SettingsPage';
+import StatsPage from './pages/Stats';
+import FeedbackPage from './pages/Feedback';
+import ManualPage from './pages/Manual';
 import BrandLogo from './components/BrandLogo';
 
 const { Header, Content } = Layout;
@@ -89,6 +92,9 @@ function AppShell({ isDark, setIsDark }) {
     { key: '/works', icon: <Feather size={15} />, label: '作品' },
     { key: '/materials', icon: <Library size={15} />, label: '素材库' },
     { key: '/style', icon: <Palette size={15} />, label: '文风' },
+    { key: '/stats', icon: <BarChart size={15} />, label: '统计' },
+    { key: '/manual', icon: <BookOpen size={15} />, label: '手册' },
+    { key: '/feedback', icon: <MessageSquare size={15} />, label: '反馈' },
     { key: '/settings', icon: <SettingsIcon size={15} />, label: '设置' },
   ];
 
@@ -198,6 +204,30 @@ function AppShell({ isDark, setIsDark }) {
             element={
               <div className="ct-page">
                 <SettingsPage />
+              </div>
+            }
+          />
+          <Route
+            path="/stats"
+            element={
+              <div className="ct-page">
+                <StatsPage />
+              </div>
+            }
+          />
+          <Route
+            path="/manual"
+            element={
+              <div className="ct-page">
+                <ManualPage />
+              </div>
+            }
+          />
+          <Route
+            path="/feedback"
+            element={
+              <div className="ct-page">
+                <FeedbackPage />
               </div>
             }
           />

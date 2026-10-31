@@ -55,6 +55,12 @@ services:
     # 只监听回环地址，公网流量必须经过 Caddy（强制 HTTPS + 证书）
     ports:
       - "127.0.0.1:8080:8080"
+    # 收到 SIGTERM 后给在途请求收尾的时间。
+    #
+    # 应用侧 SHUTDOWN_GRACE_MS 默认 30s，这里留 45s 的余量：
+    # Docker 等满 45s 就 SIGKILL，正好让应用自己把 SSE 流收干净。
+    # 调小这个值 = 重建容器时硬掐在途的 AI 生成，作者看到 network error。
+    stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s

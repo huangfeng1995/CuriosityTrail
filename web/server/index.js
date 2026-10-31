@@ -24,9 +24,10 @@ if (!instanceCheck.ok) {
 }
 
 const app = require('./app');
+const drain = require('./services/drain');
 const PORT = config.port;
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`   环境: ${config.nodeEnv}`);
   console.log(`   数据目录: ${config.dataDir}`);
@@ -59,6 +60,57 @@ app.listen(PORT, () => {
     console.log(`   异地备份目录: ${config.backupOffsiteDir}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// 优雅停机
+// ---------------------------------------------------------------------------
+//
+// 部署重建容器时 Docker 会发 SIGTERM。默认行为是立刻退出，
+// 在途的 SSE 生成被掐断——作者看到的是一句 network error。
+//
+// 这里的顺序：
+//   1. 停止接收新连接
+//   2. 新请求立刻被拒（作者知道要等，而不是干等）
+//   3. 等在途请求自己收尾，最多 SHUTDOWN_GRACE_MS
+//   4. 超时才硬退
+//
+// 收尾时间要略小于 Docker 的 stop_grace_period（compose 里设 45s），
+// 否则 Docker 会先动手，我们的收尾就白做了。
+const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS || 30000);
+
+let shuttingDown = false;
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  const pending = drain.activeCount();
+  console.log(`\n收到 ${signal}，开始优雅停机（在途请求 ${pending} 个）`);
+
+  drain.beginDrain();
+
+  // 不再接新连接（已建立的连接不受影响，让它们跑完）
+  server.close(() => {
+    console.log('所有连接已关闭，退出');
+    process.exit(0);
+  });
+
+  // 等在途请求收尾。AI 生成最长可能跑一分多钟，
+  // 所以这里的等待时间要够——不够的话照样会打断作者。
+  const result = await drain.waitForDrain(SHUTDOWN_GRACE_MS);
+  if (!result.drained) {
+    console.warn(`仍有 ${result.active} 个请求未收尾，强制退出`);
+    // 再给一点时间让 socket 真正断开
+    setTimeout(() => process.exit(0), 500);
+    return;
+  }
+
+  console.log('在途请求已收尾，退出');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // 素材全文索引：启动时全量重建一次，保证索引与业务表一致。
 // 索引重建是应用层行为（bigram 化），所以放这里而不是触发器。

@@ -19,6 +19,7 @@ const fs = require('fs');
 
 const { requireAuth } = require('./middleware/auth');
 const { aiLimiter, apiLimiter } = require('./middleware/rateLimit');
+const drain = require('./services/drain');
 
 const authRouter = require('./routes/auth');
 const worksRouter = require('./routes/works');
@@ -38,11 +39,23 @@ const progressRouter = require('./routes/progress');
 const consistencyRouter = require('./routes/consistency');
 const memoryRouter = require('./routes/memory');
 const styleRouter = require('./routes/style');
+const insightsRouter = require('./routes/insights');
+const feedbackRouter = require('./routes/feedback');
 
 const app = express();
 
 // Fly.io 等平台在反代后面，需信任代理才能拿到真实客户端 IP（限流依赖）
 app.set('trust proxy', 1);
+
+// ---------------------------------------------------------------------------
+// 在途请求计数
+// ---------------------------------------------------------------------------
+//
+// 容器重建会打断在途的 AI 生成——作者看到的是一句 network error，
+// 写了一半的东西全丢。所以两处要用这个计数：
+//   1. 优雅停机：收到 SIGTERM 后先看还有多少请求没收尾
+//   2. 部署前的检查：有人正在写就别硬拆容器
+app.use(drain.track);
 
 // 基本安全响应头。
 //   nosniff —— 别让浏览器按内容猜类型，配合 /uploads 只存图片的约束，
@@ -71,8 +84,20 @@ app.use(express.json({ limit: '10mb' }));
 
 // 公开路由：健康检查与登录（登录自带限流）
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    // 在途请求数。部署脚本靠它判断"现在有人在写吗"，
+    // 有就别硬拆容器，等一会儿。
+    activeRequests: drain.activeCount(),
+    activeChats: drain.activeChatCount(),
+    draining: drain.isDraining(),
+  });
 });
+// 排空期间拒掉新请求。健康检查放行——它要继续答，
+// 不然 Docker 会以为容器死了。
+app.use('/api', drain.rejectDuringDrain);
+
 app.use('/api/auth', authRouter);
 
 // 其余 API 一律要求登录
@@ -95,6 +120,8 @@ app.use('/api/progress', progressRouter);
 app.use('/api/consistency', consistencyRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/api/style', styleRouter);
+app.use('/api/insights', insightsRouter);
+app.use('/api/feedback', feedbackRouter);
 
 // 图片目录同样纳入鉴权
 app.use('/uploads', requireAuth, express.static(config.uploadsDir));

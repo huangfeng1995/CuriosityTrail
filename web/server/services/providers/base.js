@@ -114,8 +114,15 @@ async function readNdjsonStream(response, onEvent) {
   }
 }
 
-/** 单次请求默认超时（毫秒）。流式长回答也不能无限挂着 */
-const DEFAULT_TIMEOUT_MS = 60000;
+/**
+ * 单次请求默认超时（毫秒）。
+ *
+ * 必须**大于** /api/ai/chat 的整轮上限（routes/ai.js 里的 120s），
+ * 否则这个先到期，长文生成会在 60 秒处被掐断——模型才刚写了一半。
+ * 整轮上限是给作者兜底的"别无限等"，provider 超时只是防连接挂死，
+ * 谁先到谁说了算，所以内层要更宽松。
+ */
+const DEFAULT_TIMEOUT_MS = 180000;
 
 /**
  * 把取消信号 / 超时信号组合起来，并转成能直接显示给作者的中文错误。

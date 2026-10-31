@@ -25,8 +25,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 1 → 2：多用户（users / login_codes），业务表补 user_id。
  * 版本 2 → 3：长期记忆台账（memory_chunks / memory_index_meta）。
  * 版本 3 → 4：文风规则卡（style_cards）。
+ * 版本 4 → 5：用户反馈（feedbacks）。
  */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 /**
  * 版本号之前的老库遗留表。
@@ -336,6 +337,24 @@ CREATE TABLE IF NOT EXISTS style_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_style_cards_user
   ON style_cards (user_id, work_id, kind);
+
+-- 用户反馈。作者提的问题、想要的功能、遇到的故障，都落在这里。
+--
+-- status 由运营侧改（new / triaged / resolved），
+-- 目前没有后台页面，改库即可，先把通道建起来。
+CREATE TABLE IF NOT EXISTS feedbacks (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT REFERENCES users(id) ON DELETE CASCADE,
+  category   TEXT NOT NULL DEFAULT 'other',
+  content    TEXT NOT NULL,
+  contact    TEXT,
+  status     TEXT NOT NULL DEFAULT 'new'
+             CHECK (status IN ('new','triaged','resolved')),
+  reply      TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feedbacks_user
+  ON feedbacks (user_id, created_at);
 `;
 
 /**
