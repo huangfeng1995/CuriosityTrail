@@ -74,9 +74,13 @@ const server = app.listen(PORT, () => {
 //   3. 等在途请求自己收尾，最多 SHUTDOWN_GRACE_MS
 //   4. 超时才硬退
 //
-// 收尾时间要略小于 Docker 的 stop_grace_period（compose 里设 45s），
+// 收尾时间要略小于 Docker 的 stop_grace_period（compose 里设 210s），
 // 否则 Docker 会先动手，我们的收尾就白做了。
-const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS || 30000);
+//
+// 180s 不是随便取的：一轮 AI 生成最长允许跑 300s（routes/ai.js），
+// 写一章长文经常要一两分钟。收尾时间给不到这个量级，
+// 停机照样会把作者的稿子掐在半路。
+const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS || 180000);
 
 let shuttingDown = false;
 
