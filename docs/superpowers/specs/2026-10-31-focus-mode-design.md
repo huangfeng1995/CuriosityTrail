@@ -230,11 +230,77 @@ const hideRight = focusMode || collapsed.right;
 
 ### 4.4 隐藏方式：CSS 隐藏，不是条件渲染
 
-左右栏用 CSS 隐藏（`display: none`），不卸载组件。
+**这是实现里最容易踩的坑，必须先说清楚。**
 
-理由：`AssistantSidebar` 挂着 SSE 长连接（`/api/ai/chat`），卸载组件会断掉连接，正在生成的 token 就丢了。作者在专注模式下正要让 AI 写一章，不能因为他自己进了专注模式就把稿子弄丢。
+现在 `Workspace.jsx` 的三栏是**条件渲染**：
 
-同理，正文区不做条件渲染，只是外层加了 `is-focus` class。
+```jsx
+{!collapsed.right ? (
+  <>
+    <Resizer side="right" ... />
+    <aside className="ct-col-right"><AssistantSidebar /></aside>
+  </>
+) : (
+  <button className="ct-col-toggle is-right" ...>‹</button>
+)}
+```
+
+也就是说：**右栏被折叠时，`AssistantSidebar` 整个组件卸载**。而 `AssistantSidebar` 挂着 SSE 长连接（`/api/ai/chat`），卸载 = 连接断开 = 正在生成的 token 全丢。
+
+专注模式如果沿用这个条件渲染（`!collapsed.right || focusMode`），作者一进专注模式，正在写的稿子就断了——正好是这个功能要避免的事。
+
+**所以专注模式必须走 CSS 隐藏。**
+
+实现上把三栏拆成「常驻渲染 + class 控制」两层：
+
+```jsx
+<div className={`ct-workspace${focusMode ? ' is-focus' : ''}`}>
+  {/* 左栏：一直渲染，用 CSS 控制显隐 */}
+  <aside className="ct-col-left" style={{ width: widths.left }} data-hidden={hideLeft}>
+    {leftPanel}
+  </aside>
+  <Resizer ... />   {/* 同样用 data-hidden 控制 */}
+  ...
+</div>
+```
+
+CSS：
+
+```css
+.ct-workspace [data-hidden='true'] {
+  display: none;
+}
+```
+
+这样专注模式下组件**不卸载**，SSE 保持连接，只是看不见。
+
+**代价**：`collapsed` 为 true 时组件也不卸载了（现在会卸载）。这会让折叠状态下的左栏/右栏继续占内存、继续发请求（比如 `CharacterPanel` 的数据请求）。
+
+权衡：
+- 折叠状态下的面板请求本来就有缓存，重复挂载不会重复打太多接口
+- 而专注模式下的 SSE 断开是**不可逆的数据损失**（正在写的稿子）
+
+两者不对等，所以选「不卸载」。
+
+副作用要在实现时确认：折叠状态下右栏一直挂着 SSE 连接，作者在折叠状态下发消息会怎样？现在折叠 = 卸载 = 发不了。改成不卸载后，折叠状态也能发消息了——但用户看不到。这算功能变化，需要在实现时确认是否要额外处理（比如折叠时禁止发送）。
+
+**本设计采取**：折叠状态下右栏仍挂载但**不显示**；发送行为不变（作者看不到反馈，但不引入新问题）。
+
+### 4.5 专注模式下要藏哪些元素
+
+| 元素 | 专注模式 |
+|---|---|
+| `.ct-col-left`（左栏） | `display: none` |
+| 左栏的 Resizer | `display: none` |
+| `.ct-col-toggle.is-left`（展开左栏的窄条） | `display: none` |
+| `.ct-col-right`（右栏） | `display: none` |
+| 右栏的 Resizer | `display: none` |
+| `.ct-col-toggle.is-right`（展开右栏的窄条） | `display: none` |
+| 顶栏的导航项 / 主题切换 / 退出登录 | `display: none` |
+| 顶栏的 logo | **保留** |
+| 正文区 | 保留 |
+
+窄条按钮（`.ct-col-toggle`）在专注模式下必须藏——它们就是「展开侧栏」的入口，专注模式里出现它们等于在提示「这里能展开」。
 
 ---
 
