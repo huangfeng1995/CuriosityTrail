@@ -10,7 +10,7 @@
 const config = require('./config');
 
 const { checkSingleInstance } = require('./middleware/singleInstance');
-const { ready } = require('./database');
+const { ready, close: closeDatabase } = require('./database');
 const localSearch = require('./services/search/local');
 const backup = require('./services/backup');
 
@@ -84,6 +84,25 @@ const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS || 180000);
 
 let shuttingDown = false;
 
+/**
+ * 收尾退出。
+ *
+ * 不直接 process.exit()：stdout 接到管道时（容器日志就是）写入是异步的，
+ * process.exit 会把还没写出去的日志截断——停机日志会整段消失，
+ * 事后没法判断排空到底有没有生效。
+ *
+ * 正确做法是关掉数据库、让事件循环自己排空，进程自然退出时
+ * stdout 才算写完。兜底定时器用 unref：只有真有别的句柄吊着进程时
+ * 它才会触发（那种情况日志丢一行也比进程吊死强）。
+ */
+function exitCleanly() {
+  process.exitCode = 0;
+
+  // 兜底：万一还有句柄吊着进程，5 秒后强制退。
+  // unref 保证正常情况下它不影响进程自然退出。
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -94,23 +113,28 @@ async function shutdown(signal) {
   drain.beginDrain();
 
   // 不再接新连接（已建立的连接不受影响，让它们跑完）
-  server.close(() => {
-    console.log('所有连接已关闭，退出');
-    process.exit(0);
-  });
+  server.close();
 
   // 等在途请求收尾。AI 生成最长可能跑一分多钟，
   // 所以这里的等待时间要够——不够的话照样会打断作者。
   const result = await drain.waitForDrain(SHUTDOWN_GRACE_MS);
   if (!result.drained) {
     console.warn(`仍有 ${result.active} 个请求未收尾，强制退出`);
-    // 再给一点时间让 socket 真正断开
-    setTimeout(() => process.exit(0), 500);
+    server.closeAllConnections?.();
+    exitCleanly();
     return;
   }
 
   console.log('在途请求已收尾，退出');
-  process.exit(0);
+
+  // 空闲的 keep-alive 连接会吊着 server.close() 不返回，主动断掉
+  server.closeIdleConnections?.();
+
+  // 关掉定时备份的定时器与数据库连接，进程才能自然退出
+  backup.stopScheduledBackup();
+  await closeDatabase().catch(() => {});
+
+  exitCleanly();
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
