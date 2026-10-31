@@ -13,8 +13,19 @@ import React, { useEffect, useRef, useState } from 'react';
  * @param {(v: number) => void} onChange 拖动过程中的宽度
  * @param {() => void} onReset 双击复位
  * @param {() => void} [onCollapse] 收起本栏（可选，传入则在把手顶部显示折叠按钮）
+ * @param {boolean} [hidden] 隐藏把手（专注模式用；用 CSS 隐藏而不是卸载，
+ *   这样侧栏里的组件不卸载，SSE 连接不断）
  */
-export default function Resizer({ side, value, min, max, onChange, onReset, onCollapse }) {
+export default function Resizer({
+  side,
+  value,
+  min,
+  max,
+  onChange,
+  onReset,
+  onCollapse,
+  hidden,
+}) {
   const [dragging, setDragging] = useState(false);
   // 记录起点：每次按下都从这里算，拖到边界再拖回来不会累积误差
   const anchor = useRef(null);
@@ -68,6 +79,7 @@ export default function Resizer({ side, value, min, max, onChange, onReset, onCo
   return (
     <div
       className={`ct-resizer is-${side}${dragging ? ' is-dragging' : ''}`}
+      data-hidden={hidden ? 'true' : undefined}
       role="separator"
       aria-orientation="vertical"
       aria-label={side === 'left' ? '调整左栏宽度' : '调整右栏宽度'}

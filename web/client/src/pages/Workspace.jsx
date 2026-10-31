@@ -1,13 +1,15 @@
-import React, { useEffect, useState } from 'react';
-import { Button, Spin } from 'antd';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Button, Spin, App as AntApp } from 'antd';
 import { Menu, PanelRight } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../store/workspace';
+import { useFocus, ENTER_FOCUS_EVENT, EXIT_FOCUS_EVENT } from '../store/focus';
 import ChapterEditor from '../components/Editor/ChapterEditor';
 import AssistantSidebar from '../components/Assistant/Sidebar';
 import EmptyState from '../components/EmptyState';
 import Resizer from '../components/Resizer';
 import useColumnWidths, { LIMITS } from '../hooks/useColumnWidths';
+import { pendingActions } from '../components/Assistant/pendingActions';
 import WorkTree from '../components/Sidebar/WorkTree';
 import CharacterPanel from '../components/Sidebar/CharacterPanel';
 import SettingPanel from '../components/Sidebar/SettingPanel';
@@ -28,12 +30,81 @@ import PanelNav from '../components/Sidebar/PanelNav';
 export default function Workspace() {
   const { workId } = useParams();
   const navigate = useNavigate();
-  const { work, chapters, chapter, loadWork, loadChapter } = useWorkspace();
+  const { work, chapters, chapter, messages, sending, loadWork, loadChapter } = useWorkspace();
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [panelKey, setPanelKey] = useState('characters');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 992);
   const { widths, collapsed, setLeft, setRight, reset, toggleLeft, toggleRight } = useColumnWidths();
+  const { focusMode, setFocusMode } = useFocus();
+  const { message: toast } = AntApp.useApp();
+
+  // 专注模式是覆盖层，不碰 collapsed。
+  // collapsed 是作者平时的折叠偏好（持久化在 localStorage），
+  // 专注模式进出不该污染它——退出后作者自己的折叠状态原样回来。
+  const hideLeft = focusMode || collapsed.left;
+  const hideRight = focusMode || collapsed.right;
+
+  // 「去看看」：展开右栏，再让侧栏滚到那张待确认的卡片。
+  const goToPending = useCallback(() => {
+    if (collapsed.right) toggleRight();
+    window.dispatchEvent(new CustomEvent('ct:scroll-to-pending'));
+  }, [collapsed.right, toggleRight]);
+
+  // 进入 / 退出专注模式的提示。
+  //
+  // 提示放在这里而不是 FocusProvider：判断「有几条 AI 建议还没确认」
+  // 需要 messages，而 messages 在 workspace context 里——
+  // FocusProvider 包在它外面，读不到。
+  useEffect(() => {
+    const onEnter = () => {
+      setFocusMode(true);
+      toast.info('已进入专注模式，Esc 退出', 1.5);
+    };
+
+    const onExit = () => {
+      const pending = pendingActions(messages);
+      if (pending.length > 0) {
+        toast.info({
+          content: (
+            <span>
+              AI 有 {pending.length} 条建议还没处理
+              <Button size="small" type="link" onClick={goToPending}>
+                去看看
+              </Button>
+            </span>
+          ),
+          duration: 3,
+        });
+      } else if (sending) {
+        toast.info('AI 还在写，完成后会留在右侧等你确认', 3);
+      }
+      setFocusMode(false);
+    };
+
+    window.addEventListener(ENTER_FOCUS_EVENT, onEnter);
+    window.addEventListener(EXIT_FOCUS_EVENT, onExit);
+    return () => {
+      window.removeEventListener(ENTER_FOCUS_EVENT, onEnter);
+      window.removeEventListener(EXIT_FOCUS_EVENT, onExit);
+    };
+  }, [messages, sending, goToPending, setFocusMode, toast]);
+
+  // 换作品就退出专注模式：新作品是新的写作场景。
+  //
+  // 走 setFocusMode 而不是退出事件——切作品时弹一句
+  // 「AI 有 N 条建议还没处理」会让人困惑，那说的是上一个作品的事。
+  //
+  // 只在 workId 真的变了时才退出。首次挂载不能退出：
+  // 刷新页面时专注状态是从 localStorage 读出来的，
+  // 一挂载就清掉等于「刷新后不再是专注」，跟设计不符。
+  const lastWorkId = useRef(workId);
+  useEffect(() => {
+    if (workId && workId !== lastWorkId.current) {
+      setFocusMode(false);
+    }
+    lastWorkId.current = workId;
+  }, [workId, setFocusMode]);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 992);
@@ -194,69 +265,78 @@ export default function Workspace() {
   }
 
   return (
-    <div className="ct-workspace">
-      {!collapsed.left ? (
-        <>
-          <aside className="ct-col-left" style={{ width: widths.left }}>
-            {leftPanel}
-          </aside>
+    <div className={`ct-workspace${focusMode ? ' is-focus' : ''}`}>
+      {/*
+        三栏一直渲染，用 data-hidden 控制显隐。
+        不能用条件渲染（collapsed ? null : <aside>）——那会卸载
+        AssistantSidebar，而它挂着 SSE 长连接，一卸载正在生成的 token 就丢了。
+        作者正要让 AI 写一章，不能因为他自己进了专注模式把稿子弄丢。
+      */}
+      <aside
+        className="ct-col-left"
+        style={{ width: widths.left }}
+        data-hidden={hideLeft ? 'true' : undefined}
+      >
+        {leftPanel}
+      </aside>
 
-          <Resizer
-            side="left"
-            value={widths.left}
-            min={LIMITS.left.min}
-            max={LIMITS.left.max}
-            onChange={setLeft}
-            onReset={() => reset('left')}
-            onCollapse={toggleLeft}
-          />
-        </>
-      ) : (
-        <button
-          type="button"
-          className="ct-col-toggle is-left"
-          onClick={toggleLeft}
-          title="展开左栏（目录与资料）"
-          aria-label="展开左栏"
-        >
-          ›
-        </button>
-      )}
+      <Resizer
+        side="left"
+        value={widths.left}
+        min={LIMITS.left.min}
+        max={LIMITS.left.max}
+        onChange={setLeft}
+        onReset={() => reset('left')}
+        onCollapse={toggleLeft}
+        hidden={hideLeft}
+      />
 
       <main className="ct-col-center">
         <ChapterEditor />
       </main>
 
-      {!collapsed.right ? (
-        <>
-          <Resizer
-            side="right"
-            value={widths.right}
-            min={LIMITS.right.min}
-            max={LIMITS.right.max}
-            onChange={setRight}
-            onReset={() => reset('right')}
-            onCollapse={toggleRight}
-          />
+      <Resizer
+        side="right"
+        value={widths.right}
+        min={LIMITS.right.min}
+        max={LIMITS.right.max}
+        onChange={setRight}
+        onReset={() => reset('right')}
+        onCollapse={toggleRight}
+        hidden={hideRight}
+      />
 
-          <aside
-            className={`ct-col-right${widths.right < 344 ? ' is-narrow' : ''}`}
-            style={{ width: widths.right }}
-          >
-            <AssistantSidebar />
-          </aside>
-        </>
-      ) : (
-        <button
-          type="button"
-          className="ct-col-toggle is-right"
-          onClick={toggleRight}
-          title="展开右栏（AI 助手）"
-          aria-label="展开右栏"
-        >
-          ‹
-        </button>
-      )}
+      <aside
+        className={`ct-col-right${widths.right < 344 ? ' is-narrow' : ''}`}
+        style={{ width: widths.right }}
+        data-hidden={hideRight ? 'true' : undefined}
+      >
+        <AssistantSidebar />
+      </aside>
+
+      {/* 展开条：栏收起时露出来。专注模式里藏掉——
+          它本来就是「这里能展开侧栏」的入口，专注模式不该有。 */}
+      <button
+        type="button"
+        className="ct-col-toggle is-left"
+        data-hidden={!collapsed.left || focusMode ? 'true' : undefined}
+        onClick={toggleLeft}
+        title="展开左栏（目录与资料）"
+        aria-label="展开左栏"
+      >
+        ›
+      </button>
+
+      <button
+        type="button"
+        className="ct-col-toggle is-right"
+        data-hidden={!collapsed.right || focusMode ? 'true' : undefined}
+        onClick={toggleRight}
+        title="展开右栏（AI 助手）"
+        aria-label="展开右栏"
+      >
+        ‹
+      </button>
     </div>
   );
 }

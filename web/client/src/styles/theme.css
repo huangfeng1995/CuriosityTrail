@@ -326,6 +326,14 @@ body {
   z-index: 20;
 }
 
+/* 专注模式：顶栏最小化。
+   保留 logo（它是回作品列表的入口）和右侧的退出按钮，
+   导航项、主题切换、退出登录都藏掉——
+   写作时换肤、登出都会把作者从沉浸里拽出来。 */
+.ct-topbar.is-focus {
+  gap: 12px;
+}
+
 .ct-brand {
   display: flex;
   align-items: center;
@@ -428,6 +436,27 @@ body {
   height: 100%;
   display: flex;
   overflow: hidden;
+
+  /* 正文宽度上限。
+     原来写死 960px——三栏时中栏本来就窄，正文再卡一道，
+     大屏上左右空出来一大片。提出来做成变量，专注模式再放宽一档。
+
+     960px 是 55 汉字/行，本来就偏长了（中文舒服在 40–50 字/行），
+     所以只敢放到 1160px（59 字/行）。再宽眼睛回行容易跳行，
+     那比「左右空着」更伤。 */
+  --ct-editor-width: 1000px;
+}
+
+.ct-workspace.is-focus {
+  --ct-editor-width: 1160px;
+}
+
+/* 三栏的显隐。
+   用 CSS 隐藏而不是条件渲染：条件渲染会卸载 AssistantSidebar，
+   而它挂着 SSE 长连接，一卸载正在生成的 token 就丢了。
+   专注模式里作者正要让 AI 写一章，不能因为进了专注把稿子弄丢。 */
+.ct-workspace [data-hidden='true'] {
+  display: none;
 }
 
 .ct-col-left {
@@ -1466,7 +1495,7 @@ body.ct-resizing * {
   padding: 30px 32px 120px;
 }
 .ct-editor-body {
-  max-width: 960px;
+  max-width: var(--ct-editor-width, 1000px);
   margin: 0 auto;
   /* 左侧留出按钮沟，块按钮不会压到正文 */
   padding-left: 44px;

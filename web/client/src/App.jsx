@@ -7,10 +7,11 @@ import {
   Spin,
   App as AntApp,
 } from 'antd';
-import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather, Palette, BarChart, BookOpen, MessageSquare } from 'lucide-react';
+import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather, Palette, BarChart, BookOpen, MessageSquare, Minimize2 } from 'lucide-react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './store/auth';
 import { WorkspaceProvider } from './store/workspace';
+import { FocusProvider, useFocus } from './store/focus';
 import { useIsMobile } from './hooks/useMediaQuery';
 import Login from './pages/Login';
 import Works from './pages/Works';
@@ -87,6 +88,7 @@ function AppShell({ isDark, setIsDark }) {
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useIsMobile();
+  const { focusMode, exitFocus } = useFocus();
 
   const navItems = [
     { key: '/works', icon: <Feather size={15} />, label: '作品' },
@@ -100,6 +102,10 @@ function AppShell({ isDark, setIsDark }) {
 
   // 工作区自己占满整屏，不需要顶部导航
   const isWorkspace = location.pathname.startsWith('/works/');
+
+  // 专注模式只在工作区里生效。其他页面（统计、素材库）需要完整导航，
+  // 把顶栏削了反而出不去。
+  const focusTopbar = isWorkspace && focusMode;
 
   useEffect(() => {
     // 主题写到 html 上，theme.css 里的变量才能切
@@ -126,7 +132,7 @@ function AppShell({ isDark, setIsDark }) {
 
   return (
     <Layout style={{ minHeight: '100vh', background: 'var(--bg-layout)' }}>
-      <Header className="ct-topbar">
+      <Header className={`ct-topbar${focusTopbar ? ' is-focus' : ''}`}>
         <div className="ct-brand" onClick={() => navigate('/works')}>
           <BrandLogo size={26} />
           <span className="ct-brand-name font-serif">寻迹</span>
@@ -148,20 +154,34 @@ function AppShell({ isDark, setIsDark }) {
         )}
 
         <div className="ct-topbar-right">
-          <Button
-            type="text"
-            className="ct-icon-btn"
-            icon={isDark ? <Sun size={16} /> : <Moon size={16} />}
-            onClick={() => setIsDark(!isDark)}
-            title={isDark ? '切到日间' : '切到夜间'}
-          />
-          <Button
-            type="text"
-            className="ct-icon-btn"
-            icon={<LogOut size={16} />}
-            onClick={logout}
-            title="退出登录"
-          />
+          {focusTopbar ? (
+            // 专注模式只留一个出口。主题切换和退出登录在写作时没意义，
+            // 换肤、登出都会把作者从沉浸里拽出来。
+            <Button
+              type="text"
+              className="ct-icon-btn"
+              icon={<Minimize2 size={16} />}
+              onClick={exitFocus}
+              title="退出专注模式（Esc）"
+            />
+          ) : (
+            <>
+              <Button
+                type="text"
+                className="ct-icon-btn"
+                icon={isDark ? <Sun size={16} /> : <Moon size={16} />}
+                onClick={() => setIsDark(!isDark)}
+                title={isDark ? '切到日间' : '切到夜间'}
+              />
+              <Button
+                type="text"
+                className="ct-icon-btn"
+                icon={<LogOut size={16} />}
+                onClick={logout}
+                title="退出登录"
+              />
+            </>
+          )}
         </div>
       </Header>
 
@@ -261,7 +281,9 @@ function App() {
       <AntApp>
         <BrowserRouter>
           <AuthProvider>
-            <AppShell isDark={isDark} setIsDark={setIsDark} />
+            <FocusProvider>
+              <AppShell isDark={isDark} setIsDark={setIsDark} />
+            </FocusProvider>
           </AuthProvider>
         </BrowserRouter>
       </AntApp>

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Space, message, Modal, Input, Tooltip } from 'antd';
 import { SaveOutlined, UndoOutlined, RedoOutlined, HistoryOutlined } from '@ant-design/icons';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
+import { useFocus } from '../../store/focus';
 import { createBlock } from './blocks';
 import { countBlockWords, formatWords } from '../../utils/wordCount';
 import Block from './Block';
