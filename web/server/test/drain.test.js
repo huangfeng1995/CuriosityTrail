@@ -11,6 +11,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
 
 const { setupTempEnv, startServer } = require('./helpers');
 
@@ -85,4 +87,55 @@ test('排空：等在途请求收尾', async () => {
   const result = await drain.waitForDrain(1000);
   assert.strictEqual(result.drained, true);
   assert.strictEqual(result.active, 0);
+});
+
+test('停机记录：写入后能读回来', () => {
+  // 容器日志会随重建消失，这个记录是"上次停机有没有打断作者的稿子"
+  // 唯一可靠的答案来源，所以必须真的落到数据目录里。
+  drain.writeRecord({
+    signal: 'SIGTERM',
+    startedAt: '2026-10-31T00:00:00.000Z',
+    pendingRequests: 2,
+    pendingChats: 1,
+    drained: true,
+  });
+
+  const record = drain.readRecord();
+  assert.ok(record, '要能读回记录');
+  assert.strictEqual(record.signal, 'SIGTERM');
+  assert.strictEqual(record.pendingRequests, 2);
+  assert.strictEqual(record.pendingChats, 1);
+  assert.strictEqual(record.drained, true);
+
+  const file = path.join(env.dataDir, 'last-shutdown.json');
+  assert.ok(fs.existsSync(file), '记录文件要真的在数据目录里');
+});
+
+test('停机记录：读不到记录时返回 null 而不是抛错', () => {
+  // 首次部署、文件被删、文件写坏了——都应该是"没有记录"，不能把健康检查搞挂
+  const original = path.join(env.dataDir, 'last-shutdown.json');
+  const backup = fs.existsSync(original) ? fs.readFileSync(original) : null;
+  fs.writeFileSync(original, '{ 这不是合法 JSON');
+  assert.strictEqual(drain.readRecord(), null);
+
+  if (backup) fs.writeFileSync(original, backup);
+});
+
+test('停机记录：健康检查能查到上次停机的结果', async () => {
+  drain.writeRecord({
+    signal: 'SIGTERM',
+    startedAt: '2026-10-31T00:00:00.000Z',
+    finishedAt: '2026-10-31T00:00:05.000Z',
+    pendingRequests: 3,
+    pendingChats: 1,
+    drained: false,
+    remaining: 2,
+  });
+
+  const res = await server.request('/api/health');
+  const data = await res.json();
+
+  assert.ok(data.lastShutdown, '健康检查要暴露上次停机记录');
+  assert.strictEqual(data.lastShutdown.pendingRequests, 3);
+  assert.strictEqual(data.lastShutdown.drained, false);
 });

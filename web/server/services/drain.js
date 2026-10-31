@@ -7,20 +7,35 @@
  * 在途的 SSE 流会被掐断——作者看到的是一句 network error，
  * 写了半章的东西全丢。
  *
- * 这里做三件事：
+ * 这里做四件事：
  *   1. 统计在途请求（尤其是 /api/ai/chat 的长连接）
  *   2. 收到 SIGTERM 后进入 draining 状态：新请求立刻被拒，
  *      告诉作者"服务正在重启"，而不是让它挂在半路
  *   3. 等在途请求收尾，最多等 SHUTDOWN_GRACE_MS，超时再硬退
+ *   4. 把停机结果写进 DATA_DIR/last-shutdown.json
  *
  * 为什么"拒绝新请求"而不是"让它们进来"：
  * 排空期间新进来的生成请求大概率也等不到结果（容器马上就没了），
  * 让作者等一个注定失败的生成比立刻告诉他更糟。
+ *
+ * 为什么要落盘而不是只打日志：
+ * 容器日志会随容器重建一起消失，而且停机那一刻的输出还可能丢。
+ * 但"上一次部署有没有打断作者的稿子"是个必须能回答的问题——
+ * 运维要看的是"上次停机时在途请求数是几、排空成功没有"，
+ * 这得有个跨容器存活的记录。
  */
+
+const fs = require('fs');
+const path = require('path');
+
+const config = require('../config');
 
 let activeRequests = 0;
 let activeChats = 0;
 let draining = false;
+
+/** 停机记录文件名（放在数据目录，容器重建后仍在）。 */
+const RECORD_FILE = 'last-shutdown.json';
 
 /**
  * 统计在途请求的中间件。
@@ -113,6 +128,41 @@ function rejectDuringDrain(req, res, next) {
   res.status(503).json({ error: '服务正在重启，请稍后再试（已写好的内容不会丢）' });
 }
 
+/**
+ * 写停机记录。
+ *
+ * 用 writeFileSync + rename：rename 是原子的，
+ * 不会出现"读到半个 JSON"的情况（读的人可能是另一个容器）。
+ *
+ * @param {Object} detail 记录内容
+ */
+function writeRecord(detail) {
+  try {
+    const dir = config.dataDir;
+    const target = path.join(dir, RECORD_FILE);
+    const tmp = `${target}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(detail, null, 2), 'utf8');
+    fs.renameSync(tmp, target);
+  } catch (e) {
+    // 记录写不进去也不能影响停机本身
+  }
+}
+
+/**
+ * 读上一次的停机记录。
+ *
+ * @returns {Object|null}
+ */
+function readRecord() {
+  try {
+    const file = path.join(config.dataDir, RECORD_FILE);
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
 module.exports = {
   track,
   activeCount,
@@ -121,4 +171,6 @@ module.exports = {
   beginDrain,
   waitForDrain,
   rejectDuringDrain,
+  writeRecord,
+  readRecord,
 };

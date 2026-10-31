@@ -92,6 +92,9 @@ app.get('/api/health', (req, res) => {
     activeRequests: drain.activeCount(),
     activeChats: drain.activeChatCount(),
     draining: drain.isDraining(),
+    // 上一次停机的结果。容器日志会随重建消失，这个记录留在数据目录里，
+    // 运维随时能查"上次部署有没有打断作者的稿子"。
+    lastShutdown: drain.readRecord(),
   });
 });
 // 排空期间拒掉新请求。健康检查放行——它要继续答，

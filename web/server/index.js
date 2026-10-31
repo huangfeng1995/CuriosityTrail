@@ -108,7 +108,20 @@ async function shutdown(signal) {
   shuttingDown = true;
 
   const pending = drain.activeCount();
+  const pendingChats = drain.activeChatCount();
+  const startedAt = new Date().toISOString();
+
   console.log(`\n收到 ${signal}，开始优雅停机（在途请求 ${pending} 个）`);
+
+  // 落盘记录：容器日志会随重建消失，但"上次停机有没有打断作者的稿子"
+  // 必须能查。写文件是同步的，不受 stdout 缓冲影响。
+  drain.writeRecord({
+    signal,
+    startedAt,
+    pendingRequests: pending,
+    pendingChats,
+    drained: false,
+  });
 
   drain.beginDrain();
 
@@ -118,6 +131,17 @@ async function shutdown(signal) {
   // 等在途请求收尾。AI 生成最长可能跑一分多钟，
   // 所以这里的等待时间要够——不够的话照样会打断作者。
   const result = await drain.waitForDrain(SHUTDOWN_GRACE_MS);
+
+  drain.writeRecord({
+    signal,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    pendingRequests: pending,
+    pendingChats,
+    drained: result.drained,
+    remaining: result.active,
+  });
+
   if (!result.drained) {
     console.warn(`仍有 ${result.active} 个请求未收尾，强制退出`);
     server.closeAllConnections?.();
