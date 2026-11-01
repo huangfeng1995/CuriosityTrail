@@ -117,6 +117,24 @@ msg.role === 'assistant'
 
 「跳到别的页面保持」的前提是 2.3 的最小顶栏——若顶栏全藏，这条就不成立。
 
+### 2.6 Esc 的层次：浮层优先
+
+Esc 在有浮层（antd Modal / Drawer）开着时，**关浮层**，不退出专注模式。
+
+作者的注意力在浮层上，他那一下 Esc 想关的是浮层。顺带把专注模式也退了，等于连打两下才达到目的。
+
+实现上不能靠「事件是不是从浮层里冒出来的」判断——点按钮打开 Modal 时，焦点可能还留在按钮上，事件来源根本不在浮层里。要判断「页面上有没有可见浮层」。
+
+### 2.7 Esc 必须用捕获阶段监听
+
+`document.addEventListener('keydown', handler, true)`，不是默认的冒泡阶段。
+
+antd 的抽屉在处理 Esc 时会调 `event.stopPropagation()`，而它的 handler 挂在 React 根节点上——`stop` 一执行，document 上的冒泡监听就再也收不到 Esc 了。
+
+典型踩坑场景：作者打开 AI 历史抽屉 → 选一条对话 → 抽屉关掉了，但 antd 默认不销毁抽屉 DOM，**焦点还留在抽屉的残留节点上**。这时按 Esc 毫无反应，作者会以为按键坏了。
+
+捕获阶段在事件向下传播时就拿到，绕不过去。
+
 ---
 
 ## 三、状态设计
@@ -133,7 +151,7 @@ msg.role === 'assistant'
 
 ### 3.2 状态内容
 
-FocusProvider 里的 state 只有一个：
+FocusProvider 里的 state：
 
 ```js
 const [focusMode, setFocusMode] = useState(() => {
@@ -143,23 +161,81 @@ const [focusMode, setFocusMode] = useState(() => {
     return false;
   }
 });
+
+// 进入专注时所在的作品
+const [focusWorkId, setFocusWorkId] = useState(() => {
+  try {
+    return localStorage.getItem('ct.focusWork') || null;
+  } catch {
+    return null;
+  }
+});
+
+// 当前打开的作品，由 Workspace 登记
+const [currentWorkId, setCurrentWorkId] = useState(null);
 ```
+
+`focusWorkId` / `currentWorkId` 这两个是为了实现 2.5 的「切作品退出专注」——为什么必须放在 FocusProvider 里，见 3.4。
 
 对外暴露（详见 5.2.2）：
 
 ```js
 {
-  focusMode,     // boolean
-  setFocusMode,  // (bool) => void —— 直接改，用于切作品时静默退出
-  enterFocus,    // () => void —— 广播进入请求（走提示逻辑）
-  exitFocus,     // () => void —— 广播退出请求（走提示逻辑）
-  toggleFocus,   // () => void —— Esc / Cmd+. 用
+  focusMode,         // boolean
+  setFocusMode,      // (bool) => void —— 直接改，用于切作品时静默退出
+  enterFocus,        // () => void —— 广播进入请求（走提示逻辑）
+  exitFocus,         // () => void —— 广播退出请求（走提示逻辑）
+  setCurrentWorkId,  // (id) => void —— Workspace 登记当前作品
 }
 ```
 
 **没有「折叠快照」字段**——见 3.3：专注模式不修改 `collapsed` 本身，快照语义天然成立，不需要额外的状态。
 
 `focusMode` 持久化到 `localStorage['ct.focus']`（值为 `'1'` / 不存在），设备级，跟着设备走。
+`focusWorkId` 持久化到 `localStorage['ct.focusWork']`，跟开关一起存一起清。
+
+### 3.4 「切作品退出专注」为什么不能写在 Workspace 里
+
+最直觉的写法是在 `Workspace` 里记一个「上次是哪个作品」：
+
+```js
+const lastWorkId = useRef(workId);
+useEffect(() => {
+  if (workId !== lastWorkId.current) setFocusMode(false);
+  lastWorkId.current = workId;
+}, [workId]);
+```
+
+**这行代码不工作。**
+
+`Workspace` 在离开工作区时整个卸载（点 logo 回作品列表），再点另一个作品时是**全新挂载**——`useRef(workId)` 的初值就是新的 workId，`workId !== lastWorkId.current` 恒为 false，退出逻辑一次都不会执行。
+
+更隐蔽的是：整页刷新（`location.href = ...`）会触发卸载重挂，看起来是「生效了」，其实是刷新把状态清了，掩盖了 bug。只有 SPA 内部跳转才暴露问题。
+
+所以判断必须活过组件卸载——`FocusProvider` 在路由之上，不卸载，它记着：
+
+```js
+// Workspace 登记当前作品
+useEffect(() => {
+  setCurrentWorkId(workId || null);
+  return () => setCurrentWorkId(null);
+}, [workId, setCurrentWorkId]);
+
+// FocusProvider 里判断
+useEffect(() => {
+  if (!focusMode || !currentWorkId) return;
+  if (!focusWorkId) {
+    setFocusWorkId(currentWorkId);   // 没有记录：认下当前作品
+    return;
+  }
+  if (focusWorkId !== currentWorkId) {
+    setFocusMode(false);
+    setFocusWorkId(null);
+  }
+}, [focusMode, currentWorkId, focusWorkId]);
+```
+
+「没有记录就认下当前作品」这一支覆盖两种情况：老数据（`ct.focus` 有值但 `ct.focusWork` 没有），以及在作品之外按了快捷键。
 
 ### 3.3 与现有折叠状态的关系
 
@@ -308,11 +384,13 @@ CSS：
 
 | 文件 | 改动 |
 |---|---|
-| `web/client/src/store/focus.jsx` | **新建**。FocusProvider + `focusMode` / `enterFocus` / `exitFocus` / `toggleFocus`；内部挂 `Esc` / `Cmd+.` 监听 |
+| `web/client/src/store/focus.jsx` | **新建**。FocusProvider + `focusMode` / `enterFocus` / `exitFocus` / `setCurrentWorkId`；内部挂 `Esc` / `Cmd+.` 监听（捕获阶段） |
 | `web/client/src/App.jsx` | AppShell 外包 FocusProvider；顶栏按 `focusMode` 加 class |
-| `web/client/src/pages/Workspace.jsx` | 栏的显隐判断改成 `focusMode \|\| collapsed.*`；切作品时退出专注 |
+| `web/client/src/pages/Workspace.jsx` | 栏的显隐判断改成 `focusMode \|\| collapsed.*`；登记当前作品 |
 | `web/client/src/components/Editor/ChapterEditor.jsx` | 标题栏加「专注 / 退出专注」图标按钮 |
 | `web/client/src/components/Assistant/Sidebar.jsx` | 暴露「待确认数量」与「滚动到待确认卡片」的方法 |
+| `web/client/src/components/Assistant/pendingActions.js` | **新建**。待确认判定的纯函数 |
+| `web/client/src/hooks/useMediaQuery.js` | 新增 `useIsNarrow()`（991px） |
 | `web/client/src/styles/theme.css` | `--ct-editor-width` 变量；`.is-focus` 下的顶栏最小化样式 |
 
 ### 5.1 快捷键归属：挂在 FocusProvider，不挂在 ChapterEditor
@@ -335,6 +413,10 @@ if ((e.metaKey || e.ctrlKey) && e.key === '.') { e.preventDefault(); ... }
 ```
 
 `Esc` 要在 `focusMode` 为 false 时**什么都不做**——不能 `preventDefault`，免得影响别的组件（`HistoryPanel` 的抽屉、antd 的 Modal 都用 Esc 关闭）。
+
+监听器注册在**捕获阶段**（`addEventListener('keydown', h, true)`），理由见 2.7。
+
+`Esc` 在有可见浮层时直接放行，交给浮层处理，理由见 2.6。
 
 ### 5.2 分工：FocusProvider 管开关，Workspace 管提示
 
@@ -359,9 +441,9 @@ if ((e.metaKey || e.ctrlKey) && e.key === '.') { e.preventDefault(); ... }
 
 1. `Esc` / `Cmd+.` 快捷键（在 `FocusProvider` 里）
 2. 标题栏「专注 / 退出专注」图标（在 `ChapterEditor` 里）
-3. 切作品时自动退出（在 `Workspace` 里）
+3. 切作品时自动退出（由 `FocusProvider` 自己判断，见 3.4）
 
-**三条路径统一广播事件**，由 `Workspace` 统一处理提示。否则会出现「图标退出不弹 toast、快捷键退出弹 toast」的不一致——作者会以为是 bug。
+前两条**统一广播事件**，由 `Workspace` 统一处理提示。否则会出现「图标退出不弹 toast、快捷键退出弹 toast」的不一致——作者会以为是 bug。
 
 ```js
 // FocusProvider 导出的动作
@@ -412,11 +494,11 @@ localStorage 的写入由 `FocusProvider` 在 `focusMode` 变化时统一做，�
 
 ```js
 {
-  focusMode,           // boolean
-  setFocusMode,        // (bool) => void —— 供 Workspace 直接改（切作品时用）
-  enterFocus,          // () => void —— 广播进入请求
-  exitFocus,           // () => void —— 广播退出请求
-  toggleFocus,         // () => void —— Esc / Cmd+. 用
+  focusMode,         // boolean
+  setFocusMode,      // (bool) => void —— 供 Workspace 直接改
+  enterFocus,        // () => void —— 广播进入请求
+  exitFocus,         // () => void —— 广播退出请求
+  setCurrentWorkId,  // (id) => void —— Workspace 登记当前作品
 }
 ```
 
@@ -533,7 +615,25 @@ macOS 上 `Cmd+.` 是「显示/隐藏 Dock」的默认快捷键，部分情况�
 
 ### 6.4 移动端不做
 
-`isMobile`（< 992px）时工作区本来就是单栏 + 抽屉，专注模式没有意义。专注模式入口在移动端不渲染。
+工作区在窄屏（< 992px）下是「抽屉 + 单栏」布局，本来就没有侧栏可藏，专注模式不成立。专注模式入口在窄屏不渲染，顶栏也不最小化（否则作者失去唯一的导航）。
+
+**注意断点**：工作区原本用 `window.innerWidth < 992` 自己判断，而 `useIsMobile` 是 768px。两个断点混用会让 768–992 这一段出现「界面已经是抽屉布局，但专注按钮还挂着」的不一致。
+
+所以新增 `useIsNarrow()`（991px），工作区、章节标题栏、顶栏统一用它。
+
+### 6.5 「去看看」的滚动定位方式
+
+用 `block: 'start'` 而不是 `center`。
+
+AI 写的正文段落可能比视口还高（实测卡片高度 1339px > 视口 900px）。居中的话上下都超出屏幕，作者看到的还是读不到重点——标签和「应用到正文」按钮都在卡片头部，贴顶对齐才刚好露出来。
+
+### 6.6 浮层打开时 Esc 归浮层
+
+有可见的 antd Modal / Drawer 时，Esc 只关浮层，不退出专注模式。
+
+副作用：作者要退出专注模式得按两下 Esc（第一下关浮层，第二下退专注）。这是对的——浮层在的时候，他的注意力就在浮层上。
+
+**注意**：antd 的 Modal 自身并不总是能被 Esc 关闭（焦点不在 Modal 内时不行），这是 antd 的既有行为，跟专注模式无关。
 
 ---
 
@@ -541,31 +641,35 @@ macOS 上 `Cmd+.` 是「显示/隐藏 Dock」的默认快捷键，部分情况�
 
 ### 功能
 
-- [ ] 点标题栏图标进入专注：三栏与顶栏隐藏，logo 与「退出专注」保留
-- [ ] `Esc` 退出（焦点在 textarea 里也退）
-- [ ] `Cmd+.` 进出
-- [ ] 切换章节保持专注；切换作品退出专注
-- [ ] 专注状态刷新后仍是专注（localStorage）
-- [ ] 进入时 toast「已进入专注模式，Esc 退出」
-- [ ] 退出时若有 N 条待确认 AI 结果，toast 提示 + 「去看看」可用
-- [ ] 「去看看」能展开右栏并滚到待确认的 ActionCard
-- [ ] `comment` / `none` 类型的 AI 回复**不**计入待确认数量
-- [ ] AI 正在生成时退出不被拦截，toast 文案是「AI 还在写…」
-- [ ] 作者手动折叠的左栏，在专注模式进出后仍保持折叠（localStorage 未被污染）
-- [ ] 移动端不出现专注模式入口
+- [x] 点标题栏图标进入专注：左右栏与顶栏控件隐藏，logo 与「退出专注」保留
+- [x] `Esc` 退出（焦点在 textarea 里也退）
+- [x] `Cmd+.` 进出
+- [x] 切换章节保持专注
+- [x] **切作品退出专注**（SPA 内部跳转：点 logo 回列表 → 点另一个作品 → 专注模式已退出，`ct.focus` 已清空）
+- [x] 专注状态刷新后仍是专注（localStorage），且 `ct.focusWork` 记录了所在作品
+- [x] 进入时 toast「已进入专注模式，Esc 退出」
+- [x] 退出时若有 N 条待确认 AI 结果，toast 提示 + 「去看看」可用
+- [x] 「去看看」能展开右栏并滚到待确认的 ActionCard（卡片头部可见）
+- [x] `comment` / `none` 类型的 AI 回复**不**计入待确认数量
+- [x] 作者手动折叠的左栏，在专注模式进出后仍保持折叠（localStorage 未被污染）
+- [x] 窄屏（< 992px）不出现专注模式入口，顶栏保持完整
+- [x] **焦点停在已关闭抽屉的残留节点上时，Esc 仍能退出专注**（捕获阶段监听）
+- [x] **浮层开着时 Esc 只关浮层，不退出专注**（Modal、Drawer 都验证过）
 
 ### 视觉
 
-- [ ] 普通模式正文宽 1000px，专注模式 1160px
-- [ ] 切换宽度后格线不错位（34px 整数倍）
-- [ ] **在正文中间聚焦状态下切进切出专注模式，格子不错位、光标不跳底**
+- [x] 专注模式正文宽 1160px（普通档 1000px，中栏不够宽时以实际可用宽度为准）
+- [x] 切换宽度后格线不错位（textarea 高度始终是 34px 的倍数）
+- [x] **在正文中间聚焦状态下切进切出专注模式，格子不错位、光标不跳底**（top 位置保持 144px 不变）
 
 ### 回归
 
-- [ ] 专注模式下 AI 生成不中断（SSE 连接保持）
-- [ ] 现有块编辑器快捷键不受影响（`Cmd+Z` / `Cmd+Shift+Z` / `Cmd+Y`）
-- [ ] 侧栏折叠功能（A6）行为不变
-- [ ] 前端构建通过
+- [x] 专注模式下右栏组件不卸载（SSE 连接保持）
+- [x] 现有块编辑器快捷键不受影响（`Cmd+Z` 撤销实测正常）
+- [x] 侧栏折叠功能（A6）行为不变
+- [x] 前端构建通过
+- [x] 服务端全量测试 230/230 通过
+- [x] 浏览器控制台无报错
 
 ---
 

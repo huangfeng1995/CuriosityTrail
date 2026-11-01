@@ -86,6 +86,7 @@ export default function MessageList({
         <div
           key={msg.id}
           className={`ct-msg is-${msg.role}`}
+          data-msg-id={msg.id}
         >
           {msg.role === 'user' ? (
             <div className="ct-msg-user">

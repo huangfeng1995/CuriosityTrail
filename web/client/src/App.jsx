@@ -12,7 +12,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { AuthProvider, useAuth } from './store/auth';
 import { WorkspaceProvider } from './store/workspace';
 import { FocusProvider, useFocus } from './store/focus';
-import { useIsMobile } from './hooks/useMediaQuery';
+import { useIsMobile, useIsNarrow } from './hooks/useMediaQuery';
 import Login from './pages/Login';
 import Works from './pages/Works';
 import Workspace from './pages/Workspace';
@@ -88,6 +88,7 @@ function AppShell({ isDark, setIsDark }) {
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useIsMobile();
+  const isNarrow = useIsNarrow();
   const { focusMode, exitFocus } = useFocus();
 
   const navItems = [
@@ -105,7 +106,10 @@ function AppShell({ isDark, setIsDark }) {
 
   // 专注模式只在工作区里生效。其他页面（统计、素材库）需要完整导航，
   // 把顶栏削了反而出不去。
-  const focusTopbar = isWorkspace && focusMode;
+  //
+  // 窄屏也不生效：工作区在窄屏下是抽屉 + 单栏，本来就没有侧栏可藏，
+  // 把顶栏削了只会让作者失去唯一的导航。
+  const focusTopbar = isWorkspace && focusMode && !isNarrow;
 
   useEffect(() => {
     // 主题写到 html 上，theme.css 里的变量才能切

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Spin, App as AntApp } from 'antd';
 import { Menu, PanelRight } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -8,6 +8,7 @@ import ChapterEditor from '../components/Editor/ChapterEditor';
 import AssistantSidebar from '../components/Assistant/Sidebar';
 import EmptyState from '../components/EmptyState';
 import Resizer from '../components/Resizer';
+import { useIsNarrow } from '../hooks/useMediaQuery';
 import useColumnWidths, { LIMITS } from '../hooks/useColumnWidths';
 import { pendingActions } from '../components/Assistant/pendingActions';
 import WorkTree from '../components/Sidebar/WorkTree';
@@ -34,9 +35,9 @@ export default function Workspace() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [panelKey, setPanelKey] = useState('characters');
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 992);
+  const isMobile = useIsNarrow();
   const { widths, collapsed, setLeft, setRight, reset, toggleLeft, toggleRight } = useColumnWidths();
-  const { focusMode, setFocusMode } = useFocus();
+  const { focusMode, setFocusMode, setCurrentWorkId } = useFocus();
   const { message: toast } = AntApp.useApp();
 
   // 专注模式是覆盖层，不碰 collapsed。
@@ -90,27 +91,16 @@ export default function Workspace() {
     };
   }, [messages, sending, goToPending, setFocusMode, toast]);
 
-  // 换作品就退出专注模式：新作品是新的写作场景。
+  // 登记当前作品，让 FocusProvider 能判断「是不是换作品了」。
   //
-  // 走 setFocusMode 而不是退出事件——切作品时弹一句
-  // 「AI 有 N 条建议还没处理」会让人困惑，那说的是上一个作品的事。
-  //
-  // 只在 workId 真的变了时才退出。首次挂载不能退出：
-  // 刷新页面时专注状态是从 localStorage 读出来的，
-  // 一挂载就清掉等于「刷新后不再是专注」，跟设计不符。
-  const lastWorkId = useRef(workId);
+  // 「换作品就退出专注模式」这个判断放在 FocusProvider 里：
+  // 它在路由之上，工作区卸载重挂都不会丢状态。
+  // 放在这里用组件内的 ref 记上次作品 id 是没用的——
+  // 离开工作区再进来是全新挂载，ref 的初值就是新作品 id，永远「没变过」。
   useEffect(() => {
-    if (workId && workId !== lastWorkId.current) {
-      setFocusMode(false);
-    }
-    lastWorkId.current = workId;
-  }, [workId, setFocusMode]);
-
-  useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 992);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+    setCurrentWorkId(workId || null);
+    return () => setCurrentWorkId(null);
+  }, [workId, setCurrentWorkId]);
 
   // 作品加载结果：loading / ready / failed
   //

@@ -12,7 +12,7 @@ import BlockToolbar from './BlockToolbar';
 import VersionHistoryPanel from './VersionHistoryPanel';
 import ExportButton from '../ExportButton';
 import EmptyState from '../EmptyState';
-import { useIsMobile } from '../../hooks/useMediaQuery';
+import { useIsNarrow } from '../../hooks/useMediaQuery';
 
 // 保存状态对应的提示文案。状态来自 store，与真实落库进度一致。
 const SAVE_LABEL = {
@@ -50,7 +50,9 @@ export default function ChapterEditor() {
   const [toolbarPos, setToolbarPos] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const editorRef = useRef(null);
-  const isMobile = useIsMobile();
+  // 放不下三栏时（工作区改成抽屉布局）没有侧栏可藏，专注模式不成立。
+  const isNarrow = useIsNarrow();
+  const { focusMode, enterFocus, exitFocus } = useFocus();
 
   // 选区变化时，计算工具条的浮层位置
   useEffect(() => {
@@ -286,6 +288,21 @@ export default function ChapterEditor() {
               保存
             </Button>
             <ExportButton scope="chapter" id={chapter.id} size="small" />
+
+            {/* 专注模式入口。
+                放在最右：它属于「视图」类动作，跟「编辑」类动作
+                （撤销/重做/保存/导出）分开。 */}
+            {!isNarrow && (
+              <Tooltip title={focusMode ? '退出专注模式（Esc）' : '专注模式（⌘.）'}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={focusMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                  onClick={focusMode ? exitFocus : enterFocus}
+                  aria-label={focusMode ? '退出专注模式' : '进入专注模式'}
+                />
+              </Tooltip>
+            )}
           </Space>
         </div>
       </header>

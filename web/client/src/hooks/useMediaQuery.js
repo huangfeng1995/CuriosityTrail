@@ -39,3 +39,18 @@ export function useIsMobile() {
 export function useIsTablet() {
   return useMediaQuery('(max-width: 1024px)');
 }
+
+/**
+ * 窄到放不下三栏。
+ *
+ * 断点跟工作区的布局切换点一致（992px）：低于它，
+ * 工作区改成「抽屉 + 单栏」，没有「收起侧栏」这回事——
+ * 专注模式也就没有意义（没有三栏可藏）。
+ *
+ * 单独一个 hook 而不复用 useIsMobile（768px）：
+ * 两个断点混用会让 768–992 这一段出现
+ * 「界面已经是抽屉布局，但专注按钮还挂着」的不一致。
+ */
+export function useIsNarrow() {
+  return useMediaQuery('(max-width: 991px)');
+}

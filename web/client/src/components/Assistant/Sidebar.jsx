@@ -6,6 +6,7 @@ import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
 import { planApply } from './applyPlan';
+import { pendingActions } from './pendingActions';
 import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
@@ -68,6 +69,30 @@ export default function AssistantSidebar() {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [messages, streaming]);
+
+  // 滚到待确认的卡片。
+  //
+  // 专注模式退出时，作者点「去看看」——那时候右栏可能刚展开，
+  // 消息列表还停在顶部，看不到那张卡在哪。
+  //
+  // 用 block: 'start' 而不是 'center'：卡片里是 AI 写的整段正文，
+  // 可能比视口还高。居中的话上下都超出屏幕，作者看到的还是读不到重点。
+  // 贴顶对齐刚好把「改写 / 续写 / 插入」标签和「应用到正文」按钮露出来。
+  //
+  // 用 window 事件而不是 props：触发方在 Workspace 的 toast 里，
+  // 而 Sidebar 拿不到 Workspace 的局部状态。走事件省一次改造。
+  const scrollToPending = useCallback(() => {
+    const pending = pendingActions(messages).pop();
+    if (!pending) return;
+    const el = listRef.current?.querySelector(`[data-msg-id="${pending.id}"]`);
+    el?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    const onScrollToPending = () => scrollToPending();
+    window.addEventListener('ct:scroll-to-pending', onScrollToPending);
+    return () => window.removeEventListener('ct:scroll-to-pending', onScrollToPending);
+  }, [scrollToPending]);
 
   const activeRole = roles.find((r) => r.key === roleKey);
 
