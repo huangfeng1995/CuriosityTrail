@@ -20,7 +20,7 @@ const MAX_BEATS_PER_GROUP = 3;
 /**
  * 全章目标字数与每段目标。
  *
- * 用户锚定全章 4800–5200 字、40–55 段、段均 100–130。按计划段数反推
+ * 用户锚定全章 4800–5300 字、40–55 段、段均 100–130。按计划段数反推
  * 每段目标（5100 / 段数），让各组目标相加落在 5100 附近；再夹在 90–130，
  * 避免低段数时把单段目标推到 130 以上。注意 countWords 含标点，
  * 指令里必须写明「含标点」，否则模型按纯汉字算，实际会超 15–30%。
@@ -28,6 +28,19 @@ const MAX_BEATS_PER_GROUP = 3;
 const TARGET_CHAPTER_CHARS = 5100;
 const MIN_CHARS_PER_PARAGRAPH = 90;
 const MAX_CHARS_PER_PARAGRAPH = 130;
+
+/** 全章硬顶：超了就截到最后一个完整段，并在结果里标记截断。 */
+const MAX_CHAPTER_CHARS = 5300;
+
+/** 单段硬顶：130 是常规上限，极少数长段允许到 160，超过 160 一律拆开。 */
+const HARD_MAX_CHARS_PER_PARAGRAPH = 160;
+
+/** 续写最多写到本组目标的 105%，到量即停。 */
+const MAX_GROUP_OVERRUN_RATIO = 1.05;
+
+/** 直白对白（引号内文字）占全章字数的目标区间。 */
+const MIN_DIALOGUE_RATIO = 0.14;
+const MAX_DIALOGUE_RATIO = 0.22;
 
 /** 总调用上限：3 组起稿 + 3 次续写 + 2 次分组重写，留一点余量 */
 const MAX_SEGMENT_CALLS = 8;
@@ -45,8 +58,10 @@ const MIN_TARGET_RATIO = 0.8;
  */
 const PARAGRAPH_SHAPE_RULES = [
   '## 全章形态（硬约束，跨组共同遵守）',
-  '- 全章 40–55 段、4800–5200 字（含标点）。每段按「本组篇幅」给出的平均字数写，不要写成 130 字以上的长段；全章段均不要往 130 推。',
-  '- 每个自然段不少于 25 字（含标点），不足就并入相邻的动作或反应段；单段也不要超过 130 字（含标点）。',
+  '- 全章 40–55 段、4800–5300 字（含标点，硬顶 5300）。每段按「本组篇幅」给出的平均字数写，全章段均不要往 130 推。',
+  '- 每个自然段不少于 25 字（含标点），不足就并入相邻的动作或反应段；单段不超过 130 字（含标点）。极少数长段最多到 160 字，超过 130 字的段落每组最多 1 段（全章最多 3 段），并在 reason 里写明原因。',
+  '- 关键交流必须写成直接引语：用人物原话，带引号（「」或“”），并和说话人的动作、神态或反应合在同一段。不许用「他说他问我……」这类转述代替关键对话；转述只用于交代次要信息。',
+  '- 直白对白（引号内文字）占全章字数的 14%–22%（含标点）。每次对话至少改变一个变量（关系、立场、决定或信息），禁止只为填充的寒暄。',
   '- 禁止单句对话独立成段：对话要和动作、神态、说话人的反应合并成一段；只有两句以内的极短问答、且前后有动作句承接时才可独立。',
   '- 本组达到目标字数就停笔，余下内容留给后面的拍；不要靠拉长单段来凑总字数。',
   '- 这些约束在写作时直接落实，不要靠事后合并段落来凑数。',
@@ -109,6 +124,7 @@ function planSegments(plan) {
       content: '',
       called: false,
       continued: false,
+      trimmedOverrun: false,
     });
   }
   return groups;
@@ -139,8 +155,9 @@ function buildSelfCheck(group) {
     '## 交稿前自检（逐条核对，不合格就改）',
     `- 本组字数控制在 ${min}–${max} 字（含标点）；低于 ${min} 要补，高于 ${max} 要删。`,
     `- 本组段数控制在 ${group.targetParagraphs - 1}–${group.targetParagraphs + 1} 段。`,
+    `- 本组直白对白（引号内文字）占本组字数的 ${Math.round(MIN_DIALOGUE_RATIO * 100)}%–${Math.round(MAX_DIALOGUE_RATIO * 100)}%；关键交流必须是带引号的直接引语，转述只交代次要信息。`,
     '- 每个自然段不少于 25 字（含标点）；出现单句对话就并进相邻动作段。',
-    '- 单段不超过 130 字（含标点），超过就压短或拆开。',
+    '- 单段不超过 130 字（含标点）；超过 130 字的段落本组最多 1 段、且不超过 160 字，并在 reason 里说明原因。',
     group.isLast
       ? '- 只在最后一段留一个章末钩子，不要展开后续情节。'
       : '- 不准出现收尾语气，不准埋章末钩子。',
@@ -171,7 +188,7 @@ function buildSegmentInstruction({ plan, group, groups, tail = '' }) {
     later.length ? `后面才写：${later.join('、')}。不要提前写，更不要把全章收束在这里。` : '',
     '',
     '## 本组篇幅（硬约束）',
-    `目标 ${group.targetParagraphs} 段，约 ${group.targetChars} 字（含标点），平均每段约 ${group.avgCharsPerParagraph} 字（约 ${Math.max(80, group.avgCharsPerParagraph - 10)} 个汉字）。写满目标（允许 ±5%）再停，段数最多差 1 段。`,
+    `目标 ${group.targetParagraphs} 段，约 ${group.targetChars} 字（含标点），平均每段约 ${group.avgCharsPerParagraph} 字（约 ${Math.max(80, group.avgCharsPerParagraph - 10)} 个汉字）。写满目标（允许 ±5%）再停，段数最多差 1 段；全章硬顶 ${MAX_CHAPTER_CHARS} 字，超出会被截掉。`,
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
@@ -222,7 +239,7 @@ function buildContinuationInstruction({
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `再写约 ${remainingParagraphs} 段、约 ${remainingChars} 字（含标点），平均每段约 ${Math.max(90, Math.round(remainingChars / remainingParagraphs))} 字。只补差额，不要重开，达到这个数就停。`,
+    `再写约 ${remainingParagraphs} 段、约 ${remainingChars} 字（含标点），平均每段约 ${Math.max(90, Math.round(remainingChars / remainingParagraphs))} 字。只补差额，不要重开；写到本组目标（约 ${group.targetChars} 字）就停，最多不超过 ${Math.round(group.targetChars * MAX_GROUP_OVERRUN_RATIO)} 字（目标的 105%），到量立即停笔，不要继续往下写。`,
     '',
     PARAGRAPH_SHAPE_RULES,
   ];
@@ -354,6 +371,106 @@ function stitchGroups(groups, existingBody = '') {
   );
 }
 
+/**
+ * 截到不超过 maxChars 的最后一个完整自然段。
+ *
+ * keepLast 用于末组续写：章末钩子就在最后一段，宁可少留一点中间内容，
+ * 也不能把钩子截掉。
+ */
+function trimToChars(text, maxChars, { keepLast = false } = {}) {
+  const paragraphs = splitParagraphs(text);
+  const joined = (rows) => rows.join('\n\n');
+  if (countWords(joined(paragraphs)) <= maxChars) {
+    return { text: joined(paragraphs), trimmed: false };
+  }
+
+  if (keepLast && paragraphs.length) {
+    const last = paragraphs.pop();
+    while (paragraphs.length && countWords(joined([...paragraphs, last])) > maxChars) {
+      paragraphs.pop();
+    }
+    return { text: joined([...paragraphs, last]), trimmed: true };
+  }
+
+  while (paragraphs.length > 1 && countWords(joined(paragraphs)) > maxChars) {
+    paragraphs.pop();
+  }
+  return { text: joined(paragraphs), trimmed: true };
+}
+
+/** 按句末标点切句，保留标点。 */
+function splitSentences(text) {
+  return String(text || '')
+    .match(/[^。！？!?…]+(?:[。！？!?…]+|$)/g)
+    ?.map((s) => s.trim())
+    .filter(Boolean) || [];
+}
+
+/**
+ * 超过 160 字的段落按句子拆成两段，避免出现超长自然段。
+ *
+ * 只在能找到「两半都不少于 25 字」的切点时拆；拆不动就原样保留，
+ * 交给自检与汇报去暴露问题，不硬切出碎段。
+ */
+function splitLongParagraphs(text, maxChars = HARD_MAX_CHARS_PER_PARAGRAPH) {
+  const out = [];
+  let splits = 0;
+  for (const paragraph of splitParagraphs(text)) {
+    if (countWords(paragraph) <= maxChars) {
+      out.push(paragraph);
+      continue;
+    }
+
+    const sentences = splitSentences(paragraph);
+    if (sentences.length < 2) {
+      out.push(paragraph);
+      continue;
+    }
+
+    const total = countWords(paragraph);
+    let best = null;
+    for (let i = 1; i < sentences.length; i += 1) {
+      const left = countWords(sentences.slice(0, i).join(''));
+      const right = total - left;
+      if (left >= 25 && right >= 25 && left <= maxChars && right <= maxChars) {
+        const score = Math.abs(left - right);
+        if (!best || score < best.score) best = { i, score };
+      }
+    }
+
+    if (!best) {
+      out.push(paragraph);
+      continue;
+    }
+
+    out.push(sentences.slice(0, best.i).join(''), sentences.slice(best.i).join(''));
+    splits += 1;
+  }
+
+  return { text: out.join('\n\n'), splits };
+}
+
+/**
+ * 交付前的形态兜底：拆掉超过 160 字的超长段，再把全章截到 5300 字。
+ *
+ * @param {string} text
+ * @returns {{content: string, splitParagraphs: number, truncated: boolean, originalChars: number, chars: number}}
+ */
+function normalizeChapterShape(text) {
+  const original = String(text || '').trim();
+  const originalChars = countWords(original);
+  const split = splitLongParagraphs(original);
+  const capped = trimToChars(split.text, MAX_CHAPTER_CHARS);
+
+  return {
+    content: capped.text,
+    longParagraphSplits: split.splits,
+    truncated: capped.trimmed,
+    originalChars,
+    chars: countWords(capped.text),
+  };
+}
+
 /** 这一组是否明显没写够。末组允许收束，所以只看字数/段数，不看收尾词。 */
 function needsContinuation(group, force = false) {
   if (group.continued || !group.content) return false;
@@ -465,19 +582,18 @@ async function draftInSegments({
     const closingHit = !group.isLast && hasClosingTone(out.content);
     group.content = group.isLast ? out.content : stripClosingTail(out.content);
 
-    if (needsContinuation(group, closingHit) && callCount < maxCalls) {
+    // 续写只补到本组目标的 100%，代码侧再兜一层 105% 上限：
+    // 上一轮实测按 70% 补差，模型仍多写了 1707 字，把整章顶到 6370，
+    // 所以口径改成全额补差 + 到量即停，超出 105% 的部分按整段回退。
+    if (
+      needsContinuation(group, closingHit) &&
+      callCount < maxCalls &&
+      countWords(group.content) < group.targetChars
+    ) {
       progress({ phase: 'continue', index: group.index, total: groups.length });
       const writtenParagraphs = splitParagraphs(group.content).length;
-      // 只补差额的 70%：上一轮实测，按全额补差会让模型再写超 50%（要 567 写 878），
-      // 补到 93% 左右即可，续写后不再复检。
-      const remainingParagraphs = Math.max(
-        2,
-        Math.ceil((group.targetParagraphs - writtenParagraphs) * 0.7)
-      );
-      const remainingChars = Math.max(
-        200,
-        Math.round((group.targetChars - countWords(group.content)) * 0.7)
-      );
+      const remainingParagraphs = Math.max(1, group.targetParagraphs - writtenParagraphs);
+      const remainingChars = Math.max(120, group.targetChars - countWords(group.content));
       const contInstruction = buildContinuationInstruction({
         plan,
         group,
@@ -494,6 +610,13 @@ async function draftInSegments({
           if (cleaned) {
             group.content = appendFresh(group.content, cleaned);
             group.continued = true;
+
+            const limit = Math.round(group.targetChars * MAX_GROUP_OVERRUN_RATIO);
+            if (countWords(group.content) > limit) {
+              const capped = trimToChars(group.content, limit, { keepLast: group.isLast });
+              group.content = capped.text;
+              group.trimmedOverrun = capped.trimmed;
+            }
           }
         }
       } catch (err) {
@@ -503,15 +626,21 @@ async function draftInSegments({
     }
   }
 
-  const content = stitchGroups(groups, existingBody);
+  const stitched = stitchGroups(groups, existingBody);
+  const normalized = normalizeChapterShape(stitched);
   return {
     groups,
-    content,
+    content: normalized.content,
     action: 'append',
     calls,
     callCount,
     degraded,
     continuations: groups.filter((g) => g.continued).length,
+    trimmedOverruns: groups.filter((g) => g.trimmedOverrun).length,
+    longParagraphSplits: normalized.longParagraphSplits,
+    truncated: normalized.truncated,
+    originalChars: normalized.originalChars,
+    chars: normalized.chars,
     finishReason,
     usage: usageSum(calls),
   };
@@ -613,15 +742,20 @@ async function rewriteMissingGroups({
     rewroteGroups += 1;
   }
 
-  const content = stitchGroups(groups, existingBody);
+  const stitched = stitchGroups(groups, existingBody);
+  const normalized = normalizeChapterShape(stitched);
   return {
     groups,
-    content,
+    content: normalized.content,
     calls,
     callCount: count,
     degraded,
     rewroteGroups,
     failedGroups,
+    longParagraphSplits: normalized.longParagraphSplits,
+    truncated: normalized.truncated,
+    originalChars: normalized.originalChars,
+    chars: normalized.chars,
     finishReason,
     usage: usageSum(calls),
   };
@@ -641,6 +775,11 @@ module.exports = {
   TARGET_CHAPTER_CHARS,
   MIN_CHARS_PER_PARAGRAPH,
   MAX_CHARS_PER_PARAGRAPH,
+  MAX_CHAPTER_CHARS,
+  HARD_MAX_CHARS_PER_PARAGRAPH,
+  MAX_GROUP_OVERRUN_RATIO,
+  MIN_DIALOGUE_RATIO,
+  MAX_DIALOGUE_RATIO,
   MAX_SEGMENT_CALLS,
   MIN_TARGET_RATIO,
   PARAGRAPH_SHAPE_RULES,
@@ -655,6 +794,10 @@ module.exports = {
   hasClosingTone,
   appendFresh,
   stitchGroups,
+  trimToChars,
+  splitSentences,
+  splitLongParagraphs,
+  normalizeChapterShape,
   needsContinuation,
   usageSum,
   draftInSegments,

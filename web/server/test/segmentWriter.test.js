@@ -12,6 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const segmentWriter = require('../services/agent/segmentWriter');
+const { countWords } = require('../services/wordCount');
 
 const TYPES = ['行动', '冲突', '转折', '揭示'];
 
@@ -140,11 +141,17 @@ test('段落形态硬约束写进起稿、续写与重写指令', () => {
   });
 
   for (const instruction of [middle, last, continuation, rewrite]) {
-    assert.match(instruction, /全章 40–55 段、4800–5200 字/);
+    assert.match(instruction, /全章 40–55 段、4800–5300 字/);
     assert.match(instruction, /按「本组篇幅」给出的平均字数写/, '要按组均值写，不能给 100–130 这种区间');
     assert.match(instruction, /含标点/, '必须写明含标点，否则模型会按纯汉字算，实际超 30%');
     assert.match(instruction, /不少于 25 字/);
+    assert.match(instruction, /关键交流必须写成直接引语/, '关键对话必须用人物原话');
+    assert.match(instruction, /转述代替关键对话/, '要明确禁止把对话写成转述');
+    assert.match(instruction, /直白对白（引号内文字）占全章字数的 14%–22%/);
+    assert.match(instruction, /禁止只为填充的寒暄/);
     assert.match(instruction, /禁止单句对话独立成段/);
+    assert.match(instruction, /单段不超过 130 字/);
+    assert.match(instruction, /最多到 160 字/);
     assert.match(instruction, /不要靠事后合并段落/);
     assert.match(instruction, /交稿前自检/, '自检清单要能逐条核对篇幅与段落形态');
     assert.doesNotMatch(instruction, /每段 90–130 字/, '旧的 90 字下限已经作废');
@@ -290,4 +297,56 @@ test('缺拍只重写对应组，其他组正文原样保留', async () => {
   assert.match(rewritten.content, /甲第1段/, '第一组原样保留');
   assert.match(rewritten.content, /乙改第1段/, '第二组换成重写版');
   assert.match(rewritten.content, /章末抬出一口箱子/);
+});
+
+test('续写按差额补齐，超出组目标 105% 的部分按整段回退', async () => {
+  const plan = makePlan(4); // 2 组，每组目标 390 字
+  const runner = makeRunner([
+    '只写了一句。',
+    body('续', 30), // 故意写 3000 字，验证代码侧兜底
+    body('乙', 4),
+  ]);
+
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
+
+  const group = draft.groups[0];
+  const limit = Math.round(group.targetChars * segmentWriter.MAX_GROUP_OVERRUN_RATIO);
+  assert.ok(countWords(group.content) <= limit, `续写后不得超过 ${limit} 字`);
+  assert.strictEqual(draft.trimmedOverruns, 1, '超限回退要留下标记');
+  assert.match(runner.seen[1].instruction, /目标的 105%/);
+  assert.match(runner.seen[1].instruction, /到量立即停笔/);
+});
+
+test('末组续写回退时保留最后一段的章末钩子', () => {
+  const text = `${'字'.repeat(100)}\n\n${'字'.repeat(100)}\n\n结尾的钩子。`;
+  const out = segmentWriter.trimToChars(text, 120, { keepLast: true });
+
+  assert.strictEqual(out.trimmed, true);
+  assert.match(out.text, /结尾的钩子/, '钩子不能被截掉');
+  assert.ok(countWords(out.text) <= 120, '回退后应当回到上限内');
+});
+
+test('全章超过 5300 字硬顶时截到最后一个完整段并标记', async () => {
+  const plan = makePlan(8);
+  const runner = makeRunner([body('甲', 60), body('乙', 60), body('丙', 60)]);
+
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
+
+  assert.strictEqual(draft.truncated, true);
+  assert.ok(draft.originalChars > segmentWriter.MAX_CHAPTER_CHARS);
+  assert.ok(draft.chars <= segmentWriter.MAX_CHAPTER_CHARS);
+  const last = segmentWriter.splitParagraphs(draft.content).pop();
+  assert.match(last, /[。！？]$/, '截断必须落在完整段，不能切半句');
+});
+
+test('超过 160 字的段落按句子拆开，且不切出 25 字以下的碎段', () => {
+  const long = Array.from({ length: 5 }, () => `${'字'.repeat(39)}。`).join('');
+  const out = segmentWriter.splitLongParagraphs(long);
+
+  assert.strictEqual(out.splits, 1);
+  const parts = segmentWriter.splitParagraphs(out.text);
+  assert.strictEqual(parts.length, 2);
+  for (const part of parts) {
+    assert.ok(countWords(part) >= 25 && countWords(part) <= 160, `拆出的段落字数：${countWords(part)}`);
+  }
 });
