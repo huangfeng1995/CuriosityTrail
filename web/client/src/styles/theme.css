@@ -380,6 +380,7 @@ body {
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  text-decoration: none;
   transition:
     color 0.18s ease,
     background-color 0.18s ease;
@@ -3028,99 +3029,7 @@ body.ct-resizing * {
   margin-top: 6px;
 }
 
-/* 使用手册 */
-.ct-manual {
-  display: flex;
-  gap: 26px;
-  align-items: flex-start;
-}
-.ct-manual-nav {
-  flex: 0 0 168px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  position: sticky;
-  top: 70px;
-}
-.ct-manual-nav-item {
-  border: none;
-  background: transparent;
-  text-align: left;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--text-tertiary);
-  padding: 7px 11px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.ct-manual-nav-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-}
-.ct-manual-nav-item.is-active {
-  background: var(--accent-dim);
-  color: var(--accent);
-}
-.ct-manual-body {
-  flex: 1;
-  min-width: 0;
-}
-.ct-manual-section {
-  display: none;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 20px 24px;
-}
-.ct-manual-section.is-active {
-  display: block;
-}
-.ct-manual-title {
-  margin: 0 0 14px;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.ct-manual-item {
-  margin-bottom: 18px;
-}
-.ct-manual-item:last-child {
-  margin-bottom: 0;
-}
-.ct-manual-item-h {
-  margin: 0 0 4px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.ct-manual-item-p {
-  margin: 0 !important;
-  font-size: 13.5px;
-  color: var(--text-tertiary);
-  line-height: 1.75;
-}
-.ct-manual-extra {
-  margin: 0 !important;
-  font-size: 13.5px;
-  color: var(--text-tertiary);
-  line-height: 1.75;
-}
-
 @media (max-width: 768px) {
-  .ct-manual {
-    flex-direction: column;
-    gap: 14px;
-  }
-  .ct-manual-nav {
-    flex: none;
-    position: static;
-    flex-direction: row;
-    overflow-x: auto;
-    padding-bottom: 2px;
-  }
-  .ct-manual-nav-item {
-    white-space: nowrap;
-  }
   .ct-insight-cards {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   }

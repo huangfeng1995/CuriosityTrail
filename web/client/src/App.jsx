@@ -21,7 +21,6 @@ import StylePage from './pages/Style';
 import SettingsPage from './pages/SettingsPage';
 import StatsPage from './pages/Stats';
 import FeedbackPage from './pages/Feedback';
-import ManualPage from './pages/Manual';
 import BrandLogo from './components/BrandLogo';
 
 const { Header, Content } = Layout;
@@ -96,7 +95,12 @@ function AppShell({ isDark, setIsDark }) {
     { key: '/materials', icon: <Library size={15} />, label: '素材库' },
     { key: '/style', icon: <Palette size={15} />, label: '文风' },
     { key: '/stats', icon: <BarChart size={15} />, label: '统计' },
-    { key: '/manual', icon: <BookOpen size={15} />, label: '手册' },
+    {
+      key: '/help',
+      href: 'https://www.curiositytrail.xyz/help/',
+      icon: <BookOpen size={15} />,
+      label: '手册',
+    },
     { key: '/feedback', icon: <MessageSquare size={15} />, label: '反馈' },
     { key: '/settings', icon: <SettingsIcon size={15} />, label: '设置' },
   ];
@@ -144,16 +148,29 @@ function AppShell({ isDark, setIsDark }) {
 
         {!isWorkspace && (
           <nav className="ct-nav">
-            {navItems.map((item) => (
-              <button
-                key={item.key}
-                className={`ct-nav-item${location.pathname === item.key ? ' is-active' : ''}`}
-                onClick={() => navigate(item.key)}
-              >
-                {item.icon}
-                {!isMobile && <span>{item.label}</span>}
-              </button>
-            ))}
+            {navItems.map((item) =>
+              item.href ? (
+                <a
+                  key={item.key}
+                  className="ct-nav-item"
+                  href={item.href}
+                  target="_blank"
+                  rel="noopener"
+                >
+                  {item.icon}
+                  {!isMobile && <span>{item.label}</span>}
+                </a>
+              ) : (
+                <button
+                  key={item.key}
+                  className={`ct-nav-item${location.pathname === item.key ? ' is-active' : ''}`}
+                  onClick={() => navigate(item.key)}
+                >
+                  {item.icon}
+                  {!isMobile && <span>{item.label}</span>}
+                </button>
+              )
+            )}
           </nav>
         )}
 
@@ -236,14 +253,6 @@ function AppShell({ isDark, setIsDark }) {
             element={
               <div className="ct-page">
                 <StatsPage />
-              </div>
-            }
-          />
-          <Route
-            path="/manual"
-            element={
-              <div className="ct-page">
-                <ManualPage />
               </div>
             }
           />
