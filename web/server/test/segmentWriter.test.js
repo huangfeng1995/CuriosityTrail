@@ -140,10 +140,13 @@ test('段落形态硬约束写进起稿、续写与重写指令', () => {
   });
 
   for (const instruction of [middle, last, continuation, rewrite]) {
-    assert.match(instruction, /全章目标 40–55 段、段均 100–130 字、总字数 4800–5200/);
+    assert.match(instruction, /全章 40–55 段、4800–5200 字/);
+    assert.match(instruction, /按「本组篇幅」给出的平均字数写/, '要按组均值写，不能给 100–130 这种区间');
+    assert.match(instruction, /含标点/, '必须写明含标点，否则模型会按纯汉字算，实际超 30%');
     assert.match(instruction, /不少于 25 字/);
     assert.match(instruction, /禁止单句对话独立成段/);
     assert.match(instruction, /不要靠事后合并段落/);
+    assert.match(instruction, /交稿前自检/, '自检清单要能逐条核对篇幅与段落形态');
     assert.doesNotMatch(instruction, /每段 90–130 字/, '旧的 90 字下限已经作废');
   }
 });
@@ -171,6 +174,21 @@ test('续写门槛按组目标的 80%：70% 要续写，90% 不续写', () => {
     false,
     '900/1000 达到 80%，不应续写'
   );
+});
+
+test('组目标按计划段数反推，合计落在 5000 附近而不是越写越长', () => {
+  for (const paragraphsPerBeat of [6, 7]) {
+    const plan = makePlan(7, paragraphsPerBeat);
+    const groups = segmentWriter.planSegments(plan);
+    const total = groups.reduce((sum, g) => sum + g.targetChars, 0);
+    assert.ok(total >= 4800 && total <= 5200, `计划段数 ${paragraphsPerBeat * 7} 时组目标合计 ${total}`);
+    for (const group of groups) {
+      assert.ok(
+        group.avgCharsPerParagraph >= 90 && group.avgCharsPerParagraph <= 125,
+        `每段目标应在 90–125，收到 ${group.avgCharsPerParagraph}`
+      );
+    }
+  }
 });
 
 test('拼接不重复前文：下一组重抄上一组尾段时只保留一份', async () => {

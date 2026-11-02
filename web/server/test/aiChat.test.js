@@ -73,7 +73,7 @@ async function seedChapter(options = {}) {
 }
 
 /**
- * 一份合格的节拍表响应（四拍、合计 36 段，落在 35–55 的长章区间）。
+ * 一份合格的节拍表响应（四拍、合计 40 段，落在 40–55 的长章区间）。
  */
 function validPlanJson() {
   return JSON.stringify({
@@ -93,7 +93,7 @@ function validPlanJson() {
         cost: '押上唯一的信物',
         delta: { variable: '处境', from: '被挡在庙外', to: '进入内殿' },
         infoGain: '庙里供着的不是城隍像，而是一张旧照片',
-        paragraphs: 9,
+        paragraphs: 10,
         endHook: '照片上的人穿着现任知县的官服',
       },
       {
@@ -104,7 +104,7 @@ function validPlanJson() {
         cost: '被赶出庙门',
         delta: { variable: '关系', from: '互相试探', to: '彻底翻脸' },
         infoGain: '旧案发生在二十年前，当时知县尚未到任',
-        paragraphs: 9,
+        paragraphs: 10,
         endHook: '庙祝说漏了「那年冬天」四个字',
       },
       {
@@ -115,7 +115,7 @@ function validPlanJson() {
         cost: '惊动管档的主簿',
         delta: { variable: '信息', from: '以为只是一桩旧案', to: '发现有人一直在抹掉它' },
         infoGain: '缺失的几页正好是案发前后三个月',
-        paragraphs: 9,
+        paragraphs: 10,
         endHook: '主簿当夜就请了病假',
       },
       {
@@ -126,7 +126,7 @@ function validPlanJson() {
         cost: '失去当面指认的机会',
         delta: { variable: '决心', from: '只想查清线索', to: '决定把这桩旧案翻到底' },
         infoGain: '取走照片的人留下了与知县相同的印泥',
-        paragraphs: 9,
+        paragraphs: 10,
         endHook: '县衙后门当晚抬出一口箱子',
       },
     ],
@@ -136,13 +136,13 @@ function validPlanJson() {
 /**
  * 写满一组目标篇幅的假正文，避免测试里意外触发续写。
  *
- * 四拍章按 3 拍一组切成 2 组，每组目标 18 段 ≈ 1980 字，
- * 低于 70% 会触发续写，所以这里给到 16 段 × 约 115 字。
+ * 四拍章按 3 拍一组切成 2 组，每组目标 20 段 ≈ 2440 字，
+ * 低于 80% 会触发续写，所以这里给到 20 段 × 约 120 字。
  */
 function segmentBody(label, extraParagraph = '') {
   const sentence = '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
   const rows = Array.from(
-    { length: 16 },
+    { length: 20 },
     (_, i) => `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
   );
   if (extraParagraph) rows.push(extraParagraph);

@@ -17,8 +17,17 @@ const { countWords } = require('../wordCount');
 /** 每组最多写的节拍数（设计上允许 2–4，取 3 让 8 拍的章也有 3 次推进） */
 const MAX_BEATS_PER_GROUP = 3;
 
-/** 每段目标字数：范文 5047 字 / 45 段 ≈ 112，取整到 110 */
-const CHARS_PER_PARAGRAPH = 110;
+/**
+ * 全章目标字数与每段目标。
+ *
+ * 用户锚定全章 4800–5200 字、40–55 段、段均 100–130。按计划段数反推
+ * 每段目标（5100 / 段数），让各组目标相加落在 5100 附近；再夹在 90–130，
+ * 避免低段数时把单段目标推到 130 以上。注意 countWords 含标点，
+ * 指令里必须写明「含标点」，否则模型按纯汉字算，实际会超 15–30%。
+ */
+const TARGET_CHAPTER_CHARS = 5100;
+const MIN_CHARS_PER_PARAGRAPH = 90;
+const MAX_CHARS_PER_PARAGRAPH = 130;
 
 /** 总调用上限：3 组起稿 + 3 次续写 + 2 次分组重写，留一点余量 */
 const MAX_SEGMENT_CALLS = 8;
@@ -36,9 +45,10 @@ const MIN_TARGET_RATIO = 0.8;
  */
 const PARAGRAPH_SHAPE_RULES = [
   '## 全章形态（硬约束，跨组共同遵守）',
-  '- 全章目标 40–55 段、段均 100–130 字、总字数 4800–5200。这是全章目标，不是本组目标；本组只按上面的组目标写。',
-  '- 每个自然段原则上不少于 25 字；不足 25 字必须并入相邻的动作或反应段。',
+  '- 全章 40–55 段、4800–5200 字（含标点）。每段按「本组篇幅」给出的平均字数写，不要写成 130 字以上的长段；全章段均不要往 130 推。',
+  '- 每个自然段不少于 25 字（含标点），不足就并入相邻的动作或反应段；单段也不要超过 130 字（含标点）。',
   '- 禁止单句对话独立成段：对话要和动作、神态、说话人的反应合并成一段；只有两句以内的极短问答、且前后有动作句承接时才可独立。',
+  '- 本组达到目标字数就停笔，余下内容留给后面的拍；不要靠拉长单段来凑总字数。',
   '- 这些约束在写作时直接落实，不要靠事后合并段落来凑数。',
 ].join('\n');
 
@@ -69,6 +79,18 @@ function planSegments(plan) {
   const base = Math.floor(beats.length / groupCount);
   const remainder = beats.length % groupCount;
 
+  const plannedParagraphs = beats.reduce(
+    (sum, beat) => sum + (Number(beat.paragraphs) || 0),
+    0
+  );
+  const avgCharsPerParagraph = Math.max(
+    MIN_CHARS_PER_PARAGRAPH,
+    Math.min(
+      MAX_CHARS_PER_PARAGRAPH,
+      Math.floor(TARGET_CHAPTER_CHARS / Math.max(1, plannedParagraphs))
+    )
+  );
+
   const groups = [];
   let cursor = 0;
   for (let i = 0; i < groupCount; i += 1) {
@@ -82,7 +104,8 @@ function planSegments(plan) {
       beats: slice,
       beatIds: slice.map((b) => b.id),
       targetParagraphs,
-      targetChars: targetParagraphs * CHARS_PER_PARAGRAPH,
+      targetChars: targetParagraphs * avgCharsPerParagraph,
+      avgCharsPerParagraph,
       content: '',
       called: false,
       continued: false,
@@ -100,6 +123,28 @@ function beatSummary(beats) {
         `收在小钩子：${b.endHook}`
     )
     .join('\n');
+}
+
+/**
+ * 交稿前自检清单。
+ *
+ * 把篇幅与段落形态写成可逐条核对的清单，比散在正文里的规则更容易被执行。
+ * 上次实测（三份 7.5k/7.1k/6.6k）说明模型会把「100–130」当成上限来写，
+ * 所以这里给出明确字数上限，并再次强调单段下限与末组钩子。
+ */
+function buildSelfCheck(group) {
+  const min = Math.round(group.targetChars * 0.95);
+  const max = Math.round(group.targetChars * 1.05);
+  return [
+    '## 交稿前自检（逐条核对，不合格就改）',
+    `- 本组字数控制在 ${min}–${max} 字（含标点）；低于 ${min} 要补，高于 ${max} 要删。`,
+    `- 本组段数控制在 ${group.targetParagraphs - 1}–${group.targetParagraphs + 1} 段。`,
+    '- 每个自然段不少于 25 字（含标点）；出现单句对话就并进相邻动作段。',
+    '- 单段不超过 130 字（含标点），超过就压短或拆开。',
+    group.isLast
+      ? '- 只在最后一段留一个章末钩子，不要展开后续情节。'
+      : '- 不准出现收尾语气，不准埋章末钩子。',
+  ].join('\n');
 }
 
 /**
@@ -126,7 +171,7 @@ function buildSegmentInstruction({ plan, group, groups, tail = '' }) {
     later.length ? `后面才写：${later.join('、')}。不要提前写，更不要把全章收束在这里。` : '',
     '',
     '## 本组篇幅（硬约束）',
-    `目标 ${group.targetParagraphs} 段，约 ${group.targetChars} 字；每段 100–130 字，原则上不少于 25 字。写到目标段数附近再停，不要用概述凑数。`,
+    `目标 ${group.targetParagraphs} 段，约 ${group.targetChars} 字（含标点），平均每段约 ${group.avgCharsPerParagraph} 字（约 ${Math.max(80, group.avgCharsPerParagraph - 10)} 个汉字）。写满目标（允许 ±5%）再停，段数最多差 1 段。`,
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
@@ -152,6 +197,8 @@ function buildSegmentInstruction({ plan, group, groups, tail = '' }) {
 
   lines.push(
     '',
+    buildSelfCheck(group),
+    '',
     '输出仍按写手契约的 JSON：action 固定为 "append"，content 只放本组正文，reason 用一句话说明本组写了什么。'
   );
   return lines.join('\n');
@@ -175,7 +222,7 @@ function buildContinuationInstruction({
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `再写约 ${remainingParagraphs} 段、约 ${remainingChars} 字，每段 100–130 字，原则上不少于 25 字。`,
+    `再写约 ${remainingParagraphs} 段、约 ${remainingChars} 字（含标点），平均每段约 ${Math.max(90, Math.round(remainingChars / remainingParagraphs))} 字。只补差额，不要重开，达到这个数就停。`,
     '',
     PARAGRAPH_SHAPE_RULES,
   ];
@@ -190,7 +237,7 @@ function buildContinuationInstruction({
     );
   }
 
-  lines.push('', '输出 JSON：action 固定为 "append"，content 只放续写的正文。');
+  lines.push('', buildSelfCheck(group), '', '输出 JSON：action 固定为 "append"，content 只放续写的正文。');
   return lines.join('\n');
 }
 
@@ -231,13 +278,16 @@ function buildGroupRewriteInstruction({
     nextHead || '（本章到此结束）',
     '',
     '## 篇幅',
-    `目标 ${group.targetParagraphs} 段、约 ${group.targetChars} 字，每段 100–130 字，原则上不少于 25 字。`,
+    `目标 ${group.targetParagraphs} 段、约 ${group.targetChars} 字（含标点），平均每段约 ${group.avgCharsPerParagraph} 字（约 ${Math.max(80, group.avgCharsPerParagraph - 10)} 个汉字）；写满目标（允许 ±5%），段数最多差 1 段。`,
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
     group.isLast
       ? '这是最后一组：可以收束本章，并把唯一一个章末钩子放在最后。'
       : '本章尚未结束：不要收尾，不要埋全章钩子。',
+    '',
+    buildSelfCheck(group),
+    '',
     '输出 JSON：action 固定为 "append"，content 只放这一组重写后的正文。',
   ].join('\n');
 }
@@ -418,8 +468,16 @@ async function draftInSegments({
     if (needsContinuation(group, closingHit) && callCount < maxCalls) {
       progress({ phase: 'continue', index: group.index, total: groups.length });
       const writtenParagraphs = splitParagraphs(group.content).length;
-      const remainingParagraphs = Math.max(2, group.targetParagraphs - writtenParagraphs);
-      const remainingChars = Math.max(220, group.targetChars - countWords(group.content));
+      // 只补差额的 70%：上一轮实测，按全额补差会让模型再写超 50%（要 567 写 878），
+      // 补到 93% 左右即可，续写后不再复检。
+      const remainingParagraphs = Math.max(
+        2,
+        Math.ceil((group.targetParagraphs - writtenParagraphs) * 0.7)
+      );
+      const remainingChars = Math.max(
+        200,
+        Math.round((group.targetChars - countWords(group.content)) * 0.7)
+      );
       const contInstruction = buildContinuationInstruction({
         plan,
         group,
@@ -580,7 +638,9 @@ function segmentBadge(degraded) {
 
 module.exports = {
   MAX_BEATS_PER_GROUP,
-  CHARS_PER_PARAGRAPH,
+  TARGET_CHAPTER_CHARS,
+  MIN_CHARS_PER_PARAGRAPH,
+  MAX_CHARS_PER_PARAGRAPH,
   MAX_SEGMENT_CALLS,
   MIN_TARGET_RATIO,
   PARAGRAPH_SHAPE_RULES,

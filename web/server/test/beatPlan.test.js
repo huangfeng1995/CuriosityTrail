@@ -24,7 +24,7 @@ const {
 } = require('../services/agent/beatPlan');
 
 /**
- * 一份合格的四拍节拍表。段落合计 35（全章配额下限，对齐 5000 字长章）。
+ * 一份合格的四拍节拍表。段落合计 40（全章配额下限，对齐 5000 字长章）。
  */
 function makePlan(overrides = {}) {
   return {
@@ -44,7 +44,7 @@ function makePlan(overrides = {}) {
         cost: '把唯一的信物押在门口',
         delta: { variable: '处境', from: '被挡在庙外', to: '得以进入内殿' },
         infoGain: '庙里供着的不是城隍像，而是一张旧照片',
-        paragraphs: 9,
+        paragraphs: 10,
         endHook: '照片上的人穿着现任知县的官服',
       },
       {
@@ -55,7 +55,7 @@ function makePlan(overrides = {}) {
         cost: '激怒庙祝，被赶出去',
         delta: { variable: '关系', from: '互相试探', to: '彻底翻脸' },
         infoGain: '旧案发生在二十年前，当时知县尚未到任',
-        paragraphs: 9,
+        paragraphs: 10,
         endHook: '庙祝说漏了「那年冬天」四个字',
       },
       {
@@ -66,7 +66,7 @@ function makePlan(overrides = {}) {
         cost: '惊动了管档的主簿',
         delta: { variable: '信息', from: '以为只是一桩旧案', to: '发现有人一直在抹掉它' },
         infoGain: '缺失的几页正好是案发前后三个月',
-        paragraphs: 9,
+        paragraphs: 10,
         endHook: '主簿当夜就请了病假',
       },
       {
@@ -77,7 +77,7 @@ function makePlan(overrides = {}) {
         cost: '失去当面指认的机会',
         delta: { variable: '决心', from: '只想查清线索', to: '决定把这桩旧案翻到底' },
         infoGain: '取走照片的人留下了与知县相同的印泥',
-        paragraphs: 8,
+        paragraphs: 10,
         endHook: '县衙后门当晚抬出一口箱子',
       },
     ],
@@ -91,7 +91,7 @@ test('合格节拍表通过校验并归一化', () => {
   assert.strictEqual(result.ok, true);
   assert.strictEqual(result.errors.length, 0);
   assert.strictEqual(result.plan.beats.length, 4);
-  assert.strictEqual(result.plan.totalParagraphs, 35);
+  assert.strictEqual(result.plan.totalParagraphs, 40);
   assert.deepStrictEqual(result.plan.beats[0].delta, {
     variable: '处境',
     from: '被挡在庙外',
@@ -112,7 +112,7 @@ test('节拍数越界、缺字段、缺 endHook、段数越界都会被拒绝', 
     [
       '全章段数太少',
       makePlan({ beats: makePlan().beats.map((b) => ({ ...b, paragraphs: 1 })) }),
-      /全章段落数必须在 35–55/,
+      /全章段落数必须在 40–55/,
     ],
     [
       '单拍段落少于 3',
@@ -137,7 +137,7 @@ test('节拍数越界、缺字段、缺 endHook、段数越界都会被拒绝', 
           paragraphs: 10,
         })),
       }),
-      /全章段落数必须在 35–55/,
+      /全章段落数必须在 40–55/,
     ],
     [
       'infoGain 太短',
