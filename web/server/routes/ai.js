@@ -878,10 +878,16 @@ router.post('/chat', async (req, res) => {
     const parsed = finalResult.parsed;
     const payload = normalizeAction({ ...(parsed || {}), skills: finalResult.toolCalls });
 
-    // 模型没给 JSON 时，把原文当对话回复
+    // 模型没给 JSON 时，把原文当正文下发。
+    //
+    // 不能丢：这段文本是作者唯一能拿回的东西。标成 append 并带上
+    // parseFailed，前端才会给出「应用到正文」按钮；reason 说明这是
+    // 格式失败后的原文回退，避免作者以为模型正常完成了改写。
     if (!parsed && rawText.trim()) {
-      payload.action = 'comment';
+      payload.action = 'append';
       payload.content = rawText.trim();
+      payload.reason = '模型没有按约定格式返回，已把原始文本当作正文；确认无误后点「应用到正文」。';
+      payload.parseFailed = true;
     }
 
     // 模型给了 JSON，但正文是空的（常见于 action='none' 的空回复）。
@@ -1027,6 +1033,9 @@ router.post('/chat', async (req, res) => {
       reason: payload.reason,
       citations: payload.citations,
       skills: payload.skills,
+      // 模型没按 JSON 契约返回、原文被当作正文回退时为 true。
+      // 前端可据此提示作者「这是原文，不是模型正常生成的改写」。
+      parseFailed: Boolean(payload.parseFailed),
     });
     send({
       type: 'done',
@@ -1403,10 +1412,13 @@ router.post('/inline', async (req, res) => {
           error: isEmpty ? `已自动重试一次，模型仍然没有返回内容。${reason}` : reason,
         });
       }
+      // 解析失败但拿到了原文：不能丢，也不能谎称改写成功。
+      // 作为 append 正文交给作者确认，并标记 parseFailed。
       return res.json({
-        action: 'comment',
+        action: 'append',
         content: rawText.trim(),
-        reason: '',
+        reason: '模型没有按约定格式返回，已把原始文本当作正文；确认无误后点「应用到正文」。',
+        parseFailed: true,
         citations: [],
         provider: name,
         degraded,

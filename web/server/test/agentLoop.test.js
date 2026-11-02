@@ -111,13 +111,14 @@ test('技能名不存在时不崩溃，仍然下发 action', async () => {
   assert.ok(events.find((e) => e.type === 'action'), '仍然要下发 action 事件');
 });
 
-test('模型没给 JSON 时，原文当回复内容（回归）', async () => {
+test('模型没给 JSON 时，原文作为正文下发并标记（回归）', async () => {
   fakeModel.setDefault({ content: '这里直接是自然语言回复，没有 JSON。', finishReason: 'stop' });
 
   const events = await chat('随便聊聊');
   const action = events.find((e) => e.type === 'action');
   assert.ok(action, '应当下发 action 事件');
-  assert.strictEqual(action.action, 'comment');
+  assert.strictEqual(action.action, 'append', '原文要作为正文下发');
+  assert.strictEqual(action.parseFailed, true, '必须标记解析失败');
   assert.match(action.content, /自然语言回复/);
 });
 

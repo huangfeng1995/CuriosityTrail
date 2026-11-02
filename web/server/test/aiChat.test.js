@@ -196,15 +196,17 @@ test('正常回复照常下发 action 事件', async () => {
   assert.ok(events.find((e) => e.type === 'done'), '应当下发 done 事件');
 });
 
-test('模型没给 JSON 时，原始文本当回复内容', async () => {
+test('模型没给 JSON 时，原始文本作为正文下发并标记', async () => {
   fakeModel.setDefault({ content: '这里直接是自然语言回复，没有 JSON。', finishReason: 'stop' });
 
   const events = await chat('随便聊聊');
 
   const action = events.find((e) => e.type === 'action');
   assert.ok(action, '应当下发 action 事件');
-  assert.strictEqual(action.action, 'comment');
-  assert.match(action.content, /自然语言回复/);
+  assert.strictEqual(action.action, 'append', '原文要作为正文下发，作者才能应用');
+  assert.match(action.content, /自然语言回复/, '原始文本不能被丢掉');
+  assert.strictEqual(action.parseFailed, true, '必须标记这是解析失败后的原文回退');
+  assert.match(action.reason, /格式/, '要说明为什么按原文处理');
 });
 
 test('模型给了 JSON 但正文为空时，用 reason 顶上', async () => {
@@ -388,4 +390,20 @@ test('行内操作遇到空回复时报错，而不是返回空正文', async ()
   assert.notStrictEqual(res.status, 200, '空回复不应当被当成一次成功的改写');
   const body = await res.json();
   assert.ok(body.error && body.error.length > 0, '要给出可读的错误文案');
+});
+
+test('行内操作遇到非 JSON 原文时，作为正文回退并标记', async () => {
+  fakeModel.setDefault({ content: '他抬头看了看天，没有说一句话。', finishReason: 'stop' });
+
+  const res = await server.request('/api/ai/inline', {
+    method: 'POST',
+    body: { action: 'rewrite', selection: '雨夜的巷子里只剩下脚步声。' },
+  });
+
+  assert.strictEqual(res.status, 200);
+  const body = await res.json();
+  assert.strictEqual(body.action, 'append', '原文要作为正文返回');
+  assert.match(body.content, /抬头看了看天/, '原始文本不能被丢掉');
+  assert.strictEqual(body.parseFailed, true, '必须标记解析失败');
+  assert.match(body.reason, /格式/, '要说明为什么按原文处理');
 });
