@@ -885,6 +885,7 @@ module.exports = {
   MAX_ATTEMPTS,
   scheduleIndex,
   scheduleRemove,
+  scheduleRemoveWork,
   indexSource,
   removeSource,
   rebuild,

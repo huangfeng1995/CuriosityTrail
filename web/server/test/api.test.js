@@ -124,6 +124,24 @@ test('作品详情包含章节列表', async () => {
   assert.ok(body.chapters.length >= 1);
 });
 
+test('删除作品成功，且列表里不再有它', async () => {
+  // 回归用例：路由在删库前要调 memory.scheduleRemoveWork 抓向量 URI。
+  // 那个函数曾定义但没导出，导致 DELETE /api/works/:id 恒返回 500
+  // （memory.scheduleRemoveWork is not a function），作品根本删不掉。
+  const { work } = await seedWork();
+
+  const delRes = await server.request(`/api/works/${work.id}`, { method: 'DELETE' });
+  assert.strictEqual(delRes.status, 200);
+  assert.deepStrictEqual(await delRes.json(), { ok: true });
+
+  const listRes = await server.request('/api/works');
+  const list = await listRes.json();
+  assert.ok(!list.some((w) => w.id === work.id), '已删除的作品不该还留在列表里');
+
+  const detailRes = await server.request(`/api/works/${work.id}`);
+  assert.strictEqual(detailRes.status, 404);
+});
+
 // ---------------------------------------------------------------------------
 // 版本历史
 // ---------------------------------------------------------------------------
