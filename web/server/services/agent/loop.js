@@ -82,7 +82,10 @@ async function runRound({ provider, messages, options, onToken }) {
   const result = await provider.chatStream({
     messages,
     ...options,
-    jsonOutput: true,
+    // 默认开 JSON 模式（工具轮要解析 action）。
+    // 空回复重试时上层会显式传 false：长历史 + JSON 模式是已知的
+    // 「稳定返回几千个空格」组合，第二次必须换掉这个条件。
+    jsonOutput: options.jsonOutput === undefined ? true : options.jsonOutput,
     onThinking: (chunk) => {
       reasoning += chunk;
     },

@@ -97,6 +97,7 @@ test('模型被长度上限截断时，返回可见的错误而不是空回复',
 
   const error = events.find((e) => e.type === 'error');
   assert.ok(error, '应当下发 error 事件');
+  assert.strictEqual(error.code, 'AI_TRUNCATED', '要能区分"被截断"和"真空响应"');
   assert.match(error.message, /截断/, '错误文案要说明是被长度上限截断');
 
   // 关键断言：绝不能再出现 content 为空的 action 事件
@@ -127,6 +128,7 @@ test('模型只输出思考没有正文时，返回可见的错误', async () =>
 
   const error = events.find((e) => e.type === 'error');
   assert.ok(error, '应当下发 error 事件');
+  assert.strictEqual(error.code, 'AI_REASONING_ONLY', '要能区分"只思考没正文"');
   assert.match(error.message, /思考/, '错误文案要说明模型只做了思考');
 
   const action = events.find((e) => e.type === 'action');
@@ -140,6 +142,7 @@ test('模型完全没给内容时，返回可见的错误', async () => {
 
   const error = events.find((e) => e.type === 'error');
   assert.ok(error, '应当下发 error 事件');
+  assert.strictEqual(error.code, 'AI_EMPTY_RESPONSE', '要能区分"上游真空响应"');
   assert.ok(error.message.length > 0, '错误文案不能为空');
 
   const action = events.find((e) => e.type === 'action');
@@ -338,9 +341,12 @@ test('历史对话：别人的会话既看不到列表也打不开', async () =>
   assert.strictEqual(detailRes.status, 404, '别人的会话 id 应当当作不存在');
 });
 
-test('模型第一次返回空响应时自动重试一次', async () => {
+test('模型第一次返回空响应时自动重试一次，第二次必须换掉 JSON 模式', async () => {
   // DeepSeek 的 JSON 模式偶发空白完成：用量照算，正文一个字都没有。
   // 作者不该为供应商的抖动买单——服务端自己再要一次。
+  //
+  // 但"再要一次"不能是原样重发：长历史 + response_format=json_object
+  // 是已知会稳定返回几千个空格的组合，第二次必须换条件。
   fakeModel.setQueue([
     { content: '', reasoning: '', finishReason: 'stop' },
     {
@@ -354,12 +360,90 @@ test('模型第一次返回空响应时自动重试一次', async () => {
     },
   ]);
 
+  const before = fakeModel.calls.length;
   const events = await chat('这段再帮我改改');
 
   const action = events.find((e) => e.type === 'action');
   assert.ok(action, '重试成功时应当正常下发回答');
   assert.match(action.content, /重试之后拿到/);
   assert.ok(!events.find((e) => e.type === 'error'), '能重试成功就不该给作者报错');
+
+  const first = fakeModel.calls[before];
+  const second = fakeModel.calls[before + 1];
+  assert.deepStrictEqual(
+    first.response_format,
+    { type: 'json_object' },
+    '第一次按约定开 JSON 模式'
+  );
+  assert.ok(
+    !second.response_format,
+    '第二次必须关掉 JSON 模式，否则等于用同一个致病条件又发了一遍'
+  );
+  const last = second.messages[second.messages.length - 1];
+  assert.match(
+    String(last.content || ''),
+    /不要输出 JSON/,
+    '重试时要明确要求直接写纯文本正文'
+  );
+});
+
+test('审稿意见会作为历史进入写手的重写请求', async () => {
+  // 作者的实际操作：先和审稿人聊，再让写手"按上面的建议重写"。
+  // 这条路能不能成立，全看审稿意见有没有真的拼进写手的请求。
+  const criticNote = '审稿意见MAGIC：结尾太仓促，需要一个收束句。';
+  fakeModel.setQueue([
+    {
+      content: JSON.stringify({
+        action: 'comment',
+        content: criticNote,
+        reason: '',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        action: 'replace',
+        content: '改好的开头。',
+        reason: '按审稿意见补了收束句',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+
+  const first = await chat('帮我审一下第一章', { roleKey: 'critic' });
+  const done = first.find((e) => e.type === 'done' && e.conversationId);
+  assert.ok(done, '审稿轮要带回 conversationId，后面的写手才知道接着聊');
+
+  const before = fakeModel.calls.length;
+  const second = await chat('按上面的建议重写第一章', {
+    roleKey: 'writer',
+    conversationId: done.conversationId,
+  });
+  assert.ok(second.find((e) => e.type === 'action'), '重写应当正常返回');
+
+  const writerCall = fakeModel.calls[before];
+  const assistantHistory = writerCall.messages.filter((m) => m.role === 'assistant');
+  assert.ok(
+    assistantHistory.some((m) => String(m.content || '').includes('审稿意见MAGIC')),
+    '审稿意见必须以 assistant 历史出现在写手请求里'
+  );
+  const joined = writerCall.messages.map((m) => String(m.content || '')).join('\n');
+  assert.match(joined, /按上面的建议重写第一章/, '本次提问也要在请求里');
+});
+
+test('模型返回 action=none 且没有正文与理由时，标记为 AI_NO_BODY', async () => {
+  fakeModel.setDefault({
+    content: JSON.stringify({ action: 'none', content: '', reason: '', citations: [] }),
+    finishReason: 'stop',
+  });
+
+  const events = await chat('帮我看看这一段');
+
+  const error = events.find((e) => e.type === 'error');
+  assert.ok(error, '应当下发 error 事件');
+  assert.strictEqual(error.code, 'AI_NO_BODY', '模型有回应但没正文，不能报成上游空白');
 });
 
 test('重试后仍为空时，明确告知已自动重试过', async () => {
@@ -389,6 +473,7 @@ test('行内操作遇到空回复时报错，而不是返回空正文', async ()
 
   assert.notStrictEqual(res.status, 200, '空回复不应当被当成一次成功的改写');
   const body = await res.json();
+  assert.strictEqual(body.code, 'AI_TRUNCATED', '行内路径也要把"被截断"单独分类');
   assert.ok(body.error && body.error.length > 0, '要给出可读的错误文案');
 });
 
@@ -406,4 +491,37 @@ test('行内操作遇到非 JSON 原文时，作为正文回退并标记', async
   assert.match(body.content, /抬头看了看天/, '原始文本不能被丢掉');
   assert.strictEqual(body.parseFailed, true, '必须标记解析失败');
   assert.match(body.reason, /格式/, '要说明为什么按原文处理');
+});
+
+// ---------------------------------------------------------------------------
+// 超时：必须能和其他空回复分开
+// ---------------------------------------------------------------------------
+
+test('provider 超时会被标记成 AI_TIMEOUT', async () => {
+  // 路由的 catch 按 err.code === 'AI_TIMEOUT' 分类。这里验证底层确实打了这个标记，
+  // 否则超时会被当成普通供应商错误，作者只看到一句"失败"。
+  const http = require('node:http');
+  const { fetchWithRetry } = require('../services/providers/base');
+
+  const slow = http.createServer((req, res) => {
+    setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    }, 300);
+  });
+  await new Promise((resolve) => slow.listen(0, '127.0.0.1', resolve));
+  const { port } = slow.address();
+
+  try {
+    await assert.rejects(
+      () => fetchWithRetry(`http://127.0.0.1:${port}/chat/completions`, {}, 0, 50),
+      (err) => {
+        assert.strictEqual(err.code, 'AI_TIMEOUT', '超时要带 AI_TIMEOUT 标记');
+        return true;
+      }
+    );
+  } finally {
+    if (slow.closeAllConnections) slow.closeAllConnections();
+    await new Promise((resolve) => slow.close(resolve));
+  }
 });

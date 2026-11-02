@@ -166,27 +166,43 @@ function decorateRole(role, cfg, activeProvider) {
 /**
  * 模型没给出内容时，给作者一句能照着做的话。
  *
- * 这里必须区分两种失败，否则作者只会干等着重复重试：
+ * 这里必须区分四类失败，否则作者只会干等着重复重试：
  *   - 被长度上限截断：思考模式最常见，reasoning 计入 max_tokens，
  *     预算被思考吃光，正文一个字都没轮到。该做的是换个更短的说法再试。
- *   - 模型自己没写：重试或换模型就行。
+ *   - 内容审核拦下：模型照常计费但一个字都不返回。
+ *   - 只思考没正文：模型有 reasoning，但没写正文。
+ *   - 上游真空响应：既没有正文，也没有思考内容——是供应商侧的空白完成。
  *
  * 措辞只说作者做得到的事。调大输出上限、关掉深度思考是部署期的运维动作，
  * 设置页里并没有这些开关——让作者去"设置里找"只会让他更困惑。
+ *
+ * @returns {{code: string, message: string}}
  */
 function describeEmptyReply(result = {}, reasoning = '') {
   if (result.finishReason === 'length') {
-    return '这次输出被长度上限截断了，正文没写完。可以把要求说得更短一点再试。';
+    return {
+      code: 'AI_TRUNCATED',
+      message: '这次输出被长度上限截断了，正文没写完。可以把要求说得更短一点再试。',
+    };
   }
-  // 内容审核拦下时，模型照常计费但一个字都不返回。
-  // 不单独说明的话，作者会以为是网络或产品故障，一直重试同一段。
   if (result.finishReason === 'content_filter') {
-    return '这段内容可能触发了模型的内容审核，没能给出正文。可以换个说法，或先把可能敏感的段落改一改再试。';
+    return {
+      code: 'AI_CONTENT_FILTER',
+      message:
+        '这段内容可能触发了模型的内容审核，没能给出正文。可以换个说法，或先把可能敏感的段落改一改再试。',
+    };
   }
   if (reasoning && reasoning.trim()) {
-    return '模型这次只做了思考，没有给出正文。请再试一次，或把要求说得更具体些。';
+    return {
+      code: 'AI_REASONING_ONLY',
+      message: '模型这次只做了思考，没有给出正文。请再试一次，或把要求说得更具体些。',
+    };
   }
-  return '模型这次没有返回内容，请再试一次。';
+  return {
+    code: 'AI_EMPTY_RESPONSE',
+    message:
+      '上游返回了空响应：既没有正文，也没有思考内容。请再试一次；如果连续出现，说明供应商这一轮不稳定。',
+  };
 }
 
 /**
@@ -752,7 +768,7 @@ router.post('/chat', async (req, res) => {
     // 没有这个信号，作者从发问到看到任何反馈之间只有一个不动的空占位。
     send({ type: 'agent_thinking', label: '正在判断需要查什么' });
 
-    const runChat = (messagesForRound = chatMessages) =>
+    const runChat = (messagesForRound = chatMessages, overrides = {}) =>
       runAgentLoop({
         provider,
         messages: messagesForRound,
@@ -766,6 +782,8 @@ router.post('/chat', async (req, res) => {
             : (role.thinking ? 'enabled' : 'disabled'),
           // 取消/超时信号一路传到 provider：客户端断开时请求立刻停掉
           signal: roundSignal,
+          // 重试时可以覆盖：关 JSON 模式 / 关思考，见下面的空回复重试
+          ...overrides,
         },
         ctx: {
           userId: req.userId,
@@ -845,13 +863,20 @@ router.post('/chat', async (req, res) => {
             ...last,
             content:
               String(last.content || '') +
-              '\n\n（上一次没有返回任何内容。请直接按约定 JSON 回答，把正文写进 content 字段。）',
+              '\n\n（上一次没有返回任何内容。这一次不要输出 JSON，直接用纯文本写出完整正文，不要解释。）',
           };
         }
         return [...system, ...recent];
       })();
 
-      finalResult = await runChat(retryMessages);
+      finalResult = await runChat(retryMessages, {
+        // 关键：换掉"让模型退化成空白"的条件，而不是原样重发。
+        // 实测长历史 + response_format=json_object 会稳定返回几千个空格；
+        // 第二次关掉 JSON 模式，模型按纯文本输出，正文才拿得回来。
+        jsonOutput: false,
+        // 思考同样会吃 token 预算，重试时关掉，把预算留给正文。
+        ...(role?.thinking ? { thinking: 'disabled' } : {}),
+      });
     }
 
     // 结构化运行记录：一次对话一行，方便排查"为什么慢 / 为什么停"。
@@ -911,19 +936,21 @@ router.post('/chat', async (req, res) => {
     //   3. 真空响应（既无 JSON 也无思考）。
     if (!payload.content.trim()) {
       const reasoning = (finalResult.reasoning || '').trim();
+      let code;
       let reason;
       if (parsed) {
         // 模型返回了有效 JSON（通常是 action=none），只是没正文。
         // 报"模型没有返回内容"会误导作者——模型有回应，只是无事可做或指令不明确。
+        code = 'AI_NO_BODY';
         reason =
           'AI 没能给出可写入的正文（可能是指令不够明确）。请说明要改写哪段、改成什么样，再试一次。';
       } else {
-        // 无有效 JSON：交给 describeEmptyReply 区分
-        // 被长度截断 / 只思考无正文 / 真空响应三类。
-        reason = describeEmptyReply(
+        // 无有效 JSON：按 finishReason / reasoning 分成
+        // 被截断 / 内容审核 / 只思考无正文 / 真空响应四类。
+        ({ code, message: reason } = describeEmptyReply(
           { finishReason: finalResult.finishReason },
           reasoning
-        );
+        ));
       }
 
       // 这一轮到底收到了什么，必须留下证据。
@@ -940,6 +967,7 @@ router.post('/chat', async (req, res) => {
           traceId,
           userId: req.userId,
           role: roleKey,
+          code,
           finishReason: finalResult.finishReason || '',
           retried: isEmptyReply,
           rawLength: rawForLog.length,
@@ -956,8 +984,10 @@ router.post('/chat', async (req, res) => {
 
       // 重试过一次还是空：告诉作者这不是他的问题，也省得他反复点。
       // 不说明的话，"请再试一次"等于让他继续撞同一堵墙。
+      // 第二次已经换成纯文本模式了，所以这里要说清"换了条件仍失败"，
+      // 否则作者会以为是同一套请求又跑了一遍。
       if (isEmptyReply) {
-        reason = `已自动重试一次，模型仍然没有返回内容。${reason}`;
+        reason = `已自动重试一次（第二次改为纯文本输出），仍然没有拿到正文。${reason}`;
       }
 
       // 这次调用没产生任何回复，别把孤零零的用户消息留在历史里——
@@ -971,7 +1001,7 @@ router.post('/chat', async (req, res) => {
       // 重生成失败：把上一版问答放回去，作者至少还留着上一个答案
       await restoreRemoved();
 
-      send({ type: 'error', message: reason });
+      send({ type: 'error', code, message: reason });
       send({
         type: 'done',
         conversationId: conversation.id,
@@ -1052,15 +1082,24 @@ router.post('/chat', async (req, res) => {
   } catch (err) {
     console.error('AI chat 失败：', err.message);
 
+    // 失败也带 code：前端和日志都要能分辨「超时 / 被取消 / 上游报错 / 技能打转」，
+    // 否则所有异常都只剩一句转述给作者的话，排查时无从下手。
+    let errorCode = err.code || 'AI_PROVIDER_ERROR';
+
     // 模型反复调用技能却拿不到结果：这句话要说明白，
     // 作者才知道是自己问得太绕，而不是平台坏了。
     if (err.code === 'MAX_STEPS') {
+      errorCode = 'AI_MAX_STEPS';
       err.message = '这次没能查完：模型反复调用技能但没有拿到结果。请换个说法再问一次。';
-    } else if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-      // 整轮 120s 上限或流式读取中途被中止时，抛的是 DOMException，
+    } else if (err.code === 'AI_TIMEOUT' || err.name === 'TimeoutError') {
+      // 整轮超时上限到了，或流式读取中途被中止时，抛的是 DOMException，
       // message 是英文（"The operation was aborted due to timeout"）。
       // 原样透给作者既看不懂，还会让他以为平台坏了。
-      err.message = 'AI 这次没能及时返回（请求超时），请重试一次；长文可以分几次写。';
+      errorCode = 'AI_TIMEOUT';
+      err.message = 'AI 这次超时了：等了很久都没有返回完整结果。可以把要求说得短一点，或分几次写。';
+    } else if (err.code === 'AI_ABORTED' || err.name === 'AbortError') {
+      errorCode = 'AI_ABORTED';
+      err.message = '这次请求被中止了，没有拿到完整结果。';
     }
 
     // 失败的这轮同样不能留下孤立消息。
@@ -1081,7 +1120,7 @@ router.post('/chat', async (req, res) => {
       return;
     }
 
-    send({ type: 'error', message: err.message });
+    send({ type: 'error', code: errorCode, message: err.message });
     // 补一个 done：前端靠它同步 conversationId，
     // 缺了这一条，作者下一句话会另起一个会话，前面的对话就断了。
     if (conversation) {
@@ -1363,8 +1402,8 @@ router.post('/inline', async (req, res) => {
       .join('；');
 
     // 行内操作走 provider.chat（非流式），但上游同样会偶发返回 200 空内容。
-    // 与 /chat 路径一致：空回复自动重试一次，重试时在末尾补一句提醒。
-    const callInline = async (msgList) =>
+    // 与 /chat 路径一致：空回复自动重试一次，并且第二次换掉条件（关 JSON 模式）。
+    const callInline = async (msgList, overrides = {}) =>
       provider.chat({
         messages: msgList,
         temperature: role?.temperature,
@@ -1373,6 +1412,7 @@ router.post('/inline', async (req, res) => {
           ? undefined
           : (role.thinking ? 'enabled' : 'disabled'),
         jsonOutput: true,
+        ...overrides,
       });
 
     const baseMessages = [...messages, { role: 'user', content: String(selection) }];
@@ -1385,16 +1425,19 @@ router.post('/inline', async (req, res) => {
 
     if (isEmpty) {
       // 原样重发没有意义：让模型退化成空白的条件还在。
-      // 在最后一条消息后补一句提醒，强制模型走"输出 JSON"的路径。
+      // 第二次关掉 JSON 模式，并要求它直接用纯文本写正文。
       const retryMessages = [...baseMessages];
       const last = retryMessages[retryMessages.length - 1];
       retryMessages[retryMessages.length - 1] = {
         ...last,
         content:
           String(last.content || '') +
-          '\n\n（上一次没有返回任何内容。请直接按约定 JSON 回答，把正文写进 content 字段。）',
+          '\n\n（上一次没有返回任何内容。这一次不要输出 JSON，直接用纯文本写出完整正文，不要解释。）',
       };
-      result = await callInline(retryMessages);
+      result = await callInline(retryMessages, {
+        jsonOutput: false,
+        ...(role?.thinking ? { thinking: 'disabled' } : {}),
+      });
     }
 
     const rawText = result.content || '';
@@ -1403,13 +1446,15 @@ router.post('/inline', async (req, res) => {
     if (!parsed) {
       // 模型没给出任何内容：不能返回空正文，那会让行内工具"改写"成空白段落。
       if (!rawText.trim()) {
-        // 三类空回复要分开报，否则作者只会干等着重复重试：
+        // 四类空回复分开报，否则作者只会干等着重复重试：
         //   1. 被长度截断（finishReason=length）
-        //   2. 只思考无正文（reasoning 非空）
-        //   3. 真空响应（既无 content 也无 reasoning）
-        const reason = describeEmptyReply(result, result.reasoning);
+        //   2. 内容审核拦下（finishReason=content_filter）
+        //   3. 只思考无正文（reasoning 非空）
+        //   4. 真空响应（既无 content 也无 reasoning）
+        const { code, message } = describeEmptyReply(result, result.reasoning);
         return res.status(502).json({
-          error: isEmpty ? `已自动重试一次，模型仍然没有返回内容。${reason}` : reason,
+          code,
+          error: isEmpty ? `已自动重试一次（第二次改为纯文本输出），仍然没有拿到正文。${message}` : message,
         });
       }
       // 解析失败但拿到了原文：不能丢，也不能谎称改写成功。
@@ -1439,6 +1484,7 @@ router.post('/inline', async (req, res) => {
         payload.content = payload.reason.trim();
       } else {
         return res.status(502).json({
+          code: 'AI_NO_BODY',
           error:
             'AI 没能给出可写入的正文（可能是指令不够明确）。请说明要改写哪段、改成什么样，再试一次。',
         });
@@ -1455,7 +1501,19 @@ router.post('/inline', async (req, res) => {
     });
   } catch (err) {
     console.error('AI inline 失败：', err.message);
-    res.status(500).json({ error: err.message });
+
+    // 与 /chat 一致：超时不能混在 500 里笼统报，前端要能区分。
+    if (err.code === 'AI_TIMEOUT' || err.name === 'TimeoutError') {
+      return res.status(504).json({
+        code: 'AI_TIMEOUT',
+        error: 'AI 这次超时了：等了很久都没有返回结果。可以把选区缩小一点再试。',
+      });
+    }
+    if (err.code === 'AI_ABORTED' || err.name === 'AbortError') {
+      return res.status(499).json({ code: 'AI_ABORTED', error: '这次请求被中止了，没有拿到结果。' });
+    }
+
+    res.status(500).json({ error: err.message, code: err.code || 'AI_PROVIDER_ERROR' });
   }
 });
 
