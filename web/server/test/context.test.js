@@ -100,6 +100,92 @@ test('有正文的章节：照常注入正文与段落索引', async () => {
   assert.ok(!system.includes('本章还没有正文'), '有正文时不该说本章没有正文');
 });
 
+test('空章节：按大纲与上一章出场注入人物卡，高重要性设定全量注入', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-empty-cards';
+  const prevId = 'chapter-prev-cards';
+  const chapterId = 'chapter-empty-cards';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, ?, '', '', ?, 0, ?, ?)`,
+    [workId, userId, '测试作品三', '林砚在城隍庙查一桩旧案，老周会来找他。', now, now]
+  );
+
+  // 上一章确实出场过「老周」（周岑的别名），本章还是空白
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, ?, 1, '', 'done', ?, ?, '', 0, ?, ?)`,
+    [
+      prevId,
+      workId,
+      '第一章',
+      '老周推门进来，手里拎着一盏马灯。',
+      JSON.stringify([
+        { id: 'p1', type: 'paragraph', content: '老周推门进来，手里拎着一盏马灯。' },
+      ]),
+      now,
+      now,
+    ]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, ?, 2, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, '第二章', now, now]
+  );
+
+  const characters = [
+    { id: 'c1', name: '林砚', aliases: '' },       // 只在大纲里出现
+    { id: 'c2', name: '周岑', aliases: '老周' },   // 只在上一章出现（用别名）
+    { id: 'c3', name: '程雾', aliases: '' },       // 两处都没出现
+  ];
+  for (const c of characters) {
+    await db.run(
+      `INSERT INTO characters (id, work_id, name, aliases, created_at, modified_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [c.id, workId, c.name, c.aliases, now, now]
+    );
+  }
+
+  await db.run(
+    `INSERT INTO settings (id, work_id, category, name, content, importance, created_at, modified_at)
+     VALUES (?, ?, '地点', '城隍庙', '城中最老的庙，梁上还留着弹孔。', 4, ?, ?)`,
+    ['s1', workId, now, now]
+  );
+  await db.run(
+    `INSERT INTO settings (id, work_id, category, name, content, importance, created_at, modified_at)
+     VALUES (?, ?, '背景', '年号', '故事发生在旧历年间。', 2, ?, ?)`,
+    ['s2', workId, now, now]
+  );
+
+  const { messages, meta } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+
+  const system = messages[0].content;
+
+  assert.strictEqual(meta.emptyChapter, true, '应识别为空章');
+  assert.strictEqual(meta.previousChapter, prevId, '应记录上一章');
+  assert.deepStrictEqual(
+    meta.characters.sort(),
+    ['周岑', '林砚'].sort(),
+    '只注入大纲与上一章出场过的人物，不注入没出现过的'
+  );
+  assert.ok(system.includes('【林砚】'), '大纲里的人物应注入');
+  assert.ok(system.includes('【周岑】'), '上一章出场的人物应注入');
+  assert.ok(!system.includes('【程雾】'), '两处都没出现的人物不该注入');
+  assert.ok(system.includes('城隍庙'), '高重要性设定应全量注入');
+  assert.ok(!system.includes('【年号'), '低重要性且未出现的设定不该注入');
+  assert.ok(system.includes('本章还没有正文'), '仍要说明本章还没有正文');
+});
+
 test('历史裁剪：超预算时保留最近消息，并从 user 开始', () => {
   const history = [
     { role: 'user', content: 'q1' },

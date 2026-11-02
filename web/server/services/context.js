@@ -297,6 +297,21 @@ function collectMatchText(chapter, blocks) {
 }
 
 /**
+ * 一章的纯正文（blocks 优先，content 兜底）。
+ *
+ * 空章判定与「上一章出场了谁」都只需要正文，
+ * 不需要标题、卷名这些元信息。
+ */
+function chapterBody(chapter) {
+  if (!chapter) return '';
+  const body = parseBlocks(chapter.blocks)
+    .filter((b) => b && b.content)
+    .map((b) => b.content)
+    .join('\n\n');
+  return body || String(chapter.content || '');
+}
+
+/**
  * 装配上下文消息数组。
  *
  * @param {Object} params
@@ -354,6 +369,8 @@ async function assembleContext(params = {}) {
     inspirations: 0,
     retrievalCount: retrieval.length,
     styleRules: Boolean(styleText),
+    emptyChapter: false,
+    previousChapter: '',
   };
 
   if (styleText) {
@@ -414,6 +431,40 @@ async function assembleContext(params = {}) {
     contentText = `${contentText}\n${selection}`;
   }
 
+  // 空章时正文里没有名字可供匹配，人物卡会被全数过滤掉，模型只能凭空造人。
+  // 改用「大纲 + 上一章正文」作为相关性信号：下一章该写谁，
+  // 答案在作者自己的大纲和前文里，而不是在空白页上。
+  let relevanceText = contentText;
+  let chapterBodyText = '';
+  if (chapter) {
+    chapterBodyText =
+      chapterBlocks
+        .filter((b) => b && b.content)
+        .map((b) => b.content)
+        .join('\n\n') || String(chapter.content || '');
+
+    if (!chapterBodyText.trim()) {
+      meta.emptyChapter = true;
+      const prevChapter = await get(
+        `SELECT * FROM chapters
+         WHERE work_id = ? AND seq < ?
+         ORDER BY seq DESC LIMIT 1`,
+        [workId, chapter.seq]
+      );
+      if (prevChapter) {
+        meta.previousChapter = prevChapter.id;
+        relevanceText = [
+          chapter.title,
+          work && work.outline,
+          chapter.outline,
+          chapterBody(prevChapter),
+        ]
+          .filter(Boolean)
+          .join('\n');
+      }
+    }
+  }
+
   // ---- 4. 人物层 ----
   if (workId) {
     const characters = await all(
@@ -421,7 +472,7 @@ async function assembleContext(params = {}) {
       [workId]
     );
     const includeAll = scope === 'work';
-    const selected = selectCharacters(characters, contentText, includeAll);
+    const selected = selectCharacters(characters, relevanceText, includeAll);
     meta.characters = selected.map((c) => c.name);
 
     if (selected.length) {
@@ -439,7 +490,7 @@ async function assembleContext(params = {}) {
       [workId]
     );
     const includeAll = scope === 'work';
-    const selected = selectSettings(settings, contentText, includeAll);
+    const selected = selectSettings(settings, relevanceText, includeAll);
     meta.settings = selected.map((s) => s.name);
 
     if (selected.length) {
@@ -487,11 +538,7 @@ async function assembleContext(params = {}) {
       PRIORITY.CONTENT
     );
   } else if (chapter) {
-    const full = chapterBlocks
-      .filter((b) => b.content)
-      .map((b) => b.content)
-      .join('\n\n');
-    const body = full || chapter.content || '';
+    const body = chapterBodyText;
     if (body) {
       addPart(
         `## 当前章节正文\n${truncate(body, CONTENT_LIMIT)}`,
