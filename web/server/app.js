@@ -41,6 +41,7 @@ const memoryRouter = require('./routes/memory');
 const styleRouter = require('./routes/style');
 const insightsRouter = require('./routes/insights');
 const feedbackRouter = require('./routes/feedback');
+const anchorRouter = require('./routes/anchor');
 
 const app = express();
 
@@ -125,6 +126,7 @@ app.use('/api/memory', memoryRouter);
 app.use('/api/style', styleRouter);
 app.use('/api/insights', insightsRouter);
 app.use('/api/feedback', feedbackRouter);
+app.use('/api/anchor', anchorRouter);
 
 // 图片目录同样纳入鉴权
 app.use('/uploads', requireAuth, express.static(config.uploadsDir));

@@ -37,6 +37,7 @@ const {
   buildRewriteInstruction,
   beatBadge,
 } = require('../services/agent/beatPlan');
+const referenceAnchor = require('../services/agent/referenceAnchor');
 
 const router = express.Router();
 
@@ -876,6 +877,27 @@ router.post('/chat', async (req, res) => {
         // 规划出意外（含取消）都不该挡住写作。
         planDegraded = err.code === 'AI_TIMEOUT' ? 'timeout' : 'error';
         console.error('节拍规划失败：', err.message);
+      }
+    }
+
+    // ---- 范文编排锚点（作者授权后） ----
+    //
+    // 位置紧挨节拍表：先告诉模型「这一章要发生什么」，再给一段
+    // 「好的编排长什么样」的参照。默认不注入；作者开启并确认后才会返回内容，
+    // 撤回时内容已被清空，这里拿到的就是空串。
+    if (planningEnabled) {
+      const anchorBlock = await referenceAnchor.buildInjection(req.userId);
+      if (anchorBlock) {
+        chatMessages[0].content += `\n\n---\n\n${anchorBlock}`;
+        console.log(
+          JSON.stringify({
+            event: 'ai_anchor',
+            traceId,
+            userId: req.userId,
+            role: roleKey,
+            chars: Array.from(anchorBlock).length,
+          })
+        );
       }
     }
 

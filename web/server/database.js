@@ -26,8 +26,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 2 → 3：长期记忆台账（memory_chunks / memory_index_meta）。
  * 版本 3 → 4：文风规则卡（style_cards）。
  * 版本 4 → 5：用户反馈（feedbacks）。
+ * 版本 5 → 6：范文编排锚点（reference_anchors）。
  */
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 /**
  * 版本号之前的老库遗留表。
@@ -355,6 +356,25 @@ CREATE TABLE IF NOT EXISTS feedbacks (
 );
 CREATE INDEX IF NOT EXISTS idx_feedbacks_user
   ON feedbacks (user_id, created_at);
+
+-- 范文编排锚点。
+--
+-- 作者授权后，把一段从基线范文里精选的编排示范注入写手 system，
+-- 紧挨节拍表。user_id 就是主键：一个作者只允许存在一张锚点，
+-- 重复开启是覆盖同一行，不会出现第二张。
+--
+-- 撤回时 content 必须真的置空。只把 enabled 关掉而留着正文，
+-- 一旦后续代码忽略开关就会静默复活；withdrawn_at 用来在设置页
+-- 显示「这张锚点撤回过」，与「从未开启」区分开。
+CREATE TABLE IF NOT EXISTS reference_anchors (
+  user_id      TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  enabled      INTEGER NOT NULL DEFAULT 0,
+  content      TEXT,
+  source       TEXT,
+  confirmed_at TEXT,
+  withdrawn_at TEXT,
+  updated_at   TEXT NOT NULL
+);
 `;
 
 /**

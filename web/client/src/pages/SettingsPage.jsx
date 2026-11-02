@@ -10,6 +10,7 @@ import {
   Typography,
   Switch,
   Descriptions,
+  Modal,
 } from 'antd';
 import {
   SaveOutlined,
@@ -37,6 +38,7 @@ export default function SettingsPage() {
   const items = [
     { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
     { key: 'memory', label: '长期记忆', children: <MemoryConfig /> },
+    { key: 'anchor', label: '范文锚点', children: <AnchorConfig /> },
   ];
   // 备份是整库级别的：下载包里是所有人的稿子，只有管理员能看这个入口
   if (user?.role === 'admin') {
@@ -187,6 +189,136 @@ function MemoryConfig() {
         重建只动索引，不改你的稿子。章节、人物、设定改动后会自动增量更新，
         一般不需要手动重建。
       </Paragraph>
+    </Card>
+  );
+}
+
+/**
+ * 范文编排锚点开关。
+ *
+ * 这里只做三件事：开、关、看来源。锚点内容由服务端内置一份，
+ * 作者不编辑、不上传——它只是「好的编排长什么样」的参照。
+ * 开启前必须确认一次，撤回时服务端会清空内容。
+ */
+function AnchorConfig() {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api.get('/anchor');
+      setStatus(res.data);
+    } catch (e) {
+      message.error('锚点状态获取失败');
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const enable = () => {
+    Modal.confirm({
+      title: '启用范文编排锚点？',
+      content:
+        '会把一段精选的范文编排示范注入写手上下文，紧挨节拍表。它只参照编排方式，不照抄句子。可以随时撤回，撤回后内容会被清空。',
+      okText: '确认启用',
+      cancelText: '取消',
+      onOk: async () => {
+        setBusy(true);
+        try {
+          const res = await api.post('/anchor', { confirmed: true });
+          setStatus(res.data);
+          message.success('已启用');
+        } catch (e) {
+          message.error(e.response?.data?.error || '启用失败');
+          throw e;
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
+  };
+
+  const withdraw = async () => {
+    setBusy(true);
+    try {
+      const res = await api.delete('/anchor');
+      setStatus(res.data);
+      message.success('已撤回，锚点内容已清空');
+    } catch (e) {
+      message.error(e.response?.data?.error || '撤回失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onToggle = (checked) => {
+    if (checked) enable();
+    else withdraw();
+  };
+
+  return (
+    <Card size="small" title="范文编排锚点">
+      <Paragraph type="secondary" style={{ fontSize: 13 }}>
+        从基线范文里按节拍挑出的编排示范。它示范「怎么编排」——目标如何受阻、
+        变量怎么变、章末怎么留钩子——不是给模型抄的句子。默认关闭。
+      </Paragraph>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 0',
+          borderTop: '1px solid var(--border-faint)',
+          borderBottom: '1px solid var(--border-faint)',
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 14 }}>注入范文锚点</div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+            开启需要确认一次；撤回后锚点内容会被清空，不能静默残留。
+          </div>
+        </div>
+        <Switch checked={Boolean(status?.enabled)} loading={busy} onChange={onToggle} />
+      </div>
+
+      {status?.enabled ? (
+        <Descriptions size="small" column={2} bordered>
+          <Descriptions.Item label="来源">
+            {status.source?.file || '—'}
+          </Descriptions.Item>
+          <Descriptions.Item label="范文篇幅">
+            {status.source
+              ? `${status.source.paragraphs} 段 / ${status.source.chars} 字 / ${status.source.beats} 拍`
+              : '—'}
+          </Descriptions.Item>
+          <Descriptions.Item label="锚点字数">
+            {status.chars} / {status.maxChars}
+          </Descriptions.Item>
+          <Descriptions.Item label="确认时间">
+            {status.confirmedAt
+              ? new Date(status.confirmedAt).toLocaleString('zh-CN')
+              : '—'}
+          </Descriptions.Item>
+        </Descriptions>
+      ) : status?.withdrawnAt ? (
+        <Alert
+          type="info"
+          showIcon
+          message={`上次撤回：${new Date(status.withdrawnAt).toLocaleString('zh-CN')}`}
+          description="锚点内容已清空，当前不会注入写手。"
+        />
+      ) : (
+        <Alert
+          type="warning"
+          showIcon
+          message="尚未启用"
+          description="默认不注入。开启并确认后才会把锚点交给写手。"
+        />
+      )}
     </Card>
   );
 }
