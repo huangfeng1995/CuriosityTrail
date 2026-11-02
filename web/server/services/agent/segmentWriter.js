@@ -23,8 +23,24 @@ const CHARS_PER_PARAGRAPH = 110;
 /** 总调用上限：3 组起稿 + 3 次续写 + 2 次分组重写，留一点余量 */
 const MAX_SEGMENT_CALLS = 8;
 
-/** 一组写到目标的这个比例以下，就认为提前收尾 */
-const MIN_TARGET_RATIO = 0.7;
+/** 一组写到目标的这个比例以下，就认为提前收尾。实测 70% 会放过 72% 的短组，提到 80%。 */
+const MIN_TARGET_RATIO = 0.8;
+
+/**
+ * 段落形态硬约束。
+ *
+ * 基线范文 45 段 / 5047 字 / 均 112，最短段 23 字。上一版实测 52 段 /
+ * 均 88.9，问题不在总量而在段落形态：一句话的对话被拆成独立自然段，
+ * 把段均长拉了下来。这里把约束写进每一次组指令，要求写作时直接落实，
+ * 不做事后合并——合并会改动作者的正文切分。
+ */
+const PARAGRAPH_SHAPE_RULES = [
+  '## 全章形态（硬约束，跨组共同遵守）',
+  '- 全章目标 40–55 段、段均 100–130 字、总字数 4800–5200。这是全章目标，不是本组目标；本组只按上面的组目标写。',
+  '- 每个自然段原则上不少于 25 字；不足 25 字必须并入相邻的动作或反应段。',
+  '- 禁止单句对话独立成段：对话要和动作、神态、说话人的反应合并成一段；只有两句以内的极短问答、且前后有动作句承接时才可独立。',
+  '- 这些约束在写作时直接落实，不要靠事后合并段落来凑数。',
+].join('\n');
 
 /** 中间组禁止的收尾语气。命中就当作提前收尾，续写一次并清掉尾句。 */
 const CLOSING_RE = /就这样|从此以后|从此|这一天(?:就)?(?:结束|过去)|日子就这样|一切归于平静/;
@@ -110,7 +126,9 @@ function buildSegmentInstruction({ plan, group, groups, tail = '' }) {
     later.length ? `后面才写：${later.join('、')}。不要提前写，更不要把全章收束在这里。` : '',
     '',
     '## 本组篇幅（硬约束）',
-    `目标 ${group.targetParagraphs} 段，约 ${group.targetChars} 字；每段 90–130 字。写到目标段数附近再停，不要用概述凑数。`,
+    `目标 ${group.targetParagraphs} 段，约 ${group.targetChars} 字；每段 100–130 字，原则上不少于 25 字。写到目标段数附近再停，不要用概述凑数。`,
+    '',
+    PARAGRAPH_SHAPE_RULES,
     '',
     '## 本组节拍',
     beatSummary(group.beats),
@@ -157,7 +175,9 @@ function buildContinuationInstruction({
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `再写约 ${remainingParagraphs} 段、约 ${remainingChars} 字，每段 90–130 字。`,
+    `再写约 ${remainingParagraphs} 段、约 ${remainingChars} 字，每段 100–130 字，原则上不少于 25 字。`,
+    '',
+    PARAGRAPH_SHAPE_RULES,
   ];
 
   if (group.isLast) {
@@ -211,7 +231,9 @@ function buildGroupRewriteInstruction({
     nextHead || '（本章到此结束）',
     '',
     '## 篇幅',
-    `目标 ${group.targetParagraphs} 段、约 ${group.targetChars} 字，每段 90–130 字。`,
+    `目标 ${group.targetParagraphs} 段、约 ${group.targetChars} 字，每段 100–130 字，原则上不少于 25 字。`,
+    '',
+    PARAGRAPH_SHAPE_RULES,
     '',
     group.isLast
       ? '这是最后一组：可以收束本章，并把唯一一个章末钩子放在最后。'
@@ -561,6 +583,7 @@ module.exports = {
   CHARS_PER_PARAGRAPH,
   MAX_SEGMENT_CALLS,
   MIN_TARGET_RATIO,
+  PARAGRAPH_SHAPE_RULES,
   CLOSING_RE,
   splitParagraphs,
   tailParagraphs,

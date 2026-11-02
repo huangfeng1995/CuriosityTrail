@@ -106,6 +106,73 @@ test('每组指令都带完整节拍表引用、已写尾部与目标篇幅', ()
   assert.match(last, /章末钩子/);
 });
 
+test('段落形态硬约束写进起稿、续写与重写指令', () => {
+  const plan = makePlan(4);
+  const groups = segmentWriter.planSegments(plan);
+
+  const middle = segmentWriter.buildSegmentInstruction({
+    plan,
+    group: groups[0],
+    groups,
+    tail: '上一组最后一段原文。',
+  });
+  const last = segmentWriter.buildSegmentInstruction({
+    plan,
+    group: groups[1],
+    groups,
+    tail: '上一组最后一段原文。',
+  });
+  const continuation = segmentWriter.buildContinuationInstruction({
+    plan,
+    group: groups[0],
+    groups,
+    tail: '上一组最后一段原文。',
+    remainingParagraphs: 4,
+    remainingChars: 400,
+  });
+  const rewrite = segmentWriter.buildGroupRewriteInstruction({
+    plan,
+    group: groups[1],
+    groups,
+    problemIds: ['B3'],
+    tail: '上一组最后一段原文。',
+    nextHead: '',
+  });
+
+  for (const instruction of [middle, last, continuation, rewrite]) {
+    assert.match(instruction, /全章目标 40–55 段、段均 100–130 字、总字数 4800–5200/);
+    assert.match(instruction, /不少于 25 字/);
+    assert.match(instruction, /禁止单句对话独立成段/);
+    assert.match(instruction, /不要靠事后合并段落/);
+    assert.doesNotMatch(instruction, /每段 90–130 字/, '旧的 90 字下限已经作废');
+  }
+});
+
+/** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
+function fixedBody(count) {
+  return Array.from({ length: count }, () => '字'.repeat(100)).join('\n\n');
+}
+
+test('续写门槛按组目标的 80%：70% 要续写，90% 不续写', () => {
+  const base = {
+    isLast: false,
+    continued: false,
+    targetChars: 1000,
+    targetParagraphs: 10,
+  };
+
+  assert.strictEqual(
+    segmentWriter.needsContinuation({ ...base, content: fixedBody(7) }),
+    true,
+    '700/1000 低于 80%，应当续写'
+  );
+  assert.strictEqual(
+    segmentWriter.needsContinuation({ ...base, content: fixedBody(9) }),
+    false,
+    '900/1000 达到 80%，不应续写'
+  );
+});
+
 test('拼接不重复前文：下一组重抄上一组尾段时只保留一份', async () => {
   const plan = makePlan(4);
   const runner = makeRunner([
