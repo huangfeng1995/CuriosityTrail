@@ -24,12 +24,114 @@ const { startFakeModel } = require('./fakeModel');
 const env = setupTempEnv();
 
 const app = require('../app');
-const { ready, all } = require('../database');
+const { ready, all, get } = require('../database');
 const aiConfig = require('../services/aiConfig');
 
 let server;
 let fakeModel;
 let originalConfig;
+let seedSeq = 0;
+
+/**
+ * 造一部属于当前登录用户的作品与章节，用来触发节拍规划。
+ *
+ * @param {{outline?: string, body?: string, seq?: number}} [options]
+ * @returns {Promise<{workId: string, chapterId: string}>}
+ */
+async function seedChapter(options = {}) {
+  const { outline = '', body = '', seq = 1 } = options;
+  const user = await get('SELECT id FROM users WHERE phone = ?', [server.phone]);
+  assert.ok(user, '默认测试用户应当存在');
+
+  seedSeq += 1;
+  const workId = `work-t3-${seedSeq}`;
+  const chapterId = `chapter-t3-${seedSeq}`;
+  const now = new Date().toISOString();
+
+  await require('../database').run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, ?, '', '', '', 0, ?, ?)`,
+    [workId, user.id, `测试作品${seedSeq}`, now, now]
+  );
+  await require('../database').run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, ?, ?, '', 'draft', ?, ?, ?, 0, ?, ?)`,
+    [
+      chapterId,
+      workId,
+      `第${seedSeq}章`,
+      seq,
+      body,
+      JSON.stringify(body ? [{ id: `b${seedSeq}`, type: 'paragraph', content: body }] : []),
+      outline,
+      now,
+      now,
+    ]
+  );
+
+  return { workId, chapterId };
+}
+
+/**
+ * 一份合格的节拍表响应（四拍、合计 9 段）。
+ */
+function validPlanJson() {
+  return JSON.stringify({
+    chapterGoal: '主角查清旧案的第一条线索',
+    protagonistIntent: '进庙查案',
+    obstacle: '庙祝拦门',
+    cost: '交出随身信物',
+    hook: '照片背面写着主角的名字',
+    avoidRepeat: [],
+    mainType: '揭示',
+    beats: [
+      {
+        id: 'B1',
+        type: '行动',
+        goal: '进入城隍庙',
+        obstacle: '庙祝拦着不让进',
+        cost: '押上唯一的信物',
+        delta: { variable: '处境', from: '被挡在庙外', to: '进入内殿' },
+        infoGain: '庙里供着的不是城隍像，而是一张旧照片',
+        paragraphs: 2,
+        endHook: '照片上的人穿着现任知县的官服',
+      },
+      {
+        id: 'B2',
+        type: '冲突',
+        goal: '问出照片来历',
+        obstacle: '庙祝闪烁其词',
+        cost: '被赶出庙门',
+        delta: { variable: '关系', from: '互相试探', to: '彻底翻脸' },
+        infoGain: '旧案发生在二十年前，当时知县尚未到任',
+        paragraphs: 3,
+        endHook: '庙祝说漏了「那年冬天」四个字',
+      },
+      {
+        id: 'B3',
+        type: '转折',
+        goal: '从旧档里找出那年冬天的记录',
+        obstacle: '档案被抽走了关键几页',
+        cost: '惊动管档的主簿',
+        delta: { variable: '信息', from: '以为只是一桩旧案', to: '发现有人一直在抹掉它' },
+        infoGain: '缺失的几页正好是案发前后三个月',
+        paragraphs: 2,
+        endHook: '主簿当夜就请了病假',
+      },
+      {
+        id: 'B4',
+        type: '揭示',
+        goal: '确认照片上的人是谁',
+        obstacle: '照片已被人提前取走',
+        cost: '失去当面指认的机会',
+        delta: { variable: '决心', from: '只想查清线索', to: '决定把这桩旧案翻到底' },
+        infoGain: '取走照片的人留下了与知县相同的印泥',
+        paragraphs: 2,
+        endHook: '县衙后门当晚抬出一口箱子',
+      },
+    ],
+  });
+}
 
 /**
  * 发一条消息，收集整条 SSE 流里的事件。
@@ -525,3 +627,205 @@ test('provider 超时会被标记成 AI_TIMEOUT', async () => {
     await new Promise((resolve) => slow.close(resolve));
   }
 });
+
+// ---------------------------------------------------------------------------
+// T3 节拍规划：规划 → 写作 → 自检 → （缺拍时）重写一次
+// ---------------------------------------------------------------------------
+
+test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读整章正文', async () => {
+  const { workId, chapterId } = await seedChapter({
+    outline: 'MAGIC-大纲：主角进庙查旧案，庙祝会拦他。',
+    body: 'MAGIC-正文：这一段是已经写好的正文，不应该再塞进规划请求。',
+  });
+
+  fakeModel.setQueue([
+    // 1. 规划
+    { content: validPlanJson(), finishReason: 'stop' },
+    // 2. 写作
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '庙门半掩，主角在门槛外停了停。',
+        reason: '按节拍表起稿',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    // 3. 覆盖自检：四拍全中
+    {
+      content: JSON.stringify({
+        covered: ['B1', 'B2', 'B3', 'B4'],
+        missing: [],
+        weak: [],
+        hookPresent: true,
+        chapterGoalMet: true,
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const events = await chat('按大纲写这一章', { workId, chapterId });
+
+  const planCall = fakeModel.calls[before];
+  const writerCall = fakeModel.calls[before + 1];
+  const checkCall = fakeModel.calls[before + 2];
+  assert.ok(checkCall, '规划成功且产出正文后，应当跑一次覆盖自检');
+
+  // 规划请求：JSON 模式、独立预算、上下文含大纲但不含整章正文
+  assert.deepStrictEqual(planCall.response_format, { type: 'json_object' });
+  assert.strictEqual(planCall.max_tokens, 1200, '规划用独立的小预算');
+  const planSystem = String(planCall.messages[0].content || '');
+  assert.match(planSystem, /MAGIC-大纲/, '规划要用本章大纲');
+  assert.ok(!planSystem.includes('MAGIC-正文'), '规划不塞整章正文');
+
+  // 写手请求：节拍表拼在 system 里，写手仍按原 JSON 契约输出
+  const writerSystem = String(writerCall.messages[0].content || '');
+  assert.match(writerSystem, /## 本章节拍表（硬约束，必须覆盖）/);
+  assert.match(writerSystem, /"B4"/, '节拍表 JSON 要完整交给写手');
+  assert.deepStrictEqual(writerCall.response_format, { type: 'json_object' });
+
+  // 自检请求
+  assert.deepStrictEqual(checkCall.response_format, { type: 'json_object' });
+  assert.strictEqual(checkCall.max_tokens, 800);
+  assert.match(String(checkCall.messages[1].content), /《节拍表》/);
+
+  const action = events.find((e) => e.type === 'action');
+  assert.ok(action, '起稿应当正常下发 action');
+  assert.strictEqual(action.action, 'append');
+  assert.match(action.content, /庙门半掩/);
+  assert.deepStrictEqual(action.beatCheck.missing, []);
+  assert.strictEqual(action.planDegraded, '', '规划成功时不应打降级标记');
+  assert.doesNotMatch(action.reason, /编排自检/, '覆盖齐全时不该给作者加徽标');
+
+  // 规划的 JSON 是内部协议，不能作为 token 流到作者界面上
+  const tokenText = events
+    .filter((e) => e.type === 'token')
+    .map((e) => e.content)
+    .join('');
+  assert.ok(!tokenText.includes('chapterGoal'), '规划 JSON 不能让作者看见');
+});
+
+test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二次', async () => {
+  const { workId, chapterId } = await seedChapter({ outline: '主角进庙查旧案。' });
+
+  fakeModel.setQueue([
+    // 1. 规划
+    { content: validPlanJson(), finishReason: 'stop' },
+    // 2. 第一版稿子
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '第一版：只写了进庙与冲突。',
+        reason: '按节拍表起稿',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    // 3. 自检：缺 B4
+    {
+      content: JSON.stringify({
+        covered: ['B1', 'B2', 'B3'],
+        missing: ['B4'],
+        weak: [],
+        hookPresent: true,
+        chapterGoalMet: false,
+      }),
+      finishReason: 'stop',
+    },
+    // 4. 重写
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '重写版：补上了照片被取走的那一拍，章末抬出一口箱子。',
+        reason: '补写缺失节拍',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    // 5. 复核：仍缺 B4
+    {
+      content: JSON.stringify({
+        covered: ['B1', 'B2', 'B3'],
+        missing: ['B4'],
+        weak: [],
+        hookPresent: true,
+        chapterGoalMet: false,
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const events = await chat('写这一章', { workId, chapterId });
+
+  assert.strictEqual(
+    fakeModel.calls.length - before,
+    5,
+    '规划 + 写作 + 自检 + 重写 + 复核，重写只能一次'
+  );
+
+  const rewriteCall = fakeModel.calls[before + 3];
+  const rewriteInstruction = String(rewriteCall.messages[rewriteCall.messages.length - 1].content || '');
+  assert.match(rewriteInstruction, /B4/, '重写指令必须明确点名缺失的拍');
+  assert.match(rewriteInstruction, /确认照片上的人是谁/, '要说明该拍的目标');
+  assert.match(rewriteInstruction, /重写全文/, '要整篇重写而不是局部插入');
+
+  const action = events.find((e) => e.type === 'action');
+  assert.ok(action);
+  assert.match(action.content, /重写版/, '作者拿到的是重写后的版本');
+  assert.match(action.reason, /重写后仍缺 B4/, '仍缺拍时要在可见处标明');
+  assert.deepStrictEqual(action.beatCheck.missing, ['B4'], '报告以复核结果为准');
+  assert.strictEqual(
+    events.filter((e) => e.type === 'agent_thinking').some((e) => /正在补写缺少的节拍/.test(e.label)),
+    true,
+    '重写过程要给作者一个进度信号'
+  );
+});
+
+test('规划两次都不合格时降级直写，不阻塞这一轮起稿', async () => {
+  const { workId, chapterId } = await seedChapter({ outline: '主角进庙查旧案。' });
+
+  fakeModel.setQueue([
+    // 1–2. 规划两次都缺字段
+    { content: JSON.stringify({ beats: [] }), finishReason: 'stop' },
+    { content: JSON.stringify({ chapterGoal: '只有目标，没有节拍' }), finishReason: 'stop' },
+    // 3. 直写
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '没有节拍表，也照样把这一章写出来。',
+        reason: '直写',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const events = await chat('写这一章', { workId, chapterId });
+
+  assert.strictEqual(
+    fakeModel.calls.length - before,
+    3,
+    '规划失败后直接写作，既不重试第三次，也不跑覆盖自检'
+  );
+
+  const writerCall = fakeModel.calls[before + 2];
+  assert.strictEqual(writerCall.stream, true, '第三通请求应当是写手的流式请求');
+  assert.ok(
+    !String(writerCall.messages[0].content).includes('本章节拍表'),
+    '降级后不能把一份不存在的节拍表交给写手'
+  );
+
+  const notice = events.find((e) => e.type === 'notice' && /未规划/.test(e.content));
+  assert.ok(notice, '作者要能看见这一轮没有规划');
+
+  const action = events.find((e) => e.type === 'action');
+  assert.ok(action, '规划降级不能把整轮起稿拖挂');
+  assert.match(action.content, /照样把这一章写出来/);
+  assert.strictEqual(action.planDegraded, 'invalid', '降级原因要能追溯');
+  assert.strictEqual(action.beatCheck, null, '没有节拍表就不该有覆盖报告');
+  assert.doesNotMatch(action.reason, /编排自检/, '没有规划时不该挂自检徽标');
+});
+

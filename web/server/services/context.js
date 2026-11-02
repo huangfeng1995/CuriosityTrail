@@ -326,6 +326,8 @@ function chapterBody(chapter) {
  * @param {Array}  [params.memoryRefs] 自动召回的长期记忆片段 [{label, preview}]
  * @param {string} [params.extraInstruction] 用户在本次请求里附加的指令
  * @param {string} params.userId 当前用户，用于数据归属校验与私有素材注入
+ * @param {boolean} [params.includeChapterBody] 是否注入整章正文，默认 true。
+ *   规划步不需要整章正文，关掉可省 12000 字预算，也避免模型把原文改写一遍。
  * @returns {Promise<{messages: Array, meta: Object}>}
  */
 async function assembleContext(params = {}) {
@@ -341,6 +343,7 @@ async function assembleContext(params = {}) {
     memoryRefs = [],
     extraInstruction,
     userId,
+    includeChapterBody = true,
   } = params;
 
   const role = await getRole(roleKey, userId);
@@ -413,6 +416,9 @@ async function assembleContext(params = {}) {
       lines.push(`标题：${chapter.title}`);
       if (chapter.volume) lines.push(`卷：${chapter.volume}`);
       lines.push(`状态：${statusLabel(chapter.status)}`);
+      // 本章大纲是作者对"这一章要发生什么"的原始意图。
+      // 不注入的话，规划和写作都只能从标题猜，很容易写偏。
+      if (chapter.outline) lines.push(`大纲：\n${truncate(chapter.outline, OUTLINE_LIMIT)}`);
       addPart(lines.join('\n'), PRIORITY.CONTENT);
     }
   }
@@ -538,25 +544,45 @@ async function assembleContext(params = {}) {
       PRIORITY.CONTENT
     );
   } else if (chapter) {
-    const body = chapterBodyText;
-    if (body) {
-      addPart(
-        `## 当前章节正文\n${truncate(body, CONTENT_LIMIT)}`,
-        PRIORITY.CONTENT
-      );
+    if (!includeChapterBody) {
+      // 规划步：不塞整章正文（省预算，也避免模型把原文复述一遍）。
+      // 只给上一章结尾作前情摘要——下一章该接什么，答案在那里。
+      if (chapter.seq > 1) {
+        const prev = await get(
+          `SELECT * FROM chapters
+           WHERE work_id = ? AND seq < ?
+           ORDER BY seq DESC LIMIT 1`,
+          [workId, chapter.seq]
+        );
+        const tail = prev ? chapterBody(prev) : '';
+        if (tail.trim()) {
+          addPart(
+            `## 上一章结尾（前情摘要）\n${truncate(tail, CONTINUITY_LIMIT)}`,
+            PRIORITY.CONTENT
+          );
+        }
+      }
     } else {
-      // 本章还没有正文。
-      //
-      // 不说清楚的话，模型只能靠猜：它会给出 action="append" 加一个
-      // 指向不存在段落的 target，前端回写时找不到落点，作者看到的是
-      // "当前章节还没有正文"，AI 写的内容就这么丢了。
-      // 这里直接告诉它该怎么写：正文会作为本章第一段插入进去。
-      addPart(
-        '## 当前章节正文\n（本章还没有正文。）\n\n' +
-          '你要写的正文会作为本章的第一段插入进去，所以：' +
-          'action 填 "insert"（或 "append"），target 留空字符串，不要编造块ID。',
-        PRIORITY.CONTENT
-      );
+      const body = chapterBodyText;
+      if (body) {
+        addPart(
+          `## 当前章节正文\n${truncate(body, CONTENT_LIMIT)}`,
+          PRIORITY.CONTENT
+        );
+      } else {
+        // 本章还没有正文。
+        //
+        // 不说清楚的话，模型只能靠猜：它会给出 action="append" 加一个
+        // 指向不存在段落的 target，前端回写时找不到落点，作者看到的是
+        // "当前章节还没有正文"，AI 写的内容就这么丢了。
+        // 这里直接告诉它该怎么写：正文会作为本章第一段插入进去。
+        addPart(
+          '## 当前章节正文\n（本章还没有正文。）\n\n' +
+            '你要写的正文会作为本章的第一段插入进去，所以：' +
+            'action 填 "insert"（或 "append"），target 留空字符串，不要编造块ID。',
+          PRIORITY.CONTENT
+        );
+      }
     }
   }
 
@@ -566,7 +592,7 @@ async function assembleContext(params = {}) {
   // 只列能写散文的块（正文/对白/独白）。插图、设定引用、分场也在 blocks 里，
   // 但它们的 content 是图注 / 引用内容 / 空串。把它们的 ID 也给出去，
   // 模型就会拿这些 ID 当 target，回写时把图注变成一段小说正文。
-  if (scope !== 'inline' && chapterBlocks.length) {
+  if (scope !== 'inline' && includeChapterBody && chapterBlocks.length) {
     const index = chapterBlocks
       .filter((b) => PROSE_BLOCK_TYPES.has((b && b.type) || 'paragraph'))
       .map((b) => {
@@ -584,7 +610,9 @@ async function assembleContext(params = {}) {
   }
 
   // ---- 7. 衔接层（侧边栏续写场景） ----
-  if (scope !== 'inline' && chapterBlocks.length) {
+  // 规划步同样要跳过：衔接片段就是本章正文的结尾，
+  // 一边说「不塞整章正文」，一边从结尾漏 500 字，等于没关。
+  if (scope !== 'inline' && includeChapterBody && chapterBlocks.length) {
     const continuity = extractContinuity(chapterBlocks);
     if (continuity) {
       addPart(`## 上一场景结尾（用于衔接）\n${continuity}`, PRIORITY.CONTENT);

@@ -30,8 +30,22 @@ const memoryConv = require('../services/memory/conversation');
 const memorySources = require('../services/memory/sources');
 const { parseModelJson } = require('../services/agent/parse');
 const { runAgentLoop } = require('../services/agent/loop');
+const {
+  generateBeatPlan,
+  checkBeatCoverage,
+  formatBeatPlan,
+  buildRewriteInstruction,
+  beatBadge,
+} = require('../services/agent/beatPlan');
 
 const router = express.Router();
+
+/** 规划步上限：超时即降级直写，不重试 */
+const PLAN_TIMEOUT_MS = 45000;
+/** 覆盖自检上限：超时按「未自检」交付，不阻塞 */
+const CHECK_TIMEOUT_MS = 20000;
+/** 整轮预算，与下面的 roundSignal 一致 */
+const ROUND_BUDGET_MS = 300000;
 
 /**
  * 把模型给的字段转成可显示的文本。
@@ -768,6 +782,84 @@ router.post('/chat', async (req, res) => {
     // 没有这个信号，作者从发问到看到任何反馈之间只有一个不动的空占位。
     send({ type: 'agent_thinking', label: '正在判断需要查什么' });
 
+    // ---- 节拍规划（写手起稿前） ----
+    //
+    // 只对「写手 + 具体章节」生效：其它角色（审稿、资料）不需要节拍表，
+    // 没有章节的闲聊也没法规划。
+    //
+    // 规划失败一律降级直写：它只是增强，不能因为规划挂了就让整轮失败。
+    const planningEnabled = roleKey === 'writer' && Boolean(chapterId);
+    let beatPlan = null;
+    let planDegraded = '';
+
+    if (planningEnabled) {
+      send({ type: 'agent_thinking', label: '正在规划本章节拍' });
+      const planStartedAt = Date.now();
+      try {
+        // 规划用同一份上下文快照，但不注入整章正文：
+        // 把原文再塞一遍，模型会把改写任务当成"润色"，而不是重新编排。
+        const planContext = await assembleContext({
+          workId,
+          chapterId,
+          roleKey,
+          scope,
+          retrieval,
+          memoryRefs: memoryResult.refs,
+          blocks,
+          userId: req.userId,
+          includeChapterBody: false,
+        });
+
+        const planOut = await generateBeatPlan({
+          provider,
+          systemPrompt: planContext.messages[0].content,
+          instruction: String(message),
+          options: {
+            temperature: role?.temperature,
+            model: role?.model && name === 'deepseek' ? role.model : undefined,
+            thinking: role?.thinking === null || role?.thinking === undefined
+              ? undefined
+              : (role.thinking ? 'enabled' : 'disabled'),
+            // 45s 硬顶；取消信号一路沿用，作者断开时规划立刻停。
+            signal: AbortSignal.any([roundSignal, AbortSignal.timeout(PLAN_TIMEOUT_MS)]),
+          },
+        });
+
+        const planMs = Date.now() - planStartedAt;
+        if (planOut.plan) {
+          beatPlan = planOut.plan;
+          // 拼进写手请求：system 末尾、技能清单之前。
+          chatMessages[0].content += `\n\n---\n\n${formatBeatPlan(beatPlan)}`;
+        } else {
+          planDegraded = planOut.reason || 'failed';
+        }
+
+        console.log(
+          JSON.stringify({
+            event: 'ai_plan',
+            traceId,
+            userId: req.userId,
+            role: roleKey,
+            ok: Boolean(beatPlan),
+            reason: planDegraded,
+            durationMs: planMs,
+            beats: beatPlan ? beatPlan.beats.length : 0,
+            errors: (planOut.errors || []).slice(0, 6),
+          })
+        );
+
+        if (!beatPlan && !roundSignal.aborted) {
+          // 作者要看得见"这一轮没有规划"：否则他只会觉得这次写得松散，
+          // 却不知道是规划环节降级了。
+          send({ type: 'notice', content: '本章节拍规划没有成功，这一轮按直写处理（未规划）。' });
+        }
+      } catch (err) {
+        // 规划出意外（含取消）都不该挡住写作。
+        planDegraded = err.code === 'AI_TIMEOUT' ? 'timeout' : 'error';
+        console.error('节拍规划失败：', err.message);
+      }
+    }
+
     const runChat = (messagesForRound = chatMessages, overrides = {}) =>
       runAgentLoop({
         provider,
@@ -901,26 +993,190 @@ router.post('/chat', async (req, res) => {
 
     const rawText = finalResult.raw || fullText;
     const parsed = finalResult.parsed;
-    const payload = normalizeAction({ ...(parsed || {}), skills: finalResult.toolCalls });
 
-    // 模型没给 JSON 时，把原文当正文下发。
+    /**
+     * 把一轮模型结果转成可下发的 payload。
+     *
+     * 抽成函数是因为缺拍重写后要用同一套规则重新算一遍：
+     * 解析失败回退原文、正文为空时用 reason 顶上——两条路必须一致，
+     * 否则重写稿可能绕过回退逻辑，变成空气泡。
+     */
+    const buildPayload = (result, raw) => {
+      const p = normalizeAction({ ...(result.parsed || {}), skills: result.toolCalls });
+
+      // 模型没给 JSON 时，把原文当正文下发。
+      //
+      // 不能丢：这段文本是作者唯一能拿回的东西。标成 append 并带上
+      // parseFailed，前端才会给出「应用到正文」按钮；reason 说明这是
+      // 格式失败后的原文回退，避免作者以为模型正常完成了改写。
+      if (!result.parsed && String(raw || '').trim()) {
+        p.action = 'append';
+        p.content = String(raw).trim();
+        p.reason = '模型没有按约定格式返回，已把原始文本当作正文；确认无误后点「应用到正文」。';
+        p.parseFailed = true;
+      }
+
+      // 模型给了 JSON，但正文是空的（常见于 action='none' 的空回复）。
+      // 它至少给了理由——把理由当正文显示，总好过让作者对着一片空白。
+      if (!p.content.trim() && p.reason.trim()) {
+        p.action = 'comment';
+        p.content = p.reason.trim();
+      }
+
+      return p;
+    };
+
+    let payload = buildPayload(finalResult, rawText);
+
+    // ---- 节拍覆盖自检 ----
     //
-    // 不能丢：这段文本是作者唯一能拿回的东西。标成 append 并带上
-    // parseFailed，前端才会给出「应用到正文」按钮；reason 说明这是
-    // 格式失败后的原文回退，避免作者以为模型正常完成了改写。
-    if (!parsed && rawText.trim()) {
-      payload.action = 'append';
-      payload.content = rawText.trim();
-      payload.reason = '模型没有按约定格式返回，已把原始文本当作正文；确认无误后点「应用到正文」。';
-      payload.parseFailed = true;
+    // 只在「规划成功 + 真的产出了正文」时跑：
+    //   - comment/none 是讨论，不是正文，自检没有意义；
+    //   - parseFailed 的原文回退可能只是半段文本，按节拍判会误报；
+    //   - 被截断的正文没有自检价值（缺的一定缺）。
+    //
+    // 自检失败/超时一律交付当前稿，不让作者为一轮「检查」再等一次失败。
+    let beatCheck = null;
+    let beatCheckError = '';
+    let beatRewrite = false;
+    let beatRewriteFailed = false;
+
+    const isProse = ['replace', 'append', 'insert'].includes(payload.action) && !payload.parseFailed;
+
+    if (beatPlan && isProse && payload.content.trim()) {
+      if (finalResult.finishReason === 'length') {
+        beatCheckError = 'truncated';
+      } else {
+        const elapsed = Date.now() - startedAt;
+        if (elapsed >= 200000 || ROUND_BUDGET_MS - elapsed < 60000) {
+          beatCheckError = 'time_budget';
+        } else {
+          send({ type: 'agent_thinking', label: '正在检查节拍覆盖' });
+          const checkStartedAt = Date.now();
+          const checkOut = await checkBeatCoverage({
+            provider,
+            plan: beatPlan,
+            body: payload.content,
+            options: {
+              signal: AbortSignal.any([roundSignal, AbortSignal.timeout(CHECK_TIMEOUT_MS)]),
+            },
+          });
+          const checkMs = Date.now() - checkStartedAt;
+          beatCheck = checkOut.coverage;
+          beatCheckError = beatCheck ? '' : (checkOut.reason || 'failed');
+
+          console.log(
+            JSON.stringify({
+              event: 'ai_beat_check',
+              traceId,
+              userId: req.userId,
+              ok: Boolean(beatCheck),
+              reason: beatCheckError,
+              durationMs: checkMs,
+              planned: beatPlan.beats.length,
+              covered: beatCheck ? beatCheck.covered.length : 0,
+              missing: beatCheck ? beatCheck.missing : [],
+              weak: beatCheck ? beatCheck.weak.map((w) => w.id) : [],
+              hookPresent: beatCheck ? beatCheck.hookPresent : null,
+              chapterGoalMet: beatCheck ? beatCheck.chapterGoalMet : null,
+              rewrote: false,
+            })
+          );
+        }
+      }
     }
 
-    // 模型给了 JSON，但正文是空的（常见于 action='none' 的空回复）。
-    // 它至少给了理由——把理由当正文显示，总好过让作者对着一片空白。
-    if (!payload.content.trim() && payload.reason.trim()) {
-      payload.action = 'comment';
-      payload.content = payload.reason.trim();
+    // 缺拍重写：最多一次。
+    //
+    // 重写失败、超时或客户已断开都不丢第一版——作者已经有一份能用的稿子，
+    // 不能为了补两拍把它换成一句错误。
+    if (
+      beatPlan &&
+      beatCheck &&
+      beatCheck.missing.length &&
+      !roundSignal.aborted &&
+      Date.now() - startedAt < 200000 &&
+      ROUND_BUDGET_MS - (Date.now() - startedAt) >= 60000
+    ) {
+      send({
+        type: 'agent_thinking',
+        label: `正在补写缺少的节拍：${beatCheck.missing.join('、')}`,
+      });
+
+      try {
+        const rewriteResult = await runChat([
+          ...chatMessages,
+          { role: 'user', content: buildRewriteInstruction(beatPlan, beatCheck) },
+        ]);
+        const rewritePayload = buildPayload(rewriteResult, rewriteResult.raw || '');
+
+        if (rewritePayload.content.trim()) {
+          finalResult = rewriteResult;
+          payload = rewritePayload;
+          beatRewrite = true;
+
+          // 重写后必须再判一次：不复判就只能按旧报告交付，
+          // 「仍缺哪几拍」也就成了猜的。
+          const recheckStartedAt = Date.now();
+          const recheckOut = await checkBeatCoverage({
+            provider,
+            plan: beatPlan,
+            body: payload.content,
+            options: {
+              signal: AbortSignal.any([roundSignal, AbortSignal.timeout(CHECK_TIMEOUT_MS)]),
+            },
+          });
+          const recheckMs = Date.now() - recheckStartedAt;
+
+          if (recheckOut.coverage) {
+            beatCheck = recheckOut.coverage;
+            beatCheckError = '';
+          } else {
+            beatCheckError = 'recheck';
+          }
+
+          console.log(
+            JSON.stringify({
+              event: 'ai_beat_check',
+              traceId,
+              userId: req.userId,
+              ok: Boolean(recheckOut.coverage),
+              reason: recheckOut.reason || '',
+              durationMs: recheckMs,
+              planned: beatPlan.beats.length,
+              missing: recheckOut.coverage ? recheckOut.coverage.missing : beatCheck.missing,
+              weak: recheckOut.coverage ? recheckOut.coverage.weak.map((w) => w.id) : [],
+              hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
+              chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
+              rewrote: true,
+            })
+          );
+        }
+      } catch (err) {
+        // 重写失败就保留第一版。作者至少拿到了一稿，而不是一条报错。
+        beatRewriteFailed = true;
+        console.error('缺拍重写失败：', err.message);
+      }
     }
+
+    // 编排结果必须以作者看得见的方式落地：reason 前挂一个徽标，
+    // 前端不用改也能显示；日志里另有 ai_beat_check 供复盘。
+    // 没有规划就没有「编排」可言，此时不能挂「未自检」——那会让作者
+    // 以为检查跑过且失败了，而真相是这一轮根本没规划。
+    const badge = beatPlan
+      ? beatBadge({
+          coverage: beatCheck,
+          checkError: beatCheckError,
+          rewrote: beatRewrite,
+          rewriteFailed: beatRewriteFailed,
+          truncated: finalResult.finishReason === 'length',
+        })
+      : '';
+    if (badge) {
+      payload.reason = [badge, payload.reason].filter(Boolean).join(' ');
+    }
+    payload.beatCheck = beatCheck;
+    if (planDegraded) payload.planDegraded = planDegraded;
 
     // 模型一个字都没给。
     //
@@ -1066,6 +1322,10 @@ router.post('/chat', async (req, res) => {
       // 模型没按 JSON 契约返回、原文被当作正文回退时为 true。
       // 前端可据此提示作者「这是原文，不是模型正常生成的改写」。
       parseFailed: Boolean(payload.parseFailed),
+      // 节拍覆盖报告（未跑或失败时为 null）与规划降级原因。
+      // reason 里的徽标是给作者看的短句，这两个字段留给后续复盘/前端展示。
+      beatCheck: payload.beatCheck || null,
+      planDegraded: payload.planDegraded || '',
     });
     send({
       type: 'done',
