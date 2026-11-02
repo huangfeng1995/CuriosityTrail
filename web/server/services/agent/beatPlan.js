@@ -401,7 +401,9 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
         ],
         ...options,
         jsonOutput: true,
-        maxTokens: 1200,
+        // 实测：6 拍 / 45 段的完整节拍表约 1558 tokens，1200 会稳定截断在
+        // 第 3–4 拍中间，JSON 解析必然失败。2000 留约 28% 余量。
+        maxTokens: 2000,
       });
 
       lastRaw = String(result.content || '');

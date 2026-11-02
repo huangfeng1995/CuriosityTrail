@@ -42,10 +42,27 @@ const router = express.Router();
 
 /** 规划步上限：超时即降级直写，不重试 */
 const PLAN_TIMEOUT_MS = 45000;
-/** 覆盖自检上限：超时按「未自检」交付，不阻塞 */
-const CHECK_TIMEOUT_MS = 20000;
-/** 整轮预算，与下面的 roundSignal 一致 */
-const ROUND_BUDGET_MS = 300000;
+/**
+ * 写手单次输出预算。
+ *
+ * 基线 5000 字长章实测约 3500 tokens；思考模式还要从同一份预算里扣
+ * reasoning，4096 会把正文挤空，8192 也没有余量，所以按 10000 给足。
+ * 若上游存在更低的硬上限，会在这里报错，由部署侧顶到实际上限。
+ */
+const WRITER_MAX_TOKENS = 10000;
+/** 单次起稿/重写的上限：按 10000 tokens 的生成时间留出余量 */
+const WRITE_TIMEOUT_MS = 150000;
+/** 覆盖自检上限：超时按「未自检」交付，不阻塞。正文 5000 字实测约 1.4s */
+const CHECK_TIMEOUT_MS = 30000;
+/**
+ * 整轮预算。
+ *
+ * 最坏路径：规划 45s + 起稿 150s + 自检 30s + 重写 150s + 复核 30s = 405s，
+ * 再留 15s 给上下文装配与落库，取 420s。
+ * 重写门槛要求剩余预算 ≥ 一次重写 + 一次复核（180s），
+ * 否则宁可保留第一版，不半路开一个注定跑不完的重写。
+ */
+const ROUND_BUDGET_MS = 420000;
 
 /**
  * 把模型给的字段转成可显示的文本。
@@ -537,14 +554,14 @@ router.post('/chat', async (req, res) => {
   };
 
   // 客户端断开（关页面、点取消）时立刻中止模型调用，不让它在后台空转烧 token。
-  // 再兜一个 300s 的整轮上限：模型卡住时，作者至少能收到一条明确的错误。
+  // 再兜一个整轮上限：模型卡住时，作者至少能收到一条明确的错误。
   //
-  // 为什么是 300s 不是 120s：一轮可能包含多次模型调用（技能循环最多 4 步），
-  // 写一章长文本来就要几分钟。120s 会把写到一半的长文掐掉，
-  // 作者拿到的只有半章——比慢一点糟糕得多。
+  // 为什么按 420s 算：一轮可能包含多次模型调用（技能循环最多 4 步），
+  // 长文起稿还要再叠一次缺拍重写。按「规划 45 + 起稿 150 + 自检 30 +
+  // 重写 150 + 复核 30」的最坏路径留 15s 余量，见 ROUND_BUDGET_MS。
   // provider 的单次调用超时（180s）在下面一层，两层一起兜底。
   const clientAbort = new AbortController();
-  const roundSignal = AbortSignal.any([clientAbort.signal, AbortSignal.timeout(300000)]);
+  const roundSignal = AbortSignal.any([clientAbort.signal, AbortSignal.timeout(ROUND_BUDGET_MS)]);
   let clientGone = false;
   res.on('close', () => {
     if (!res.writableEnded) {
@@ -872,6 +889,9 @@ router.post('/chat', async (req, res) => {
           thinking: role?.thinking === null || role?.thinking === undefined
             ? undefined
             : (role.thinking ? 'enabled' : 'disabled'),
+          // 写手预算：5000 字长章约 3500 tokens，思考还会额外占用同一份
+          // max_tokens，10000 才能把正文完整写完。
+          maxTokens: WRITER_MAX_TOKENS,
           // 取消/超时信号一路传到 provider：客户端断开时请求立刻停掉
           signal: roundSignal,
           // 重试时可以覆盖：关 JSON 模式 / 关思考，见下面的空回复重试
@@ -912,7 +932,11 @@ router.post('/chat', async (req, res) => {
         },
       });
 
-    let finalResult = await runChat();
+    // 起稿/重写各自的单次上限：一次写太久会把整轮预算吃光，
+    // 到点仍然中止并由上层保留已有结果。
+    const writeSignal = () => AbortSignal.any([roundSignal, AbortSignal.timeout(WRITE_TIMEOUT_MS)]);
+
+    let finalResult = await runChat(chatMessages, { signal: writeSignal() });
 
     // 空回复重试一次。
     //
@@ -968,6 +992,7 @@ router.post('/chat', async (req, res) => {
         jsonOutput: false,
         // 思考同样会吃 token 预算，重试时关掉，把预算留给正文。
         ...(role?.thinking ? { thinking: 'disabled' } : {}),
+        signal: writeSignal(),
       });
     }
 
@@ -1048,7 +1073,8 @@ router.post('/chat', async (req, res) => {
         beatCheckError = 'truncated';
       } else {
         const elapsed = Date.now() - startedAt;
-        if (elapsed >= 200000 || ROUND_BUDGET_MS - elapsed < 60000) {
+        // 自检本身要跑得完才值得发起；装不下就按「未自检」交付。
+        if (ROUND_BUDGET_MS - elapsed < CHECK_TIMEOUT_MS) {
           beatCheckError = 'time_budget';
         } else {
           send({ type: 'agent_thinking', label: '正在检查节拍覆盖' });
@@ -1090,13 +1116,15 @@ router.post('/chat', async (req, res) => {
     //
     // 重写失败、超时或客户已断开都不丢第一版——作者已经有一份能用的稿子，
     // 不能为了补两拍把它换成一句错误。
+    //
+    // 只有剩余预算装得下「一次重写 + 一次复核」才发起：否则重写跑到一半
+    // 就会被整轮上限掐断，第一版也没了，等于双输。
     if (
       beatPlan &&
       beatCheck &&
       beatCheck.missing.length &&
       !roundSignal.aborted &&
-      Date.now() - startedAt < 200000 &&
-      ROUND_BUDGET_MS - (Date.now() - startedAt) >= 60000
+      ROUND_BUDGET_MS - (Date.now() - startedAt) >= WRITE_TIMEOUT_MS + CHECK_TIMEOUT_MS
     ) {
       send({
         type: 'agent_thinking',
@@ -1104,10 +1132,13 @@ router.post('/chat', async (req, res) => {
       });
 
       try {
-        const rewriteResult = await runChat([
-          ...chatMessages,
-          { role: 'user', content: buildRewriteInstruction(beatPlan, beatCheck) },
-        ]);
+        const rewriteResult = await runChat(
+          [
+            ...chatMessages,
+            { role: 'user', content: buildRewriteInstruction(beatPlan, beatCheck) },
+          ],
+          { signal: writeSignal() }
+        );
         const rewritePayload = buildPayload(rewriteResult, rewriteResult.raw || '');
 
         if (rewritePayload.content.trim()) {

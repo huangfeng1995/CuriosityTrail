@@ -679,7 +679,7 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
 
   // 规划请求：JSON 模式、独立预算、上下文含大纲但不含整章正文
   assert.deepStrictEqual(planCall.response_format, { type: 'json_object' });
-  assert.strictEqual(planCall.max_tokens, 1200, '规划用独立的小预算');
+  assert.strictEqual(planCall.max_tokens, 2000, '规划预算 2000，完整节拍表实测约 1558 tokens');
   const planSystem = String(planCall.messages[0].content || '');
   assert.match(planSystem, /MAGIC-大纲/, '规划要用本章大纲');
   assert.ok(!planSystem.includes('MAGIC-正文'), '规划不塞整章正文');
@@ -689,6 +689,11 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
   assert.match(writerSystem, /## 本章节拍表（硬约束，必须覆盖）/);
   assert.match(writerSystem, /"B4"/, '节拍表 JSON 要完整交给写手');
   assert.deepStrictEqual(writerCall.response_format, { type: 'json_object' });
+  assert.strictEqual(
+    writerCall.max_tokens,
+    10000,
+    '写手预算要能容纳 5000 字正文，思考也不能把正文挤没'
+  );
 
   // 自检请求
   assert.deepStrictEqual(checkCall.response_format, { type: 'json_object' });
