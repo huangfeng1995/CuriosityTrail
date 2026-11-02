@@ -383,10 +383,11 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
   const signal = options.signal || null;
   let lastRaw = '';
   let lastErrors = [];
+  let lastUsage = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     if (signal && signal.aborted) {
-      return { plan: null, raw: lastRaw, errors: lastErrors, reason: 'timeout' };
+      return { plan: null, raw: lastRaw, errors: lastErrors, reason: 'timeout', usage: lastUsage };
     }
 
     const userContent = attempt === 0
@@ -407,9 +408,10 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
       });
 
       lastRaw = String(result.content || '');
+      lastUsage = result.usage || null;
       const check = validateBeatPlan(lastRaw);
       if (check.ok) {
-        return { plan: check.plan, raw: lastRaw, errors: [], reason: '' };
+        return { plan: check.plan, raw: lastRaw, errors: [], reason: '', usage: lastUsage };
       }
       lastErrors = check.errors;
     } catch (err) {
@@ -419,13 +421,14 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
           raw: lastRaw,
           errors: lastErrors,
           reason: err.code === 'AI_ABORTED' ? 'aborted' : 'timeout',
+          usage: lastUsage,
         };
       }
-      return { plan: null, raw: lastRaw, errors: lastErrors, reason: 'error' };
+      return { plan: null, raw: lastRaw, errors: lastErrors, reason: 'error', usage: lastUsage };
     }
   }
 
-  return { plan: null, raw: lastRaw, errors: lastErrors, reason: 'invalid' };
+  return { plan: null, raw: lastRaw, errors: lastErrors, reason: 'invalid', usage: lastUsage };
 }
 
 /**
@@ -458,12 +461,16 @@ async function checkBeatCoverage({ provider, plan, body, options = {} }) {
     });
 
     const coverage = validateCoverage(result.content, plan);
-    return { coverage, reason: coverage ? '' : 'invalid' };
+    return {
+      coverage,
+      reason: coverage ? '' : 'invalid',
+      usage: result.usage || null,
+    };
   } catch (err) {
     if (err.code === 'AI_TIMEOUT' || err.code === 'AI_ABORTED' || err.name === 'TimeoutError') {
-      return { coverage: null, reason: 'timeout' };
+      return { coverage: null, reason: 'timeout', usage: null };
     }
-    return { coverage: null, reason: 'error' };
+    return { coverage: null, reason: 'error', usage: null };
   }
 }
 

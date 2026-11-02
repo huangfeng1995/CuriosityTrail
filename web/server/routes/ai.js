@@ -861,7 +861,9 @@ router.post('/chat', async (req, res) => {
             reason: planDegraded,
             durationMs: planMs,
             beats: beatPlan ? beatPlan.beats.length : 0,
+            paragraphs: beatPlan ? beatPlan.totalParagraphs : 0,
             errors: (planOut.errors || []).slice(0, 6),
+            usage: planOut.usage || null,
           })
         );
 
@@ -1106,6 +1108,7 @@ router.post('/chat', async (req, res) => {
               hookPresent: beatCheck ? beatCheck.hookPresent : null,
               chapterGoalMet: beatCheck ? beatCheck.chapterGoalMet : null,
               rewrote: false,
+              usage: checkOut.usage || null,
             })
           );
         }
@@ -1132,6 +1135,7 @@ router.post('/chat', async (req, res) => {
       });
 
       try {
+        const rewriteStartedAt = Date.now();
         const rewriteResult = await runChat(
           [
             ...chatMessages,
@@ -1145,6 +1149,18 @@ router.post('/chat', async (req, res) => {
           finalResult = rewriteResult;
           payload = rewritePayload;
           beatRewrite = true;
+
+          console.log(
+            JSON.stringify({
+              event: 'ai_beat_rewrite',
+              traceId,
+              userId: req.userId,
+              durationMs: Date.now() - rewriteStartedAt,
+              finishReason: rewriteResult.finishReason || '',
+              contentLength: payload.content.length,
+              usage: rewriteResult.usage || null,
+            })
+          );
 
           // 重写后必须再判一次：不复判就只能按旧报告交付，
           // 「仍缺哪几拍」也就成了猜的。
@@ -1180,6 +1196,7 @@ router.post('/chat', async (req, res) => {
               hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
               chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
               rewrote: true,
+              usage: recheckOut.usage || null,
             })
           );
         }
