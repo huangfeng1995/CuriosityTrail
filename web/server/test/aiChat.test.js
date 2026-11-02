@@ -73,7 +73,7 @@ async function seedChapter(options = {}) {
 }
 
 /**
- * 一份合格的节拍表响应（四拍、合计 9 段）。
+ * 一份合格的节拍表响应（四拍、合计 36 段，落在 35–55 的长章区间）。
  */
 function validPlanJson() {
   return JSON.stringify({
@@ -93,7 +93,7 @@ function validPlanJson() {
         cost: '押上唯一的信物',
         delta: { variable: '处境', from: '被挡在庙外', to: '进入内殿' },
         infoGain: '庙里供着的不是城隍像，而是一张旧照片',
-        paragraphs: 2,
+        paragraphs: 9,
         endHook: '照片上的人穿着现任知县的官服',
       },
       {
@@ -104,7 +104,7 @@ function validPlanJson() {
         cost: '被赶出庙门',
         delta: { variable: '关系', from: '互相试探', to: '彻底翻脸' },
         infoGain: '旧案发生在二十年前，当时知县尚未到任',
-        paragraphs: 3,
+        paragraphs: 9,
         endHook: '庙祝说漏了「那年冬天」四个字',
       },
       {
@@ -115,7 +115,7 @@ function validPlanJson() {
         cost: '惊动管档的主簿',
         delta: { variable: '信息', from: '以为只是一桩旧案', to: '发现有人一直在抹掉它' },
         infoGain: '缺失的几页正好是案发前后三个月',
-        paragraphs: 2,
+        paragraphs: 9,
         endHook: '主簿当夜就请了病假',
       },
       {
@@ -126,7 +126,7 @@ function validPlanJson() {
         cost: '失去当面指认的机会',
         delta: { variable: '决心', from: '只想查清线索', to: '决定把这桩旧案翻到底' },
         infoGain: '取走照片的人留下了与知县相同的印泥',
-        paragraphs: 2,
+        paragraphs: 9,
         endHook: '县衙后门当晚抬出一口箱子',
       },
     ],
@@ -651,10 +651,15 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
       }),
       finishReason: 'stop',
     },
-    // 3. 覆盖自检：四拍全中
+    // 3. 覆盖自检：四拍全中，每拍带可核对的原句
     {
       content: JSON.stringify({
-        covered: ['B1', 'B2', 'B3', 'B4'],
+        covered: [
+          { id: 'B1', evidence: '庙门半掩，主角在门槛外停了停' },
+          { id: 'B2', evidence: '他问庙祝照片上是谁，庙祝不答' },
+          { id: 'B3', evidence: '旧档中间缺了几页，断口很新' },
+          { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+        ],
         missing: [],
         weak: [],
         hookPresent: true,
@@ -689,12 +694,17 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
   assert.deepStrictEqual(checkCall.response_format, { type: 'json_object' });
   assert.strictEqual(checkCall.max_tokens, 800);
   assert.match(String(checkCall.messages[1].content), /《节拍表》/);
+  assert.match(String(checkCall.messages[0].content), /30 个字/, '自检要求每拍给出短证据');
 
   const action = events.find((e) => e.type === 'action');
   assert.ok(action, '起稿应当正常下发 action');
   assert.strictEqual(action.action, 'append');
   assert.match(action.content, /庙门半掩/);
   assert.deepStrictEqual(action.beatCheck.missing, []);
+  assert.strictEqual(action.beatCheck.evidence.length, 4, '每拍都要带证据');
+  for (const item of action.beatCheck.evidence) {
+    assert.ok(Array.from(item.evidence).length <= 30, '证据不能超过 30 字');
+  }
   assert.strictEqual(action.planDegraded, '', '规划成功时不应打降级标记');
   assert.doesNotMatch(action.reason, /编排自检/, '覆盖齐全时不该给作者加徽标');
 
@@ -725,7 +735,11 @@ test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二�
     // 3. 自检：缺 B4
     {
       content: JSON.stringify({
-        covered: ['B1', 'B2', 'B3'],
+        covered: [
+          { id: 'B1', evidence: '第一版：只写了进庙' },
+          { id: 'B2', evidence: '第一版：只写了冲突' },
+          { id: 'B3', evidence: '第一版：旧档缺页' },
+        ],
         missing: ['B4'],
         weak: [],
         hookPresent: true,
@@ -746,7 +760,11 @@ test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二�
     // 5. 复核：仍缺 B4
     {
       content: JSON.stringify({
-        covered: ['B1', 'B2', 'B3'],
+        covered: [
+          { id: 'B1', evidence: '重写版：进庙' },
+          { id: 'B2', evidence: '重写版：冲突' },
+          { id: 'B3', evidence: '重写版：旧档缺页' },
+        ],
         missing: ['B4'],
         weak: [],
         hookPresent: true,

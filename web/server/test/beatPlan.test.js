@@ -24,7 +24,7 @@ const {
 } = require('../services/agent/beatPlan');
 
 /**
- * 一份合格的四拍节拍表。段落合计 9（在 8–14 之内）。
+ * 一份合格的四拍节拍表。段落合计 35（全章配额下限，对齐 5000 字长章）。
  */
 function makePlan(overrides = {}) {
   return {
@@ -44,7 +44,7 @@ function makePlan(overrides = {}) {
         cost: '把唯一的信物押在门口',
         delta: { variable: '处境', from: '被挡在庙外', to: '得以进入内殿' },
         infoGain: '庙里供着的不是城隍像，而是一张旧照片',
-        paragraphs: 2,
+        paragraphs: 9,
         endHook: '照片上的人穿着现任知县的官服',
       },
       {
@@ -55,7 +55,7 @@ function makePlan(overrides = {}) {
         cost: '激怒庙祝，被赶出去',
         delta: { variable: '关系', from: '互相试探', to: '彻底翻脸' },
         infoGain: '旧案发生在二十年前，当时知县尚未到任',
-        paragraphs: 3,
+        paragraphs: 9,
         endHook: '庙祝说漏了「那年冬天」四个字',
       },
       {
@@ -66,7 +66,7 @@ function makePlan(overrides = {}) {
         cost: '惊动了管档的主簿',
         delta: { variable: '信息', from: '以为只是一桩旧案', to: '发现有人一直在抹掉它' },
         infoGain: '缺失的几页正好是案发前后三个月',
-        paragraphs: 2,
+        paragraphs: 9,
         endHook: '主簿当夜就请了病假',
       },
       {
@@ -77,7 +77,7 @@ function makePlan(overrides = {}) {
         cost: '失去当面指认的机会',
         delta: { variable: '决心', from: '只想查清线索', to: '决定把这桩旧案翻到底' },
         infoGain: '取走照片的人留下了与知县相同的印泥',
-        paragraphs: 2,
+        paragraphs: 8,
         endHook: '县衙后门当晚抬出一口箱子',
       },
     ],
@@ -91,7 +91,7 @@ test('合格节拍表通过校验并归一化', () => {
   assert.strictEqual(result.ok, true);
   assert.strictEqual(result.errors.length, 0);
   assert.strictEqual(result.plan.beats.length, 4);
-  assert.strictEqual(result.plan.totalParagraphs, 9);
+  assert.strictEqual(result.plan.totalParagraphs, 35);
   assert.deepStrictEqual(result.plan.beats[0].delta, {
     variable: '处境',
     from: '被挡在庙外',
@@ -112,7 +112,32 @@ test('节拍数越界、缺字段、缺 endHook、段数越界都会被拒绝', 
     [
       '全章段数太少',
       makePlan({ beats: makePlan().beats.map((b) => ({ ...b, paragraphs: 1 })) }),
-      /全章段落数必须在 8–14/,
+      /全章段落数必须在 35–55/,
+    ],
+    [
+      '单拍段落少于 3',
+      makePlan({
+        beats: makePlan().beats.map((b, i) => (i === 0 ? { ...b, paragraphs: 2 } : b)),
+      }),
+      /paragraphs 必须是 3–10/,
+    ],
+    [
+      '单拍段落多于 10',
+      makePlan({
+        beats: makePlan().beats.map((b, i) => (i === 0 ? { ...b, paragraphs: 11 } : b)),
+      }),
+      /paragraphs 必须是 3–10/,
+    ],
+    [
+      '全章段数太多',
+      makePlan({
+        beats: [...makePlan().beats, ...makePlan().beats.slice(0, 2)].map((b, i) => ({
+          ...b,
+          id: `B${i + 1}`,
+          paragraphs: 10,
+        })),
+      }),
+      /全章段落数必须在 35–55/,
     ],
     [
       'infoGain 太短',
@@ -151,24 +176,67 @@ test('非 JSON / 非对象输入直接拒绝', () => {
   }
 });
 
-test('自检：模型漏报的拍要按节拍表补回 missing', () => {
+test('自检：模型漏报的拍要按节拍表补回 missing，并保留 30 字以内的证据', () => {
   const plan = validateBeatPlan(makePlan()).plan;
   const coverage = validateCoverage(
-    { covered: ['B1', 'B2'], missing: ['B4'], weak: [], hookPresent: true, chapterGoalMet: false },
+    {
+      covered: [
+        { id: 'B1', evidence: '林砚在门槛外站了一会儿，才伸手推门' },
+        { id: 'B2', evidence: '老周不答，只说香案后头还有一箱旧档' },
+      ],
+      missing: ['B4'],
+      weak: [],
+      hookPresent: true,
+      chapterGoalMet: false,
+    },
     plan
   );
 
   assert.ok(coverage, '合法自检结果应当返回报告');
   assert.deepStrictEqual(coverage.covered, ['B1', 'B2']);
   assert.deepStrictEqual(coverage.missing, ['B3', 'B4'], 'B3 没被提到，必须按节拍表判为缺失');
+  assert.deepStrictEqual(coverage.evidence, [
+    { id: 'B1', evidence: '林砚在门槛外站了一会儿，才伸手推门' },
+    { id: 'B2', evidence: '老周不答，只说香案后头还有一箱旧档' },
+  ]);
   assert.strictEqual(coverage.hookPresent, true);
   assert.strictEqual(coverage.chapterGoalMet, false);
+});
+
+test('自检：没有证据的 covered 不算覆盖，证据超长会被截到 30 字', () => {
+  const plan = validateBeatPlan(makePlan()).plan;
+  const coverage = validateCoverage(
+    {
+      covered: [
+        { id: 'B1', evidence: '' },
+        { id: 'B2', evidence: '这是一段明显超过三十个字的证据'.repeat(3) },
+        'B3',
+      ],
+      missing: [],
+      weak: [],
+    },
+    plan
+  );
+
+  assert.ok(coverage);
+  assert.deepStrictEqual(coverage.covered, ['B2']);
+  assert.deepStrictEqual(coverage.missing, ['B1', 'B3', 'B4'], '没证据的拍要落回 missing');
+  assert.strictEqual(Array.from(coverage.evidence[0].evidence).length, 30, '证据必须截到 30 字');
 });
 
 test('自检：covered 与 missing 自相矛盾时以 covered 为准', () => {
   const plan = validateBeatPlan(makePlan()).plan;
   const coverage = validateCoverage(
-    { covered: ['B1', 'B2', 'B3', 'B4'], missing: ['B2'], weak: [] },
+    {
+      covered: [
+        { id: 'B1', evidence: 'B1 的正文原句' },
+        { id: 'B2', evidence: 'B2 的正文原句' },
+        { id: 'B3', evidence: 'B3 的正文原句' },
+        { id: 'B4', evidence: 'B4 的正文原句' },
+      ],
+      missing: ['B2'],
+      weak: [],
+    },
     plan
   );
 
@@ -179,7 +247,10 @@ test('自检：weak 的拍既不算覆盖也不算缺失', () => {
   const plan = validateBeatPlan(makePlan()).plan;
   const coverage = validateCoverage(
     {
-      covered: ['B1', 'B2'],
+      covered: [
+        { id: 'B1', evidence: 'B1 的正文原句' },
+        { id: 'B2', evidence: 'B2 的正文原句' },
+      ],
       missing: [],
       weak: [{ id: 'B3', reason: '只有事件，没有写出信息变化' }],
     },
@@ -193,7 +264,16 @@ test('自检：weak 的拍既不算覆盖也不算缺失', () => {
 
 test('自检：编造的 id 与坏输入一律忽略', () => {
   const plan = validateBeatPlan(makePlan()).plan;
-  const coverage = validateCoverage({ covered: ['B1', 'B9'], weak: [{ id: 'B9' }] }, plan);
+  const coverage = validateCoverage(
+    {
+      covered: [
+        { id: 'B1', evidence: 'B1 的正文原句' },
+        { id: 'B9', evidence: '不存在的拍' },
+      ],
+      weak: [{ id: 'B9' }],
+    },
+    plan
+  );
   assert.ok(coverage);
   assert.ok(!coverage.covered.includes('B9'), '不存在的 id 不能混进报告');
   assert.ok(!coverage.missing.includes('B9'));

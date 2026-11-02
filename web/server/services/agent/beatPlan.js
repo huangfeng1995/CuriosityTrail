@@ -25,16 +25,22 @@ const DELTA_VARIABLES = ['处境', '关系', '信息', '决心'];
 const MIN_BEATS = 4;
 const MAX_BEATS = 8;
 
-/** 单拍段数 */
-const MIN_PARAGRAPHS = 1;
-const MAX_PARAGRAPHS = 4;
-
-/** 全章段数 */
-const MIN_TOTAL_PARAGRAPHS = 8;
-const MAX_TOTAL_PARAGRAPHS = 14;
+/**
+ * 单拍段数与全章段数。
+ *
+ * 基线范文（5000 字量级）实测 45 个自然段、6 拍。旧的「每拍 1–4 段、
+ * 全章 8–14 段」是按两千字短章推的，会把长篇写成提纲，已经作废。
+ */
+const MIN_PARAGRAPHS = 3;
+const MAX_PARAGRAPHS = 10;
+const MIN_TOTAL_PARAGRAPHS = 35;
+const MAX_TOTAL_PARAGRAPHS = 55;
 
 /** 空钩子话术，出现即判不合格 */
 const EMPTY_HOOKS = ['且听下回分解', '欲知后事', '下回分解'];
+
+/** 覆盖证据的长度上限：够定位原句，又不至于把正文抄一遍 */
+const MAX_EVIDENCE_CHARS = 30;
 
 /**
  * 规划提示词。独立于 writer.js 的正文提示词——规划器只描述节拍表，
@@ -43,18 +49,26 @@ const EMPTY_HOOKS = ['且听下回分解', '欲知后事', '下回分解'];
 const PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
 beats 4–8 个；每拍含 id（B1…Bn）、type（行动|转折|冲突|揭示|决定|过渡）、goal、obstacle、cost、
-delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（1–4）、endHook（这一拍结束时的悬念或钩子）。
-全章 paragraphs 合计 8–14。每个节拍必须让至少一个变量发生改变，必须写出代价，禁止空转抒情段。
+delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–10）、endHook（这一拍结束时的悬念或钩子）。
+单章是 5000 字量级的长章：全章 paragraphs 合计 35–55（基线范文 45 段），按这个体量给每拍估段数。
+每个节拍必须让至少一个变量发生改变，必须写出代价，禁止空转抒情段。
 mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不新增未提供的人物或设定。`;
 
 /**
  * 自检提示词。
+ *
+ * 每拍必须带证据：只说「覆盖了」不给原句，等于让模型自己给自己打分。
+ * 证据限 30 字，够定位到正文里的那一句，又不会把正文再抄一遍。
+ * 同时明确：段数多少不是判缺拍的标准——拍是否落地看事件与变化，不看篇幅。
  */
 const COVERAGE_PROMPT = `你是节拍覆盖检查器。只输出一个 JSON 对象，不要解释、不要 markdown。
 输入是《节拍表》和一段正文。逐个节拍判断它是否真正落到正文里：
-- covered：该拍的 goal 或 obstacle 能在正文里找到对应的事件句，并且 delta.from→to 或 infoGain 至少有一项能找到对应句；
-- weak：写了事件，但没有写出变量变化（元素为 {id, reason}）；
-- missing：完全不满足前一条，或整拍被「总之/后来/从此」类总结句替代。
+- covered：该拍的 goal 或 obstacle 能在正文里找到对应的事件句，并且 delta.from→to 或 infoGain 至少有一项能找到对应句。
+  每项写成 {"id":"B1","evidence":"正文里的原句或片段"}；evidence 不超过 30 个字，必须能在正文中逐字找到。
+  没有 evidence 的拍不算 covered。
+- weak：写了事件，但没有写出变量变化（元素为 {id, reason}）。
+- missing：完全不满足 covered 的条件，或整拍被「总之/后来/从此」类总结句替代。
+段数多少不是判断标准：某拍只写了两段，只要事件和变化都在，也照常算 covered。
 另需判断 hookPresent（章末最后一段是否留下未解问题或作出后果未定的决定）与
 chapterGoalMet（正文是否回答了 chapterGoal 的人物+动作+结果）。
 输出字段：covered（数组）、missing（数组）、weak（数组）、hookPresent（布尔）、chapterGoalMet（布尔）。
@@ -242,7 +256,25 @@ function validateCoverage(candidate, plan) {
       : [];
 
   const weakIds = unique(toIds(data.weak, true));
-  const covered = unique(toIds(data.covered, false)).filter((id) => !weakIds.includes(id));
+
+  // covered 每项必须带 evidence：只有「覆盖了」三个字、没有原句，
+  // 等于模型自己给自己打分，missing 会永远算不准。
+  // 没有证据的条目按未覆盖处理，交给 missing 重算。
+  const evidenceById = new Map();
+  const claimed = [];
+  for (const item of Array.isArray(data.covered) ? data.covered : []) {
+    const id = text(item && typeof item === 'object' ? item.id : item);
+    const evidence = text(item && typeof item === 'object' ? item.evidence : '');
+    if (!ids.includes(id) || !evidence) continue;
+    claimed.push(id);
+    if (!evidenceById.has(id)) {
+      evidenceById.set(id, Array.from(evidence).slice(0, MAX_EVIDENCE_CHARS).join(''));
+    }
+  }
+
+  const covered = unique(claimed).filter((id) => !weakIds.includes(id));
+  const evidence = covered.map((id) => ({ id, evidence: evidenceById.get(id) }));
+
   const modelMissing = unique(toIds(data.missing, false)).filter(
     (id) => !covered.includes(id) && !weakIds.includes(id)
   );
@@ -261,6 +293,7 @@ function validateCoverage(candidate, plan) {
     covered,
     missing,
     weak,
+    evidence,
     hookPresent: data.hookPresent === true,
     chapterGoalMet: data.chapterGoalMet === true,
   };
