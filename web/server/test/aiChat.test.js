@@ -134,6 +134,22 @@ function validPlanJson() {
 }
 
 /**
+ * 写满一组目标篇幅的假正文，避免测试里意外触发续写。
+ *
+ * 四拍章按 3 拍一组切成 2 组，每组目标 18 段 ≈ 1980 字，
+ * 低于 70% 会触发续写，所以这里给到 16 段 × 约 115 字。
+ */
+function segmentBody(label, extraParagraph = '') {
+  const sentence = '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
+  const rows = Array.from(
+    { length: 16 },
+    (_, i) => `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
+  );
+  if (extraParagraph) rows.push(extraParagraph);
+  return rows.join('\n\n');
+}
+
+/**
  * 发一条消息，收集整条 SSE 流里的事件。
  */
 async function chat(message, extra = {}) {
@@ -641,17 +657,27 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
   fakeModel.setQueue([
     // 1. 规划
     { content: validPlanJson(), finishReason: 'stop' },
-    // 2. 写作
+    // 2. 第一组（B1–B2）
     {
       content: JSON.stringify({
         action: 'append',
-        content: '庙门半掩，主角在门槛外停了停。',
-        reason: '按节拍表起稿',
+        content: '庙门半掩，主角在门槛外停了停。\n\n' + segmentBody('第一组'),
+        reason: '按节拍表写第一组',
         citations: [],
       }),
       finishReason: 'stop',
     },
-    // 3. 覆盖自检：四拍全中，每拍带可核对的原句
+    // 3. 第二组（B3–B4，最后一组才收束）
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第二组', '县衙后门当晚抬出一口箱子。'),
+        reason: '按节拍表写第二组并收束',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    // 4. 覆盖自检：四拍全中，每拍带可核对的原句
     {
       content: JSON.stringify({
         covered: [
@@ -674,7 +700,8 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
 
   const planCall = fakeModel.calls[before];
   const writerCall = fakeModel.calls[before + 1];
-  const checkCall = fakeModel.calls[before + 2];
+  const lastSegmentCall = fakeModel.calls[before + 2];
+  const checkCall = fakeModel.calls[before + 3];
   assert.ok(checkCall, '规划成功且产出正文后，应当跑一次覆盖自检');
 
   // 规划请求：JSON 模式、独立预算、上下文含大纲但不含整章正文
@@ -694,6 +721,23 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
     10000,
     '写手预算要能容纳 5000 字正文，思考也不能把正文挤没'
   );
+  assert.strictEqual(lastSegmentCall.max_tokens, 10000, '每组调用用的是同一份写手预算');
+
+  // 中间组只写本组、禁止收尾；最后一组才允许收束并埋钩子
+  const firstInstruction = String(
+    writerCall.messages[writerCall.messages.length - 1].content || ''
+  );
+  assert.match(firstInstruction, /第 1\/2 组/);
+  assert.match(firstInstruction, /本组只写这几拍：B1、B2/);
+  assert.match(firstInstruction, /不要提前收尾/);
+  assert.match(firstInstruction, /禁止出现「就这样」「从此」/, '中间组要明确禁收尾语气');
+
+  const lastInstruction = String(
+    lastSegmentCall.messages[lastSegmentCall.messages.length - 1].content || ''
+  );
+  assert.match(lastInstruction, /第 2\/2 组/);
+  assert.match(lastInstruction, /可以收束本章/, '只有最后一组才允许收束');
+  assert.match(lastInstruction, /章末钩子/);
 
   // 自检请求
   assert.deepStrictEqual(checkCall.response_format, { type: 'json_object' });
@@ -705,7 +749,11 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
   assert.ok(action, '起稿应当正常下发 action');
   assert.strictEqual(action.action, 'append');
   assert.match(action.content, /庙门半掩/);
+  assert.match(action.content, /县衙后门当晚抬出一口箱子/, '最后一组的章末钩子要接在整章末尾');
   assert.deepStrictEqual(action.beatCheck.missing, []);
+  assert.strictEqual(action.segmentInfo.groups, 2, '四拍章按 3 拍一组切成 2 组');
+  assert.strictEqual(action.segmentInfo.calls, 2, '每组一次调用，这一轮不该有续写');
+  assert.strictEqual(action.segmentInfo.degraded, '');
   assert.strictEqual(action.beatCheck.evidence.length, 4, '每拍都要带证据');
   for (const item of action.beatCheck.evidence) {
     assert.ok(Array.from(item.evidence).length <= 30, '证据不能超过 30 字');
@@ -727,23 +775,33 @@ test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二�
   fakeModel.setQueue([
     // 1. 规划
     { content: validPlanJson(), finishReason: 'stop' },
-    // 2. 第一版稿子
+    // 2. 第一组（B1–B2）
     {
       content: JSON.stringify({
         action: 'append',
-        content: '第一版：只写了进庙与冲突。',
-        reason: '按节拍表起稿',
+        content: segmentBody('第一组'),
+        reason: '按节拍表写第一组',
         citations: [],
       }),
       finishReason: 'stop',
     },
-    // 3. 自检：缺 B4
+    // 3. 第二组（B3–B4）
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第二组'),
+        reason: '按节拍表写第二组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    // 4. 自检：缺 B4
     {
       content: JSON.stringify({
         covered: [
-          { id: 'B1', evidence: '第一版：只写了进庙' },
-          { id: 'B2', evidence: '第一版：只写了冲突' },
-          { id: 'B3', evidence: '第一版：旧档缺页' },
+          { id: 'B1', evidence: '第一组：进庙' },
+          { id: 'B2', evidence: '第一组：冲突' },
+          { id: 'B3', evidence: '第二组：旧档缺页' },
         ],
         missing: ['B4'],
         weak: [],
@@ -752,22 +810,22 @@ test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二�
       }),
       finishReason: 'stop',
     },
-    // 4. 重写
+    // 5. 只重写缺拍所在的第二组
     {
       content: JSON.stringify({
         action: 'append',
-        content: '重写版：补上了照片被取走的那一拍，章末抬出一口箱子。',
+        content: '重写版：补上了照片被取走的那一拍。\n\n' + segmentBody('第二组重写', '章末抬出一口箱子。'),
         reason: '补写缺失节拍',
         citations: [],
       }),
       finishReason: 'stop',
     },
-    // 5. 复核：仍缺 B4
+    // 6. 复核：仍缺 B4
     {
       content: JSON.stringify({
         covered: [
-          { id: 'B1', evidence: '重写版：进庙' },
-          { id: 'B2', evidence: '重写版：冲突' },
+          { id: 'B1', evidence: '第一组：进庙' },
+          { id: 'B2', evidence: '第一组：冲突' },
           { id: 'B3', evidence: '重写版：旧档缺页' },
         ],
         missing: ['B4'],
@@ -784,23 +842,26 @@ test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二�
 
   assert.strictEqual(
     fakeModel.calls.length - before,
-    5,
-    '规划 + 写作 + 自检 + 重写 + 复核，重写只能一次'
+    6,
+    '规划 + 两组起稿 + 自检 + 分组重写 + 复核；重写只能一次'
   );
 
-  const rewriteCall = fakeModel.calls[before + 3];
+  const rewriteCall = fakeModel.calls[before + 4];
   const rewriteInstruction = String(rewriteCall.messages[rewriteCall.messages.length - 1].content || '');
   assert.match(rewriteInstruction, /B4/, '重写指令必须明确点名缺失的拍');
   assert.match(rewriteInstruction, /确认照片上的人是谁/, '要说明该拍的目标');
-  assert.match(rewriteInstruction, /重写全文/, '要整篇重写而不是局部插入');
+  assert.match(rewriteInstruction, /只重写这一组/, '缺拍只重写对应组');
+  assert.match(rewriteInstruction, /不要整章重来/);
 
   const action = events.find((e) => e.type === 'action');
   assert.ok(action);
   assert.match(action.content, /重写版/, '作者拿到的是重写后的版本');
+  assert.match(action.content, /第一组第1段/, '没有缺拍的组必须原样保留');
+  assert.match(action.content, /章末抬出一口箱子/);
   assert.match(action.reason, /重写后仍缺 B4/, '仍缺拍时要在可见处标明');
   assert.deepStrictEqual(action.beatCheck.missing, ['B4'], '报告以复核结果为准');
   assert.strictEqual(
-    events.filter((e) => e.type === 'agent_thinking').some((e) => /正在补写缺少的节拍/.test(e.label)),
+    events.filter((e) => e.type === 'agent_thinking').some((e) => /正在重写缺少节拍的组/.test(e.label)),
     true,
     '重写过程要给作者一个进度信号'
   );

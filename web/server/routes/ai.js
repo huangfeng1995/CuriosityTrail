@@ -24,6 +24,7 @@ const roles = require('../services/roles');
 const localSearch = require('../services/search/local');
 const webSearch = require('../services/search/deepseekSearch');
 const { ownedWork } = require('../services/scope');
+const { countWords } = require('../services/wordCount');
 const memory = require('../services/memory/retriever');
 const indexer = require('../services/memory/indexer');
 const memoryConv = require('../services/memory/conversation');
@@ -38,6 +39,7 @@ const {
   beatBadge,
 } = require('../services/agent/beatPlan');
 const referenceAnchor = require('../services/agent/referenceAnchor');
+const segmentWriter = require('../services/agent/segmentWriter');
 
 const router = express.Router();
 
@@ -51,19 +53,23 @@ const PLAN_TIMEOUT_MS = 45000;
  * 若上游存在更低的硬上限，会在这里报错，由部署侧顶到实际上限。
  */
 const WRITER_MAX_TOKENS = 10000;
-/** 单次起稿/重写的上限：按 10000 tokens 的生成时间留出余量 */
+/** 单次起稿/重写的上限：按 10000 tokens 的生成时间留出余量（未分段时用） */
 const WRITE_TIMEOUT_MS = 150000;
+/** 分段起稿的单次调用上限。一组约 1300–1800 字，实测 15–30s，90s 留足余量 */
+const SEGMENT_CALL_TIMEOUT_MS = 90000;
 /** 覆盖自检上限：超时按「未自检」交付，不阻塞。正文 5000 字实测约 1.4s */
 const CHECK_TIMEOUT_MS = 30000;
 /**
  * 整轮预算。
  *
- * 最坏路径：规划 45s + 起稿 150s + 自检 30s + 重写 150s + 复核 30s = 405s，
- * 再留 15s 给上下文装配与落库，取 420s。
- * 重写门槛要求剩余预算 ≥ 一次重写 + 一次复核（180s），
- * 否则宁可保留第一版，不半路开一个注定跑不完的重写。
+ * 最坏路径：规划 45s + 分段起稿 8 次 × 90s + 全局自检 30s
+ * + 分组重写后的复核 30s = 825s，再留 15s 给上下文装配与落库，取 840s。
+ * 8 次是硬上限（3 组起稿 + 3 次续写 + 2 次分组重写），
+ * 超过就降级交付，不会无限重试。
+ * 重写门槛要求剩余预算 ≥ 待重写组数 × 90s + 一次复核（30s），
+ * 否则宁可保留当前稿，不半路开一个注定跑不完的重写。
  */
-const ROUND_BUDGET_MS = 420000;
+const ROUND_BUDGET_MS = 840000;
 
 /**
  * 把模型给的字段转成可显示的文本。
@@ -901,7 +907,7 @@ router.post('/chat', async (req, res) => {
       }
     }
 
-    const runChat = (messagesForRound = chatMessages, overrides = {}) =>
+    const runChat = (messagesForRound = chatMessages, overrides = {}, hooks = {}) =>
       runAgentLoop({
         provider,
         messages: messagesForRound,
@@ -932,13 +938,18 @@ router.post('/chat', async (req, res) => {
           signal: roundSignal,
         },
         onToken: (token) => {
+          // 分段起稿时不往外推 token：各段的正文要等全部写完再拼成整章，
+          // 中途先推出去的话，续写或分组重写会让作者看到一份前后矛盾的稿子。
+          if (hooks.suppressTokens) return;
           fullText += token;
           send({ type: 'token', content: token });
         },
         onToolStart: ({ tool, label }) => {
+          if (hooks.suppressTokens) return;
           send({ type: 'tool_start', tool, label });
         },
         onToolDone: ({ tool, result }) => {
+          if (hooks.suppressTokens) return;
           // 工具调用的记账由 loop.js 负责，这里只负责把事件推给前端。
           // 两处都记一份的话，字段形状会慢慢分叉（失败项带不带 error、
           // 摘要里要不要带明细），改一处漏一处就是静默丢数据。
@@ -952,72 +963,172 @@ router.post('/chat', async (req, res) => {
           });
         },
         onToolError: ({ tool, error }) => {
+          if (hooks.suppressTokens) return;
           send({ type: 'tool_done', tool, label: tool, summary: '', detail: [], degraded: false, error });
         },
       });
 
-    // 起稿/重写各自的单次上限：一次写太久会把整轮预算吃光，
+    // 未分段时的单次上限：一次写太久会把整轮预算吃光，
     // 到点仍然中止并由上层保留已有结果。
     const writeSignal = () => AbortSignal.any([roundSignal, AbortSignal.timeout(WRITE_TIMEOUT_MS)]);
+    // 分段起稿时每次调用各自计时：一组超时只丢这一组，不连坐整章。
+    const segmentSignal = () =>
+      AbortSignal.any([roundSignal, AbortSignal.timeout(SEGMENT_CALL_TIMEOUT_MS)]);
 
-    let finalResult = await runChat(chatMessages, { signal: writeSignal() });
+    let finalResult;
+    let segmented = null;
+    let segmentRun = null;
+    let isEmptyReply = false;
 
-    // 空回复重试一次。
-    //
-    // DeepSeek 的 JSON 模式偶尔会给出一次完全空白的完成：finish_reason 是 stop、
-    // 用量照常计费，正文一个字都没有。也可能是流在第一个正文 token 之前就被掐断。
-    // 这两种情况重发一次通常就好了；让作者自己反复点重试，等于把服务端的不稳定
-    // 转嫁给他。只在「一个字都没上屏」时重试——已经推给前端的 token 不能重来。
-    const isEmptyReply =
-      !String(finalResult.raw || '').trim() &&
-      !finalResult.parsed &&
-      !fullText.trim();
+    if (planningEnabled && beatPlan) {
+      // ---- 分段起稿 ----
+      //
+      // 每组一次模型调用。每组都带完整节拍表、已写正文尾部和
+      // 本组段数/字数目标；只有最后一组允许收束并埋章末钩子。
+      send({ type: 'agent_thinking', label: '正在按节拍分组起稿' });
 
-    if (isEmptyReply) {
+      segmentRun = async ({ instruction }) => {
+        const result = await runChat(
+          [...chatMessages, { role: 'user', content: instruction }],
+          { signal: segmentSignal() },
+          { suppressTokens: true }
+        );
+
+        const segmentParsed = result.parsed;
+        let content = '';
+        if (segmentParsed && typeof segmentParsed.content === 'string') {
+          content = segmentParsed.content;
+        } else if (!segmentParsed) {
+          // 和单次起稿同一条回退规则：没按 JSON 返回时，原文就是正文。
+          content = String(result.raw || '');
+        }
+
+        return {
+          content: String(content || '').trim(),
+          action: segmentParsed?.action,
+          finishReason: result.finishReason,
+          usage: result.usage,
+        };
+      };
+
+      const segmentStartedAt = Date.now();
+      segmented = await segmentWriter.draftInSegments({
+        plan: beatPlan,
+        runSegment: segmentRun,
+        maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
+        log: (entry) => {
+          console.log(
+            JSON.stringify({
+              event: 'ai_segment',
+              traceId,
+              userId: req.userId,
+              role: roleKey,
+              ...entry,
+            })
+          );
+        },
+        progress: ({ phase, index, total, beatIds }) => {
+          const label =
+            phase === 'continue'
+              ? `第 ${index + 1}/${total} 组写短了，正在续写`
+              : `正在写第 ${index + 1}/${total} 组（${beatIds.join('、')}）`;
+          send({ type: 'agent_thinking', label });
+        },
+      });
+
       console.log(
         JSON.stringify({
-          event: 'ai_empty',
+          event: 'ai_segment_done',
           traceId,
           userId: req.userId,
-          provider: name,
           role: roleKey,
-          finishReason: finalResult.finishReason || '',
-          usage: finalResult.usage,
+          groups: segmented.groups.length,
+          calls: segmented.callCount,
+          continuations: segmented.continuations,
+          degraded: segmented.degraded,
+          paragraphs: segmentWriter.splitParagraphs(segmented.content).length,
+          chars: countWords(segmented.content),
+          durationMs: Date.now() - segmentStartedAt,
+          usage: segmented.usage,
         })
       );
 
-      // 重试时压掉较老的历史，并在最后一条消息后补一句提醒。
-      //
-      // 复现实验（同一段对话、同样的提问）：
-      //   完整历史 + JSON 模式 → 稳定返回两三千个空格和换行，一个字正文都没有；
-      //   只留最近几轮      → 正常返回 JSON。
-      // 所以原样重发没有意义，必须换掉"让模型退化成空白"的那个条件。
-      const retryMessages = (() => {
-        const hasSystem = chatMessages[0] && chatMessages[0].role === 'system';
-        const system = hasSystem ? [chatMessages[0]] : [];
-        const rest = hasSystem ? chatMessages.slice(1) : [...chatMessages];
-        const recent = rest.slice(-RETRY_HISTORY_KEEP);
-        const last = recent[recent.length - 1];
-        if (last) {
-          recent[recent.length - 1] = {
-            ...last,
-            content:
-              String(last.content || '') +
-              '\n\n（上一次没有返回任何内容。这一次不要输出 JSON，直接用纯文本写出完整正文，不要解释。）',
-          };
-        }
-        return [...system, ...recent];
-      })();
+      // 把分段结果包装成和单次起稿一样的形状，后面的自检、重写、落库
+      // 全部走同一套逻辑，不再维护第二条分发路径。
+      finalResult = {
+        parsed: {
+          action: segmented.action,
+          content: segmented.content,
+          reason: `分段起稿（${segmented.groups.length} 组 / ${segmented.callCount} 次调用）`,
+          citations: [],
+        },
+        raw: '',
+        reasoning: '',
+        toolCalls: [],
+        stopReason: 'final',
+        finishReason: segmented.finishReason,
+        usage: segmented.usage,
+      };
+    } else {
+      finalResult = await runChat(chatMessages, { signal: writeSignal() });
 
-      finalResult = await runChat(retryMessages, {
-        // 关键：换掉"让模型退化成空白"的条件，而不是原样重发。
-        // 实测长历史 + response_format=json_object 会稳定返回几千个空格；
-        // 第二次关掉 JSON 模式，模型按纯文本输出，正文才拿得回来。
-        jsonOutput: false,
-        // 思考同样会吃 token 预算，重试时关掉，把预算留给正文。
-        ...(role?.thinking ? { thinking: 'disabled' } : {}),
-        signal: writeSignal(),
-      });
+      // 空回复重试一次。
+      //
+      // DeepSeek 的 JSON 模式偶尔会给出一次完全空白的完成：finish_reason 是 stop、
+      // 用量照常计费，正文一个字都没有。也可能是流在第一个正文 token 之前就被掐断。
+      // 这两种情况重发一次通常就好了；让作者自己反复点重试，等于把服务端的不稳定
+      // 转嫁给他。只在「一个字都没上屏」时重试——已经推给前端的 token 不能重来。
+      isEmptyReply =
+        !String(finalResult.raw || '').trim() &&
+        !finalResult.parsed &&
+        !fullText.trim();
+
+      if (isEmptyReply) {
+        console.log(
+          JSON.stringify({
+            event: 'ai_empty',
+            traceId,
+            userId: req.userId,
+            provider: name,
+            role: roleKey,
+            finishReason: finalResult.finishReason || '',
+            usage: finalResult.usage,
+          })
+        );
+
+        // 重试时压掉较老的历史，并在最后一条消息后补一句提醒。
+        //
+        // 复现实验（同一段对话、同样的提问）：
+        //   完整历史 + JSON 模式 → 稳定返回两三千个空格和换行，一个字正文都没有；
+        //   只留最近几轮      → 正常返回 JSON。
+        // 所以原样重发没有意义，必须换掉"让模型退化成空白"的那个条件。
+        const retryMessages = (() => {
+          const hasSystem = chatMessages[0] && chatMessages[0].role === 'system';
+          const system = hasSystem ? [chatMessages[0]] : [];
+          const rest = hasSystem ? chatMessages.slice(1) : [...chatMessages];
+          const recent = rest.slice(-RETRY_HISTORY_KEEP);
+          const last = recent[recent.length - 1];
+          if (last) {
+            recent[recent.length - 1] = {
+              ...last,
+              content:
+                String(last.content || '') +
+                '\n\n（上一次没有返回任何内容。这一次不要输出 JSON，直接用纯文本写出完整正文，不要解释。）',
+            };
+          }
+          return [...system, ...recent];
+        })();
+
+        finalResult = await runChat(retryMessages, {
+          // 关键：换掉"让模型退化成空白"的条件，而不是原样重发。
+          // 实测长历史 + response_format=json_object 会稳定返回几千个空格；
+          // 第二次关掉 JSON 模式，模型按纯文本输出，正文才拿得回来。
+          jsonOutput: false,
+          // 思考同样会吃 token 预算，重试时关掉，把预算留给正文。
+          ...(role?.thinking ? { thinking: 'disabled' } : {}),
+          signal: writeSignal(),
+        });
+      }
     }
 
     // 结构化运行记录：一次对话一行，方便排查"为什么慢 / 为什么停"。
@@ -1033,6 +1144,8 @@ router.post('/chat', async (req, res) => {
         stopReason: finalResult.stopReason,
         finishReason: finalResult.finishReason || '',
         retried: isEmptyReply,
+        segmented: Boolean(segmented),
+        segmentCalls: segmented ? segmented.callCount : 0,
         rawLength: String(finalResult.raw || '').length,
         reasoningLength: String(finalResult.reasoning || '').length,
         tools: finalResult.toolCalls.map((t) => t.tool),
@@ -1144,7 +1257,162 @@ router.post('/chat', async (req, res) => {
     //
     // 只有剩余预算装得下「一次重写 + 一次复核」才发起：否则重写跑到一半
     // 就会被整轮上限掐断，第一版也没了，等于双输。
+    // 只有覆盖报告真的指出缺拍/weak 才进重写；全覆盖时不打 skip 日志，
+    // 否则每一轮成功起稿都会多一条无意义的 ai_segment_rewrite_skip。
+    const segmentedMissingIds = beatCheck
+      ? [...beatCheck.missing, ...beatCheck.weak.map((w) => w.id)]
+      : [];
     if (
+      segmented &&
+      beatPlan &&
+      beatCheck &&
+      segmentedMissingIds.length &&
+      !roundSignal.aborted
+    ) {
+      // 分段起稿的缺拍重写：只换掉缺拍所在的组，其他组原样保留。
+      // 整章重来等于把已经合格的部分再洗一遍，调用次数也会立刻顶到上限。
+      const missingIds = segmentedMissingIds;
+      const affected = segmentWriter.groupsForIds(segmented.groups, missingIds);
+      const remainingMs = ROUND_BUDGET_MS - (Date.now() - startedAt);
+      const neededMs = affected.length * SEGMENT_CALL_TIMEOUT_MS + CHECK_TIMEOUT_MS;
+
+      if (!affected.length) {
+        console.log(
+          JSON.stringify({
+            event: 'ai_segment_rewrite_skip',
+            traceId,
+            userId: req.userId,
+            reason: 'no_group',
+            missing: missingIds,
+          })
+        );
+      } else if (remainingMs < neededMs) {
+        console.log(
+          JSON.stringify({
+            event: 'ai_segment_rewrite_skip',
+            traceId,
+            userId: req.userId,
+            reason: 'time_budget',
+            groups: affected.map((g) => g.index + 1),
+            remainingMs,
+            neededMs,
+          })
+        );
+      } else {
+        send({
+          type: 'agent_thinking',
+          label: `正在重写缺少节拍的组：${affected.map((g) => g.index + 1).join('、')}`,
+        });
+
+        try {
+          const rewriteStartedAt = Date.now();
+          const rewrite = await segmentWriter.rewriteMissingGroups({
+            plan: beatPlan,
+            groups: segmented.groups,
+            coverage: beatCheck,
+            runSegment: segmentRun,
+            maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
+            callCount: segmented.callCount,
+            log: (entry) => {
+              console.log(
+                JSON.stringify({
+                  event: 'ai_segment',
+                  traceId,
+                  userId: req.userId,
+                  role: roleKey,
+                  ...entry,
+                })
+              );
+            },
+            progress: ({ index, total, beatIds }) => {
+              send({
+                type: 'agent_thinking',
+                label: `正在重写第 ${index + 1}/${total} 组（${beatIds.join('、')}）`,
+              });
+            },
+          });
+
+          if (rewrite.content.trim()) {
+            payload.content = rewrite.content;
+            finalResult.parsed.content = rewrite.content;
+            finalResult.finishReason = rewrite.finishReason || finalResult.finishReason;
+            finalResult.usage = segmentWriter.usageSum([
+              ...segmented.calls,
+              ...rewrite.calls,
+            ]);
+
+            segmented = {
+              ...segmented,
+              groups: rewrite.groups,
+              calls: [...segmented.calls, ...rewrite.calls],
+              callCount: rewrite.callCount,
+              degraded: rewrite.degraded || segmented.degraded,
+            };
+
+            beatRewrite = rewrite.rewroteGroups > 0;
+            if (rewrite.degraded || rewrite.failedGroups.length) beatRewriteFailed = true;
+
+            console.log(
+              JSON.stringify({
+                event: 'ai_segment_rewrite',
+                traceId,
+                userId: req.userId,
+                durationMs: Date.now() - rewriteStartedAt,
+                groups: affected.map((g) => g.index + 1),
+                rewroteGroups: rewrite.rewroteGroups,
+                callCount: rewrite.callCount,
+                degraded: rewrite.degraded,
+                finishReason: rewrite.finishReason || '',
+                contentLength: rewrite.content.length,
+                usage: segmentWriter.usageSum(rewrite.calls),
+              })
+            );
+
+            // 重写后必须再判一次：只按旧报告交付，「仍缺哪几拍」就是猜的。
+            const recheckStartedAt = Date.now();
+            const recheckOut = await checkBeatCoverage({
+              provider,
+              plan: beatPlan,
+              body: payload.content,
+              options: {
+                signal: AbortSignal.any([roundSignal, AbortSignal.timeout(CHECK_TIMEOUT_MS)]),
+              },
+            });
+            const recheckMs = Date.now() - recheckStartedAt;
+
+            if (recheckOut.coverage) {
+              beatCheck = recheckOut.coverage;
+              beatCheckError = '';
+            } else {
+              beatCheckError = 'recheck';
+            }
+
+            console.log(
+              JSON.stringify({
+                event: 'ai_beat_check',
+                traceId,
+                userId: req.userId,
+                ok: Boolean(recheckOut.coverage),
+                reason: recheckOut.reason || '',
+                durationMs: recheckMs,
+                planned: beatPlan.beats.length,
+                missing: recheckOut.coverage ? recheckOut.coverage.missing : beatCheck.missing,
+                weak: recheckOut.coverage ? recheckOut.coverage.weak.map((w) => w.id) : [],
+                hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
+                chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
+                rewrote: true,
+                usage: recheckOut.usage || null,
+              })
+            );
+          } else {
+            beatRewriteFailed = true;
+          }
+        } catch (err) {
+          beatRewriteFailed = true;
+          console.error('分段重写失败：', err.message);
+        }
+      }
+    } else if (
       beatPlan &&
       beatCheck &&
       beatCheck.missing.length &&
@@ -1242,11 +1510,20 @@ router.post('/chat', async (req, res) => {
           truncated: finalResult.finishReason === 'length',
         })
       : '';
-    if (badge) {
-      payload.reason = [badge, payload.reason].filter(Boolean).join(' ');
+    const segmentBadge = segmented ? segmentWriter.segmentBadge(segmented.degraded) : '';
+    if (segmentBadge || badge) {
+      payload.reason = [segmentBadge, badge, payload.reason].filter(Boolean).join(' ');
     }
     payload.beatCheck = beatCheck;
     if (planDegraded) payload.planDegraded = planDegraded;
+    if (segmented) {
+      payload.segmentInfo = {
+        groups: segmented.groups.length,
+        calls: segmented.callCount,
+        continuations: segmented.continuations,
+        degraded: segmented.degraded || '',
+      };
+    }
 
     // 模型一个字都没给。
     //
@@ -1396,6 +1673,8 @@ router.post('/chat', async (req, res) => {
       // reason 里的徽标是给作者看的短句，这两个字段留给后续复盘/前端展示。
       beatCheck: payload.beatCheck || null,
       planDegraded: payload.planDegraded || '',
+      // 分段起稿的分组/调用信息：前端与测试靠它确认这一轮跑了几次、有没有降级。
+      segmentInfo: payload.segmentInfo || null,
     });
     send({
       type: 'done',
