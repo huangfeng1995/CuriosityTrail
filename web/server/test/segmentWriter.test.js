@@ -145,6 +145,13 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
     assert.match(instruction, /4800–5600 字/);
     assert.match(instruction, /段落长度随叙事节奏自然变化/);
     assert.match(instruction, /不要每段都写成同一个长度/, '不能给段落锚点，否则模型会一路往上限靠');
+    assert.match(instruction, /把一段写成一个小场景/, '段落要按小场景成段，不能切成碎片');
+    assert.match(
+      instruction,
+      /只有单句对白、短促反应、转折强调这三种情况允许独立成段/,
+      '只有三种情况允许独立成段'
+    );
+    assert.match(instruction, /禁止「一个动作一段」的碎片化/);
     assert.match(instruction, /关键交流必须写成直接引语/, '关键对话必须用人物原话');
     assert.match(instruction, /不要用「他说他问我是否……」这类转述代替关键对话/);
     assert.match(instruction, /每次对话都要推动一次变化/);
@@ -157,6 +164,17 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
     assert.doesNotMatch(instruction, /段均以/, '不能给段落均长锚点');
     assert.doesNotMatch(instruction, /目标的 105%/, '续写不再设 105% 硬线');
   }
+
+  for (const instruction of [last, continuation, rewrite]) {
+    assert.match(instruction, /不得复述已完成内容/);
+    assert.match(instruction, /开头第一句必须接着.*最后一个动作/, '接续必须从最后一个动作往下写');
+    assert.match(
+      instruction,
+      /不要从「回忆」「找灵感」「重新交代」的角度重开/,
+      '续写不能从找灵感的角度重讲'
+    );
+  }
+  assert.match(continuation, /段数不用凑/, '续写不能再按段数补差');
 });
 
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
@@ -205,6 +223,42 @@ test('拼接不重复前文：下一组重抄上一组尾段时只保留一份',
 
   assert.strictEqual(draft.content.split('共同尾段。').length - 1, 1, '重复段只能出现一次');
   assert.match(runner.seen[1].instruction, /共同尾段。/, '第二组指令要带上上一组尾部');
+});
+
+test('本组写到下一组标志事件时，代码侧截到该段之前', async () => {
+  const plan = makePlan(6, 10);
+  const marker = '门环在门槛上敲了三下，这是下一组才出现的暗号';
+  plan.beats[3].endHook = marker;
+  plan.beats[3].infoGain = '下一组才知道：庙祝袖口绣着县衙的纹样';
+
+  const runner = makeRunner([
+    body('甲', 20, `${marker}。`),
+    body('乙', 20, '章末钩子。'),
+  ]);
+
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
+
+  assert.strictEqual(draft.boundaryTrimmed, 1, '应当识别并截断一次越界');
+  assert.ok(!draft.content.includes(marker), '下一组的标志事件不能留在本组正文');
+  assert.ok(!draft.content.includes('庙祝袖口绣着县衙的纹样'), '下一组的信息增量也不能提前出现');
+  assert.strictEqual(draft.groups[0].content.split(marker).length - 1, 0);
+  assert.match(runner.seen[0].instruction, /本组硬边界/, '指令里要写清本组只能写到哪里');
+  assert.match(runner.seen[0].instruction, new RegExp(marker), '指令里要列出下一组的标志事件');
+});
+
+test('续写从中间整段复述时只保留一份，不把重复段拼进正文', async () => {
+  const plan = makePlan(4, 10);
+  const repeated = '他把报告页面重新打开，滚到底，那一行「建议人工复核」还在，字很小，嵌在表格最后一行。';
+  const runner = makeRunner([
+    `只写了一句。\n\n${repeated}`,
+    `他先喝了口水。\n\n${repeated}\n\n${body('续', 20)}`,
+    body('乙', 20),
+  ]);
+
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
+
+  assert.strictEqual(draft.content.split(repeated).length - 1, 1, '同一整段只能出现一次');
+  assert.match(draft.content, /他先喝了口水/, '续写新增的内容不能被误删');
 });
 
 test('中间组不出现收尾语气，最后一组才收束并埋钩子', async () => {

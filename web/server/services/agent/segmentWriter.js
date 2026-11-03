@@ -37,20 +37,28 @@ const MAX_SEGMENT_CALLS = 8;
 const MIN_TARGET_RATIO = 0.8;
 
 /**
- * 段落形态硬约束。
+ * 段落形态要求。
  *
- * 基线范文 45 段 / 5047 字，不是靠统一段长做到的，而是长短交替。
- * 只保留可读性与编排要求，不设段落字数锚点、段数区间和对白占比门槛。
+ * 基线范文 45 段 / 5047 字，不是靠统一段长做到的，而是靠「小场景」成段。
+ * 这里只写描述性风格，不给段落字数锚点、段数区间和对白占比门槛。
  */
 const PARAGRAPH_SHAPE_RULES = [
   '## 全章形态（写作要求，不是逐项打分的表格）',
   '- 全章按长章体量写，总量大致在 4800–5600 字（含标点）；不要为凑数拉长段落，也不要写到 7000 字以上。',
-  '- 段落长度随叙事节奏自然变化，长短交替，不要每段都写成同一个长度。短段只在真正需要停顿、强调或转折时出现；不要通篇碎段，也不要通篇长段。',
+  '- 把一段写成一个小场景：一段里同时容纳动作、神态、对话中的至少两样，形成一个小节奏；一段写完，场景要往前推进一步。不要把一串连续动作拆成好几段。',
+  '- 只有单句对白、短促反应、转折强调这三种情况允许独立成段；除此之外不要一句话一段，禁止「一个动作一段」的碎片化。',
+  '- 段落长度随叙事节奏自然变化，长短交替，不要每段都写成同一个长度；长短由场景决定，不设统一字数。',
   '- 关键交流必须写成直接引语：用人物原话，带引号（「」或“”），并带说话人的动作、神态或对方的反应；不要用「他说他问我是否……」这类转述代替关键对话，转述只用于交代次要信息。',
   '- 每次对话都要推动一次变化：关系、立场、决定或信息，至少变一项；不写只为填充的寒暄。',
   '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它要付的代价。',
   '- 本组写到大致够用就停，余下内容留给后面的拍；章末只留一个钩子。',
 ].join('\n');
+
+/** 下一组标志事件的最短匹配长度；太短的名词容易误伤。 */
+const BOUNDARY_MIN_MARKER_LENGTH = 6;
+
+/** 整段去重时只处理够长的段落，避免把「陈默没动。」这种有意重复也删掉。 */
+const MIN_DEDUPE_PARAGRAPH_CHARS = 12;
 
 /** 中间组禁止的收尾语气。命中就当作提前收尾，续写一次并清掉尾句。 */
 const CLOSING_RE = /就这样|从此以后|从此|这一天(?:就)?(?:结束|过去)|日子就这样|一切归于平静/;
@@ -65,6 +73,128 @@ function splitParagraphs(text) {
 function tailParagraphs(text, n = 3) {
   const paragraphs = splitParagraphs(text);
   return paragraphs.slice(-n).join('\n\n');
+}
+
+function normalizedParagraph(text) {
+  return String(text || '').replace(/\s+/g, '').trim();
+}
+
+/**
+ * 从节拍字段里提炼下一组的「标志事件」。
+ *
+ * 只取够长的完整短语，不做分词：短名词（「照片」「庙祝」）可能是本组也要用的，
+ * 拿它们做边界会把正常内容误截掉。
+ */
+function beatMarkers(beat) {
+  const markers = new Set();
+  for (const field of ['endHook', 'infoGain', 'goal', 'obstacle', 'cost']) {
+    const value = String(beat?.[field] || '').trim();
+    if (!value) continue;
+    if (value.length >= BOUNDARY_MIN_MARKER_LENGTH) markers.add(value);
+    for (const piece of value.split(/[，。；：、,.;:!?！？\s]+/)) {
+      const trimmed = piece.trim();
+      if (trimmed.length >= BOUNDARY_MIN_MARKER_LENGTH) markers.add(trimmed);
+    }
+  }
+  const to = String(beat?.delta?.to || '').trim();
+  if (to.length >= BOUNDARY_MIN_MARKER_LENGTH) markers.add(to);
+  return [...markers];
+}
+
+/** 下一组标志事件在本组正文里第一次出现的位置。 */
+function findBoundaryHit(content, group, next) {
+  const ownMarkers = new Set(group.beats.flatMap(beatMarkers));
+  let hit = null;
+  for (const beat of next.beats) {
+    for (const marker of beatMarkers(beat)) {
+      if (ownMarkers.has(marker)) continue;
+      const index = content.indexOf(marker);
+      if (index >= 0 && (!hit || index < hit.index)) {
+        hit = { index, marker, beatId: beat.id };
+      }
+    }
+  }
+  return hit;
+}
+
+function paragraphIndexAt(text, charIndex) {
+  const paragraphs = splitParagraphs(text);
+  let from = 0;
+  for (let i = 0; i < paragraphs.length; i += 1) {
+    const start = text.indexOf(paragraphs[i], from);
+    if (start < 0) continue;
+    const end = start + paragraphs[i].length;
+    if (charIndex >= start && charIndex < end) return i;
+    from = end;
+  }
+  return -1;
+}
+
+/**
+ * 组边界的代码侧硬约束：本组正文一旦写到下一组的标志事件，就在标志事件前截断。
+ *
+ * 提示词里也会写边界，但模型经常为了写顺把下一组的内容提前写掉；只靠提示词
+ * 不可靠。这里按完整段落回退，截断后缺的拍交给覆盖自检去重写。
+ */
+function enforceGroupBoundary({ content, group, groups }) {
+  const text = String(content || '').trim();
+  const untouched = {
+    content: text,
+    boundaryTrimmed: false,
+    boundaryConflict: false,
+    boundaryMarker: '',
+    boundaryBeatId: '',
+    boundaryDroppedChars: 0,
+  };
+  if (!text) return untouched;
+
+  const next = groups.find((g) => g.index === group.index + 1);
+  if (!next) return untouched;
+
+  const hit = findBoundaryHit(text, group, next);
+  if (!hit) return untouched;
+
+  const paragraphs = splitParagraphs(text);
+  const index = paragraphIndexAt(text, hit.index);
+  if (index > 0) {
+    const kept = paragraphs.slice(0, index).join('\n\n');
+    return {
+      content: kept,
+      boundaryTrimmed: true,
+      boundaryConflict: false,
+      boundaryMarker: hit.marker,
+      boundaryBeatId: hit.beatId,
+      boundaryDroppedChars: countWords(text) - countWords(kept),
+    };
+  }
+
+  // 标志事件落在第一段：保留它前面已经写完整的句子；一句都不剩才算冲突。
+  const before = text.slice(0, hit.index);
+  const cut = Math.max(
+    before.lastIndexOf('。'),
+    before.lastIndexOf('！'),
+    before.lastIndexOf('？'),
+    before.lastIndexOf('”'),
+    before.lastIndexOf('」')
+  );
+  const kept = cut >= 0 ? before.slice(0, cut + 1).trim() : '';
+  if (kept) {
+    return {
+      content: kept,
+      boundaryTrimmed: true,
+      boundaryConflict: false,
+      boundaryMarker: hit.marker,
+      boundaryBeatId: hit.beatId,
+      boundaryDroppedChars: countWords(text) - countWords(kept),
+    };
+  }
+
+  return {
+    ...untouched,
+    boundaryConflict: true,
+    boundaryMarker: hit.marker,
+    boundaryBeatId: hit.beatId,
+  };
 }
 
 /**
@@ -119,6 +249,39 @@ function beatSummary(beats) {
     .join('\n');
 }
 
+/** 把下一组的标志事件写进指令，明确本组只能写到哪里。 */
+function buildBoundaryBlock({ group, groups }) {
+  const next = groups.find((g) => g.index === group.index + 1);
+  if (!next) return '';
+
+  const lastBeat = group.beats[group.beats.length - 1];
+  const firstBeat = next.beats[0];
+  const forbidden = [firstBeat.endHook, firstBeat.infoGain]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  return [
+    '## 本组硬边界',
+    `- 本组最后一拍收在：${lastBeat.endHook}`,
+    `- 下一组第一拍是：${firstBeat.goal}；它的标志事件是：${firstBeat.endHook}。`,
+    forbidden.length
+      ? `- 以下内容属于下一组，本组正文里不得出现：${forbidden.join('；')}。`
+      : '',
+    '- 写完本组最后一拍的收束动作就停，不要为了写顺把下一组的内容提前写掉。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** 从上一个场景的最后一个动作接续，禁止复述已经写完的内容。 */
+function buildHandoffRules({ from = '上一组' } = {}) {
+  return [
+    '## 接续硬要求',
+    '- 不得复述已完成内容：不要重讲刚才的报告、对话或人物背景，不要用总结句回顾。',
+    `- 开头第一句必须接着${from}最后一个完整场景的最后一个动作往下写；不要从「回忆」「找灵感」「重新交代」的角度重开。`,
+  ].join('\n');
+}
+
 /**
  * 交稿前自检清单。
  *
@@ -132,7 +295,7 @@ function buildSelfCheck(group) {
     '## 交稿前自检（对照这几条，不合格就改）',
     `- 本组总量大致在 ${softMin}–${softMax} 字（含标点）就够了，不要为凑字数拉长段落。`,
     '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它的代价。',
-    '- 段落长短随叙事节奏变化；对话、动作、神态写在同一段，不要一句话一段。',
+    '- 交稿前把「一个动作一段」的碎片合回小场景：动作、神态、对话压在同一段里；只有单句对白、短促反应、转折强调可以独立成段。',
     '- 关键交流用带引号的直接引语，有说话人的动作或神态承接；不要转述成「他说他问我是否」。',
     '- 每次对话都要推动一次变化，不写只为填充的寒暄。',
     group.isLast
@@ -163,6 +326,10 @@ function buildSegmentInstruction({ plan, group, groups, tail = '' }) {
       ? `已经写完：${completed.join('、')}。不要重复它们，也不要用一句话概括它们。`
       : '这是本章的第一组，还没有已写正文。',
     later.length ? `后面才写：${later.join('、')}。不要提前写，更不要把全章收束在这里。` : '',
+    '',
+    buildBoundaryBlock({ group, groups }),
+    '',
+    completed.length ? buildHandoffRules({ from: '上一组' }) : '',
     '',
     '## 本组篇幅（只估量，不设锚点）',
     `本组大致写 ${group.targetChars} 字（含标点），段落长短随叙事节奏自然变化，不要每段都写成同一个长度，也不要为凑字数拉长段落。写到大致够用就停；全章大致 4800–5600 字即可，7000 字以上会被截断。`,
@@ -204,7 +371,6 @@ function buildContinuationInstruction({
   group,
   groups,
   tail,
-  remainingParagraphs,
   remainingChars,
 }) {
   const lines = [
@@ -212,11 +378,15 @@ function buildContinuationInstruction({
     '上一组提前收尾了，但本组还没写完。接着写，不要重开，不要重复前文，不要重新交代人物和场景。',
     `仍然只写 ${group.beatIds.join('、')} 这几拍，不要提前写后面的节拍。`,
     '',
+    buildHandoffRules({ from: '本组已写部分' }),
+    '',
+    buildBoundaryBlock({ group, groups }),
+    '',
     '## 上一段结尾（从它后面接着写）',
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `再写约 ${remainingParagraphs} 段、约 ${remainingChars} 字（含标点）。只补差额，不要重开；写到本组目标（约 ${group.targetChars} 字）就停，段落长短随叙事节奏变化，不要为凑数拉长段落，也不要继续往下写。`,
+    `再补约 ${remainingChars} 字（含标点）就够；段数不用凑，按小场景自然分段。写到本组目标（约 ${group.targetChars} 字）就停，不要为凑数拉长段落，也不要继续往下写。`,
     '',
     PARAGRAPH_SHAPE_RULES,
   ];
@@ -268,8 +438,12 @@ function buildGroupRewriteInstruction({
     '## 上一组结尾（仅供衔接，不要重抄）',
     tail || '（本章从这里开始）',
     '',
+    buildHandoffRules({ from: '上一组' }),
+    '',
     '## 下一组开头（仅供衔接，不要续写、不要重抄）',
     nextHead || '（本章到此结束）',
+    '',
+    buildBoundaryBlock({ group, groups }),
     '',
     '## 篇幅',
     `本组大致写 ${group.targetChars} 字（含标点）；段落长短随叙事节奏自然变化，不要每段都写成同一个长度，也不要为凑字数拉长段落。`,
@@ -336,7 +510,22 @@ function appendFresh(existing, next) {
     }
   }
 
-  const fresh = nextParagraphs.slice(overlap);
+  // 除了接缝处的重复，还要挡“续写从中间整段复述”的情况：
+  // 已出现过的完整段落不再拼进来；短句（「陈默没动。」）不参与，避免误删有意重复。
+  const seen = new Set(
+    prevParagraphs
+      .map(normalizedParagraph)
+      .filter((p) => p.length >= MIN_DEDUPE_PARAGRAPH_CHARS)
+  );
+  const fresh = [];
+  for (const paragraph of nextParagraphs.slice(overlap)) {
+    const normalized = normalizedParagraph(paragraph);
+    if (normalized.length >= MIN_DEDUPE_PARAGRAPH_CHARS) {
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+    }
+    fresh.push(paragraph);
+  }
   if (!fresh.length) return prev;
   return `${prev}\n\n${fresh.join('\n\n')}`;
 }
@@ -384,16 +573,18 @@ function normalizeChapterShape(text) {
   };
 }
 
-/** 这一组是否明显没写够。末组允许收束，所以只看字数/段数，不看收尾词。 */
+/**
+ * 这一组是否明显没写够。
+ *
+ * 只看字数，不看段数：段落已经交给叙事节奏，强行按计划段数续写会把刚合好的
+ * 小场景重新拆碎。末组允许收束，所以不看收尾词。
+ */
 function needsContinuation(group, force = false) {
   if (group.continued || !group.content) return false;
-  const words = countWords(group.content);
-  const paragraphs = splitParagraphs(group.content).length;
-  const shortText = words < group.targetChars * MIN_TARGET_RATIO;
-  const shortParagraphs = paragraphs < group.targetParagraphs * MIN_TARGET_RATIO;
+  const shortText = countWords(group.content) < group.targetChars * MIN_TARGET_RATIO;
   if (force) return true;
-  if (group.isLast) return shortText || shortParagraphs;
-  return shortText || shortParagraphs || hasClosingTone(group.content);
+  if (group.isLast) return shortText;
+  return shortText || hasClosingTone(group.content);
 }
 
 function usageSum(calls) {
@@ -441,6 +632,8 @@ async function draftInSegments({
   let callCount = 0;
   let degraded = '';
   let finishReason = 'stop';
+  let boundaryTrimmed = 0;
+  let boundaryConflicts = 0;
 
   const invoke = async ({ instruction, group, kind }) => {
     callCount += 1;
@@ -493,26 +686,25 @@ async function draftInSegments({
     // 先记下「原本有没有收尾语气」，再去掉尾句。去掉之后再判断，
     // 中间的收尾信号就丢了，续写永远不会触发。
     const closingHit = !group.isLast && hasClosingTone(out.content);
-    group.content = group.isLast ? out.content : stripClosingTail(out.content);
+    const initialContent = group.isLast ? out.content : stripClosingTail(out.content);
+    const bounded = enforceGroupBoundary({ content: initialContent, group, groups });
+    if (bounded.boundaryTrimmed) boundaryTrimmed += 1;
+    if (bounded.boundaryConflict) boundaryConflicts += 1;
+    group.content = bounded.content;
 
-    // 续写只补到本组目标的 100%，代码侧再兜一层 105% 上限：
-    // 上一轮实测按 70% 补差，模型仍多写了 1707 字，把整章顶到 6370，
-    // 所以口径改成全额补差 + 到量即停，超出 105% 的部分按整段回退。
+    // 续写只补到本组目标的字数；到量即停，不再用段数或 105% 硬线二次裁剪。
     if (
       needsContinuation(group, closingHit) &&
       callCount < maxCalls &&
       countWords(group.content) < group.targetChars
     ) {
       progress({ phase: 'continue', index: group.index, total: groups.length });
-      const writtenParagraphs = splitParagraphs(group.content).length;
-      const remainingParagraphs = Math.max(1, group.targetParagraphs - writtenParagraphs);
       const remainingChars = Math.max(120, group.targetChars - countWords(group.content));
       const contInstruction = buildContinuationInstruction({
         plan,
         group,
         groups,
         tail: tailParagraphs(group.content, 3),
-        remainingParagraphs,
         remainingChars,
       });
 
@@ -520,8 +712,11 @@ async function draftInSegments({
         const cont = await invoke({ instruction: contInstruction, group, kind: 'continuation' });
         if (cont.content) {
           const cleaned = group.isLast ? cont.content : stripClosingTail(cont.content);
-          if (cleaned) {
-            group.content = appendFresh(group.content, cleaned);
+          const contBounded = enforceGroupBoundary({ content: cleaned, group, groups });
+          if (contBounded.boundaryTrimmed) boundaryTrimmed += 1;
+          if (contBounded.boundaryConflict) boundaryConflicts += 1;
+          if (contBounded.content) {
+            group.content = appendFresh(group.content, contBounded.content);
             group.continued = true;
           }
         }
@@ -542,6 +737,8 @@ async function draftInSegments({
     callCount,
     degraded,
     continuations: groups.filter((g) => g.continued).length,
+    boundaryTrimmed,
+    boundaryConflicts,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
@@ -578,6 +775,7 @@ async function rewriteMissingGroups({
   let degraded = '';
   let finishReason = 'stop';
   let rewroteGroups = 0;
+  let boundaryTrimmed = 0;
   const failedGroups = [];
 
   const weakIds = (coverage?.weak || []).map((w) => w.id);
@@ -642,7 +840,10 @@ async function rewriteMissingGroups({
       continue;
     }
 
-    group.content = group.isLast ? content : stripClosingTail(content);
+    const rewritten = group.isLast ? content : stripClosingTail(content);
+    const bounded = enforceGroupBoundary({ content: rewritten, group, groups });
+    if (bounded.boundaryTrimmed) boundaryTrimmed += 1;
+    group.content = bounded.content;
     rewroteGroups += 1;
   }
 
@@ -656,6 +857,7 @@ async function rewriteMissingGroups({
     degraded,
     rewroteGroups,
     failedGroups,
+    boundaryTrimmed,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
@@ -683,6 +885,10 @@ module.exports = {
   CLOSING_RE,
   splitParagraphs,
   tailParagraphs,
+  beatMarkers,
+  enforceGroupBoundary,
+  buildBoundaryBlock,
+  buildHandoffRules,
   planSegments,
   buildSegmentInstruction,
   buildContinuationInstruction,
