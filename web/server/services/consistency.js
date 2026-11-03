@@ -17,6 +17,8 @@
  */
 
 const { all, get } = require('../database');
+const { isPipelineEnabled } = require('./pipeline/gate');
+const { checkAnchors } = require('./pipeline/anchorCheck');
 
 /**
  * 取人物的所有可识别名称。
@@ -83,7 +85,7 @@ async function runRuleChecks(workId) {
   if (!work) return issues;
 
   const chapters = await all(
-    'SELECT id, title, seq, status, content FROM chapters WHERE work_id = ? ORDER BY seq',
+    'SELECT id, title, seq, status, content, blocks FROM chapters WHERE work_id = ? ORDER BY seq',
     [workId]
   );
   const characters = await all(
@@ -180,7 +182,69 @@ async function runRuleChecks(workId) {
     }
   }
 
+  // ---- 锚点：史实断言与正文冲突（模板启用时的第 6 类规则） ----
+  // 走既有报告出口，不另造接口：作者在「一致性检查」页看到的
+  // 违锚点和人物未登场、设定未落地是同一份清单。
+  if (isPipelineEnabled(work)) {
+    try {
+      const anchors = await all(
+        `SELECT * FROM work_anchors
+         WHERE work_id = ? AND status = 'active'
+         ORDER BY created_at ASC, id ASC`,
+        [workId]
+      );
+      if (anchors.length) {
+        const anchorById = new Map(anchors.map((a) => [a.id, a]));
+        for (const chapter of chapters) {
+          const body = chapterText(chapter);
+          if (!body) continue;
+          const hits = checkAnchors(anchors, chapter.seq, [
+            { id: chapter.id, content: body },
+          ]);
+          for (const hit of hits) {
+            const anchor = anchorById.get(hit.anchorId) || {};
+            issues.push({
+              type: 'anchor_violation',
+              severity: 'high',
+              title: `锚点冲突：第 ${chapter.seq} 章「${hit.quote.slice(0, 30)}」`,
+              detail: `${
+                anchor.subject ? `「${anchor.subject}」：` : ''
+              }${anchor.claim || '锚点断言'}。正文命中「${hit.quote}」（${hit.ruleType}）。`,
+              target: anchor.subject || '',
+            });
+          }
+        }
+      }
+    } catch (err) {
+      // 一条新规则坏掉，不能让整份一致性报告失败
+      console.error('[consistency] 锚点检查失败（已跳过）:', err.message);
+    }
+  }
+
   return issues;
+}
+
+/**
+ * 章节正文：blocks 优先，content 兜底。
+ *
+ * 编辑器以 blocks 为准，纯文本 content 可能还没同步；
+ * 只看 content 会漏掉实际写进块里的句子。
+ */
+function chapterText(chapter) {
+  let blocks = [];
+  if (chapter.blocks) {
+    try {
+      const parsed = JSON.parse(chapter.blocks);
+      if (Array.isArray(parsed)) blocks = parsed;
+    } catch (e) {
+      // blocks 坏了就退回 content
+    }
+  }
+  const body = blocks
+    .filter((b) => b && b.content)
+    .map((b) => b.content)
+    .join('\n\n');
+  return body || String(chapter.content || '');
 }
 
 /**

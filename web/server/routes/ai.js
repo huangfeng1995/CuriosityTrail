@@ -41,6 +41,7 @@ const {
 } = require('../services/agent/beatPlan');
 const referenceAnchor = require('../services/agent/referenceAnchor');
 const segmentWriter = require('../services/agent/segmentWriter');
+const { checkAnchors } = require('../services/pipeline/anchorCheck');
 
 const router = express.Router();
 
@@ -1673,6 +1674,93 @@ router.post('/chat', async (req, res) => {
     // 检索到的素材补进引用：作者要看到"查到了什么、从哪来的"
     payload.citations = mergeCitations(payload.citations, retrieval);
 
+    // ---- 章末锚点断言（本地，0 token） ----
+    //
+    // 只对正文类 action + 模板启用时执行；断言失败只记日志，
+    // 正文照常交付——正史冲突的修法可能是「改设定」而不是「改这一句」，
+    // 自动重写会把作者带偏，阻塞交付更不行。
+    let anchorViolations = [];
+    const generatedProse =
+      ['replace', 'append', 'insert'].includes(payload.action) && !payload.parseFailed;
+    if (meta.pipeline && generatedProse && chapterId && payload.content.trim()) {
+      const anchorCheckStartedAt = Date.now();
+      try {
+        const chapterRow = await get(
+          'SELECT seq FROM chapters WHERE id = ? AND work_id = ?',
+          [chapterId, workId]
+        );
+        if (chapterRow) {
+          const anchors = await all(
+            `SELECT * FROM work_anchors
+             WHERE work_id = ? AND status = 'active'
+             ORDER BY created_at ASC, id ASC`,
+            [workId]
+          );
+          // 新生成的正文没有对应的块 id，用一个空 blockId 作为整段正文的标记；
+          // offset 相对 payload.content，能直接 slice 回原句。
+          const hits = checkAnchors(anchors, chapterRow.seq, [
+            { id: '', content: payload.content },
+          ]);
+
+          const anchorById = new Map(anchors.map((a) => [a.id, a]));
+          for (const hit of hits) {
+            const anchor = anchorById.get(hit.anchorId) || {};
+            // block 级 = 有出处 + 不可变；其余可被作者有意 dismiss
+            const severity =
+              anchor.confidence === 'sourced' && anchor.immutable === 1 ? 'block' : 'warn';
+            const violation = {
+              anchorId: hit.anchorId,
+              ruleType: hit.ruleType,
+              quote: hit.quote,
+              offset: hit.offset,
+              blockId: hit.blockId,
+              severity,
+            };
+            anchorViolations.push(violation);
+
+            await run(
+              `INSERT INTO anchor_violations
+                 (id, work_id, chapter_id, anchor_id, rule_type, severity,
+                  quote, offset_start, detail, dismissed, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+              [
+                crypto.randomUUID(),
+                workId,
+                chapterId,
+                hit.anchorId,
+                hit.ruleType,
+                severity,
+                hit.quote,
+                hit.offset,
+                String(anchor.claim || ''),
+                new Date().toISOString(),
+              ]
+            );
+          }
+
+          if (anchorViolations.length) {
+            send({ type: 'anchor_violation', violations: anchorViolations });
+          }
+
+          console.log(
+            JSON.stringify({
+              event: 'ai_anchor_check',
+              traceId,
+              userId: req.userId,
+              workId,
+              chapterSeq: chapterRow.seq,
+              anchors: anchors.length,
+              violations: anchorViolations.length,
+              durationMs: Date.now() - anchorCheckStartedAt,
+            })
+          );
+        }
+      } catch (err) {
+        // 与节拍自检同一种容错：断言挂了不挡正文，也不弹错误。
+        console.error('[ai] 锚点断言失败（已跳过）:', err.message);
+      }
+    }
+
     // 保存助手消息
     const messageId = crypto.randomUUID();
     await run(
@@ -1744,6 +1832,9 @@ router.post('/chat', async (req, res) => {
       // 这次为什么停：final=正常出结果；前端可据此区分"写完"与"被截断"
       stopReason: finalResult.stopReason,
       traceId,
+      // 章末锚点断言结果（未启用模板 / 非正文 / 检查失败时为空数组）。
+      // 前端不读也不影响；存在就是为了让「命中了什么」有据可查。
+      anchorViolations,
     });
   } catch (err) {
     console.error('AI chat 失败：', err.message);
