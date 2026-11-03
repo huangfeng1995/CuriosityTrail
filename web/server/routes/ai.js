@@ -26,6 +26,7 @@ const webSearch = require('../services/search/deepseekSearch');
 const { ownedWork } = require('../services/scope');
 const { countWords } = require('../services/wordCount');
 const memory = require('../services/memory/retriever');
+const memoryClient = require('../services/memory/client');
 const indexer = require('../services/memory/indexer');
 const memoryConv = require('../services/memory/conversation');
 const memorySources = require('../services/memory/sources');
@@ -499,7 +500,7 @@ async function getChapterTail(chapterId, userId, blocks) {
  * 任何一步失败都只返回空结果——记忆是加分项，不是必需品。
  *
  * @param {object} params
- * @returns {Promise<{refs: Array, degraded: boolean, reason: string}>}
+ * @returns {Promise<{refs: Array, degraded: boolean, reason: string, code: string}>}
  */
 async function recallMemory(params) {
   const {
@@ -515,7 +516,7 @@ async function recallMemory(params) {
   } = params;
 
   if (!useMemory || !workId) {
-    return { refs: [], degraded: false, reason: '' };
+    return { refs: [], degraded: false, reason: '', code: '' };
   }
 
   try {
@@ -523,13 +524,22 @@ async function recallMemory(params) {
     // 混用会得到"看起来正常但全是错的"结果——直接不召回。
     const consistency = await indexer.checkMetaConsistency(req.userId);
     if (!consistency.ok) {
-      return { refs: [], degraded: true, reason: consistency.reason };
+      console.warn(
+        '[memory] recall skipped code=MEMORY_INDEX_MISMATCH scope=%s',
+        scope
+      );
+      return {
+        refs: [],
+        degraded: true,
+        reason: consistency.reason,
+        code: 'MEMORY_INDEX_MISMATCH',
+      };
     }
 
     const chapterTail = await getChapterTail(chapterId, req.userId, blocks);
     const query = memory.buildQueryText({ chapterTail, instruction });
 
-    return await memory.retrieve({
+    const result = await memory.retrieve({
       userId: req.userId,
       workId,
       query,
@@ -539,8 +549,21 @@ async function recallMemory(params) {
       excludeSourceKeys: Array.isArray(excludeSourceKeys) ? excludeSourceKeys : [],
       scope,
     });
+
+    // 记忆失败只进日志，带稳定 code：作者界面上一个字都不能出现。
+    // 这里不打印 query/正文，避免把作者内容写进日志。
+    if (result.degraded) {
+      console.warn(
+        '[memory] recall degraded code=%s scope=%s',
+        result.code || 'MEMORY_UNAVAILABLE',
+        scope
+      );
+    }
+    return result;
   } catch (e) {
-    return { refs: [], degraded: true, reason: '记忆召回失败' };
+    const code = memoryClient.codeOf ? memoryClient.codeOf(e) : 'MEMORY_ERROR';
+    console.warn('[memory] recall failed code=%s scope=%s', code, scope);
+    return { refs: [], degraded: true, reason: '记忆召回失败', code };
   }
 }
 
@@ -797,7 +820,8 @@ router.post('/chat', async (req, res) => {
         messageId: ref.messageId,
       })),
       degraded: memoryResult.degraded,
-      reason: memoryResult.reason,
+      // 只给诊断码，不给人类可读原因：记忆失败不向作者显示任何提示。
+      code: memoryResult.code || '',
     });
 
     const role = await roles.getRole(roleKey, req.userId);

@@ -10,7 +10,8 @@
  *
  * 1. **召回永远不抛异常。** 记忆是加分项，不是必需品。
  *    sidecar 挂了、没启动、超时、返回 500 —— 对话都必须照常继续，
- *    所以 query() 失败时返回 `degraded: true` 的空结果，由调用方提示作者。
+ *    所以 query() 失败时返回 `degraded: true` 的空结果与诊断码，
+ *    由调用方**只写服务端日志**，不向作者显示任何提示。
  *
  * 2. **索引失败要抛异常。** 索引是后台任务，失败必须能感知，
  *    好让台账记录 attempts/last_error 并安排重试。
@@ -178,11 +179,16 @@ async function remove(uri) {
  * @param {string} params.targetUri 范围前缀（必须含 u/{userId}/）
  * @param {number} [params.limit]
  * @param {number} [params.minScore]
- * @returns {Promise<{results: Array, degraded: boolean, reason: string}>}
+ * @returns {Promise<{results: Array, degraded: boolean, reason: string, code: string}>}
  */
 async function query({ query: text, targetUri, limit, minScore }) {
   if (!isEnabled()) {
-    return { results: [], degraded: true, reason: '记忆功能已关闭' };
+    return {
+      results: [],
+      degraded: true,
+      reason: '记忆功能已关闭',
+      code: 'MEMORY_DISABLED',
+    };
   }
 
   try {
@@ -194,7 +200,7 @@ async function query({ query: text, targetUri, limit, minScore }) {
         limit: limit || config.memoryTopK,
         minScore: minScore === undefined ? config.memoryMinScore : minScore,
       },
-      timeoutMs: config.vikingTimeoutMs,
+      timeoutMs: config.vikingQueryTimeoutMs,
     });
 
     const results = Array.isArray(payload.results) ? payload.results : [];
@@ -207,16 +213,34 @@ async function query({ query: text, targetUri, limit, minScore }) {
       })),
       degraded: false,
       reason: '',
+      code: '',
     };
   } catch (e) {
     const reason = e instanceof MemoryServiceError ? e.message : '记忆召回失败';
-    return { results: [], degraded: true, reason };
+    return { results: [], degraded: true, reason, code: codeOf(e) };
   }
+}
+
+/**
+ * 把内部错误码映射成稳定的诊断码。
+ *
+ * 上层只把这个码写进服务端日志，不给作者看——记忆失败必须是静默的。
+ */
+function codeOf(error) {
+  const map = {
+    [ErrorCode.TIMEOUT]: 'MEMORY_TIMEOUT',
+    [ErrorCode.UNAVAILABLE]: 'MEMORY_UNAVAILABLE',
+    [ErrorCode.HTTP_ERROR]: 'MEMORY_HTTP_ERROR',
+    [ErrorCode.BAD_RESPONSE]: 'MEMORY_BAD_RESPONSE',
+  };
+  if (error && error.code && map[error.code]) return map[error.code];
+  return 'MEMORY_ERROR';
 }
 
 module.exports = {
   ErrorCode,
   MemoryServiceError,
+  codeOf,
   isEnabled,
   health,
   index,

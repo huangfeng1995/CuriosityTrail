@@ -106,11 +106,9 @@ export default function MessageList({
 
               {/* 记忆面板在正文上方：作者先看到"AI 参考了什么"，
                   再看答案——顺序反了就成了事后补注。 */}
-              {(msg.memoryRefs?.length || msg.memoryDegraded) && (
+              {msg.memoryRefs?.length > 0 && (
                 <MemoryPanel
-                  refs={msg.memoryRefs || []}
-                  degraded={msg.memoryDegraded}
-                  reason={msg.memoryReason || ''}
+                  refs={msg.memoryRefs}
                   onExclude={(ref) => onExcludeMemory?.(msg, ref)}
                   onRegenerate={
                     msg.excludedRefIds?.length && onRegenerate

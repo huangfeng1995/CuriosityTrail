@@ -131,18 +131,27 @@ test('降级：sidecar 500 时 query 不抛异常，返回 degraded', async () =
     assert.strictEqual(result.degraded, true);
     assert.strictEqual(result.results.length, 0);
     assert.ok(result.reason);
+    assert.strictEqual(result.code, 'MEMORY_HTTP_ERROR');
   });
 });
 
-test('降级：sidecar 超时时 query 不抛异常', async () => {
+test('降级：sidecar 超时时 query 不抛异常，且带 MEMORY_TIMEOUT', async () => {
   await withSidecar(async (c, fake) => {
     fake.setFault('timeout');
-    const result = await c.query({
-      query: '青铜令牌',
-      targetUri: 'viking://resources/u/u1/',
-    });
-    assert.strictEqual(result.degraded, true);
-    assert.strictEqual(result.results.length, 0);
+    // 超时值走配置，测试里临时调短，避免每个用例等满 5 秒
+    const originalTimeout = config.vikingQueryTimeoutMs;
+    config.vikingQueryTimeoutMs = 300;
+    try {
+      const result = await c.query({
+        query: '青铜令牌',
+        targetUri: 'viking://resources/u/u1/',
+      });
+      assert.strictEqual(result.degraded, true);
+      assert.strictEqual(result.results.length, 0);
+      assert.strictEqual(result.code, 'MEMORY_TIMEOUT');
+    } finally {
+      config.vikingQueryTimeoutMs = originalTimeout;
+    }
   });
 });
 
@@ -155,6 +164,7 @@ test('降级：sidecar 未启动时 query 不抛异常', async () => {
     });
     assert.strictEqual(result.degraded, true);
     assert.strictEqual(result.results.length, 0);
+    assert.strictEqual(result.code, 'MEMORY_UNAVAILABLE');
   });
 });
 
@@ -199,6 +209,7 @@ test('降级：记忆功能关闭时 recall 直接返回 degraded', async () => 
     });
     assert.strictEqual(result.degraded, true);
     assert.strictEqual(result.results.length, 0);
+    assert.strictEqual(result.code, 'MEMORY_DISABLED');
   } finally {
     config.memoryEnabled = original;
   }

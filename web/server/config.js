@@ -124,7 +124,12 @@ const ollamaModel = (process.env.OLLAMA_MODEL || 'qwen2.5:7b').trim();
 // Ark key 只存在于 sidecar 的环境变量里，Node 不读取、不下发。
 const memoryEnabled = (process.env.MEMORY_ENABLED || 'true').trim() !== 'false';
 const vikingBaseUrl = (process.env.VIKING_BASE_URL || 'http://127.0.0.1:8019').replace(/\/$/, '');
-const vikingTimeoutMs = Number(process.env.VIKING_TIMEOUT_MS || 800);
+// 通用调用超时（探活、索引之外的接口）。embedding 走视觉模型时单次可能要 1–3 秒，
+// 800ms 会把正常召回误杀成「超时」，线上已出过这个问题，默认给到 8 秒。
+const vikingTimeoutMs = Number(process.env.VIKING_TIMEOUT_MS || 8000);
+// 召回查询单独的超时：它卡在作者等待回答的关键路径上，
+// 比探活/写入短，但也要容得下一次 embedding（默认 5 秒）。
+const vikingQueryTimeoutMs = Number(process.env.VIKING_QUERY_TIMEOUT_MS || 5000);
 // 写入超时必须**长于** sidecar 的 VIKING_INDEX_TIMEOUT_SECONDS（默认 8 秒）。
 //
 // 谁先超时很重要：sidecar 先超时 → 它返回 503，Node 拿到明确失败，
@@ -224,6 +229,7 @@ module.exports = {
   memoryEnabled,
   vikingBaseUrl,
   vikingTimeoutMs,
+  vikingQueryTimeoutMs,
   vikingIndexTimeoutMs,
   memoryIndexConcurrency,
   memoryTopK,

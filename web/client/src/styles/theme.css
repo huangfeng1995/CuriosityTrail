@@ -2394,28 +2394,6 @@ body.ct-resizing * {
   background: var(--bg-sunken);
   overflow: hidden;
 }
-.ct-memory.is-degraded {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: var(--amber-dim);
-  border-color: transparent;
-}
-.ct-memory-flag {
-  font-size: 11.5px;
-  color: var(--amber);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.ct-memory-degraded-reason {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .ct-memory-head {
   display: flex;
   align-items: center;

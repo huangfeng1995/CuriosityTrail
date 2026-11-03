@@ -152,6 +152,11 @@ DEEPSEEK_API_KEY=
 # 长期记忆（viking sidecar）。sidecar 已迁到 openviking 0.2.11（Linux 可装），
 # 默认开启；sidecar 起不来时 Node 侧自动降级，对话照常。
 MEMORY_ENABLED=true
+# 记忆服务调用超时（毫秒）。视觉 embedding 单次要 1–3 秒，
+# 旧默认 3 秒会把正常召回误判成「记忆服务超时（3000ms）」。
+VIKING_TIMEOUT_MS=8000
+# 召回查询单独的超时：它在作者等待回答的关键路径上，比探活短。
+VIKING_QUERY_TIMEOUT_MS=5000
 EOF
 	chmod 600 "$ENV_FILE"
 	echo "    已生成 $ENV_FILE"
@@ -166,6 +171,23 @@ fi
 # 已经有这个键就不动——用户主动改过的值不能被覆盖。
 if ! grep -q '^MEMORY_ENABLED=' "$ENV_FILE"; then
 	echo 'MEMORY_ENABLED=false' >> "$ENV_FILE"
+fi
+
+# 老 .env.production 里可能还写着 VIKING_TIMEOUT_MS=3000——那是线上误报
+# 「记忆服务超时（3000ms）」的直接原因。低于 8000 的一律抬到 8000；
+# 高于 8000 的保留（那是运维主动调大的）。
+if grep -q '^VIKING_TIMEOUT_MS=' "$ENV_FILE"; then
+	old_timeout=$(grep -m1 '^VIKING_TIMEOUT_MS=' "$ENV_FILE" | cut -d= -f2- | tr -dc '0-9')
+	if [[ -n "$old_timeout" && "$old_timeout" -lt 8000 ]]; then
+		sed -i.bak "s/^VIKING_TIMEOUT_MS=.*/VIKING_TIMEOUT_MS=8000/" "$ENV_FILE"
+		rm -f "$ENV_FILE.bak"
+		log "已把 VIKING_TIMEOUT_MS 从 ${old_timeout} 提升到 8000"
+	fi
+else
+	echo 'VIKING_TIMEOUT_MS=8000' >> "$ENV_FILE"
+fi
+if ! grep -q '^VIKING_QUERY_TIMEOUT_MS=' "$ENV_FILE"; then
+	echo 'VIKING_QUERY_TIMEOUT_MS=5000' >> "$ENV_FILE"
 fi
 
 # 记忆服务自己的环境文件：ARK key 只给 sidecar，绝不进 app 容器。

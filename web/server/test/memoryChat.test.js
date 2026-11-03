@@ -329,6 +329,68 @@ test('顺序：memory 事件在第一个 token 之前到达', async () => {
   assert.ok(memoryIndex < tokenIndex, 'memory 事件必须早于第一个 token');
 });
 
+test('降级静默：记忆超时时界面零提示、日志带 MEMORY_TIMEOUT、正文照常返回', async () => {
+  behavior = {
+    content: JSON.stringify({ action: 'comment', content: '林昭把令牌收进袖中。', reason: '', citations: [] }),
+  };
+
+  const { workId, chapterId } = await seedIndexedWork(
+    '林昭握着一枚青铜令牌，站在雨夜的巷口。'
+  );
+
+  const originalTimeout = config.vikingQueryTimeoutMs;
+  const originalCallTimeout = config.vikingTimeoutMs;
+  config.vikingQueryTimeoutMs = 300;
+  config.vikingTimeoutMs = 300;
+
+  fakeSidecar.setFault('timeout');
+  const warns = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warns.push(args);
+
+  try {
+    const events = await chat({
+      message: '林昭接下来会怎么做',
+      workId,
+      chapterId,
+    });
+
+    // 界面上不能出现任何记忆故障提示
+    const memoryNotices = events.filter(
+      (e) => e.type === 'notice' && /记忆|MEMORY/i.test(String(e.content || ''))
+    );
+    assert.strictEqual(memoryNotices.length, 0, '不应下发记忆故障提示');
+
+    const memory = events.find((e) => e.type === 'memory');
+    assert.ok(memory, '仍然要下发 memory 事件（空结果）');
+    assert.strictEqual(memory.degraded, true);
+    assert.strictEqual(memory.reason, undefined, '不应把人类可读原因发给前端');
+    assert.strictEqual(memory.code, 'MEMORY_TIMEOUT');
+
+    // 正文照常流出来：记忆失败不能阻塞回答
+    const text = events
+      .filter((e) => e.type === 'token')
+      .map((e) => e.content)
+      .join('');
+    assert.ok(text.includes('林昭'), '正文应正常返回');
+
+    // 服务端日志必须带 code
+    assert.ok(
+      warns.some(
+        (args) =>
+          args[0] === '[memory] recall degraded code=%s scope=%s' &&
+          args[1] === 'MEMORY_TIMEOUT'
+      ),
+      '服务端日志应有带 code 的记录'
+    );
+  } finally {
+    console.warn = originalWarn;
+    fakeSidecar.setFault(null);
+    config.vikingQueryTimeoutMs = originalTimeout;
+    config.vikingTimeoutMs = originalCallTimeout;
+  }
+});
+
 test('控制：useMemory=false 时一条都不召回', async () => {
   behavior = {
     content: JSON.stringify({ action: 'comment', content: '好的。', reason: '', citations: [] }),
@@ -394,7 +456,9 @@ test('降级：sidecar 挂了对话照常进行，memory 事件标记 degraded',
   assert.ok(memory);
   assert.strictEqual(memory.degraded, true);
   assert.strictEqual(memory.refs.length, 0);
-  assert.ok(memory.reason);
+  // 原因只写服务端日志，发给前端的只有诊断码
+  assert.strictEqual(memory.code, 'MEMORY_HTTP_ERROR');
+  assert.strictEqual(memory.reason, undefined);
 
   // 对话本身必须照常走完
   const action = events.find((e) => e.type === 'action');

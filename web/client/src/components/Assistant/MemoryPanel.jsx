@@ -12,20 +12,11 @@ import { ChevronRight, ChevronDown, EyeOff, RotateCcw } from 'lucide-react';
  * 剔除是**单条**的：整份记忆都用不上的情况很少，
  * 多半是"人名记错了"这种一条的问题。全局关掉放在输入区的开关上。
  */
-export default function MemoryPanel({ refs = [], degraded = false, reason = '', onExclude, onRegenerate, regenerating }) {
+export default function MemoryPanel({ refs = [], onExclude, onRegenerate, regenerating }) {
   const [open, setOpen] = useState(false);
 
-  if (degraded) {
-    // 降级不是作者的错，但得让他知道"这次没翻旧账"，
-    // 否则他会以为 AI 就是不懂前情。
-    return (
-      <div className="ct-memory is-degraded">
-        <span className="ct-memory-flag">长期记忆未启用</span>
-        <span className="ct-memory-degraded-reason">{reason}</span>
-      </div>
-    );
-  }
-
+  // 记忆降级只记服务端日志，界面上不显示任何提示：
+  // 「未启用」「超时」都不是作者需要处理的事，写正文不该被打断。
   if (!refs.length) return null;
 
   const summary = `本次参考了 ${refs.length} 条记忆`;

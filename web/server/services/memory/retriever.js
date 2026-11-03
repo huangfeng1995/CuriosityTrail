@@ -347,7 +347,7 @@ function applyBudget(refs, { maxRefs, maxChars }) {
  * @param {string[]} [params.excludeRefIds] 作者剔除的条目
  * @param {string[]} [params.excludeSourceKeys] 整来源剔除，格式 `类型:来源id`
  * @param {string} [params.scope] 'chat' | 'inline'
- * @returns {Promise<{refs: Array, degraded: boolean, reason: string}>}
+ * @returns {Promise<{refs: Array, degraded: boolean, reason: string, code: string}>}
  */
 async function retrieve(params) {
   const {
@@ -363,7 +363,12 @@ async function retrieve(params) {
   } = params;
 
   if (!client.isEnabled()) {
-    return { refs: [], degraded: true, reason: '记忆功能已关闭' };
+    return {
+      refs: [],
+      degraded: true,
+      reason: '记忆功能已关闭',
+      code: 'MEMORY_DISABLED',
+    };
   }
 
   const excluded = new Set(excludeRefIds);
@@ -385,7 +390,12 @@ async function retrieve(params) {
   });
 
   if (result.degraded) {
-    return { refs: [], degraded: true, reason: result.reason };
+    return {
+      refs: [],
+      degraded: true,
+      reason: result.reason,
+      code: result.code || 'MEMORY_UNAVAILABLE',
+    };
   }
 
   // 解析 URI，过滤掉不认识来源与被作者剔除的条目
@@ -440,7 +450,7 @@ async function retrieve(params) {
   const maxChars = scope === 'inline' ? 1200 : config.memoryMaxChars;
   const refs = applyBudget(deduped, { maxRefs, maxChars });
 
-  return { refs, degraded: false, reason: '' };
+  return { refs, degraded: false, reason: '', code: '' };
 }
 
 /**
