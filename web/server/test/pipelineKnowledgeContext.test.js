@@ -123,7 +123,7 @@ test.after(async () => {
 // 1. PV7：chapter_seq=3 的行，第 2/3 章不可见，第 4 章可见
 // ---------------------------------------------------------------------------
 
-test('PV7：司马懿 knows 行在 chapter_seq=3，第 2/3 章不含内容与关键词，第 4 章含', async () => {
+test('PV7：chapter_seq=3 表示第 3 章写完后生效，第 2/3 章只见短标题，第 4 章才见全文', async () => {
   const work = await createWork('history_thriller', 'PV7 作品');
   for (const seq of [2, 3, 4]) {
     await addChapter(work.id, {
@@ -137,7 +137,7 @@ test('PV7：司马懿 knows 行在 chapter_seq=3，第 2/3 章不含内容与关
   await addCharacter(work.id, { id: 'pv7-sima', name: '司马懿' });
   await addFact(work.id, {
     id: 'pv7-f2',
-    content: '司马懿曾向曹操举荐他',
+    content: '司马懿曾向曹操举荐他，此事只有曹操与荀彧知道',
     keywords: '举荐,曹操',
   });
   // chapter_seq = 3 表示「第 3 章写完后生效」，所以第 4 章开写前才可见。
@@ -147,22 +147,24 @@ test('PV7：司马懿 knows 行在 chapter_seq=3，第 2/3 章不含内容与关
   const ch2Section = knowledgeSection(ch2.messages[0].content);
   assert.ok(ch2Section.startsWith('## 本章知情边界（硬约束）'), '第 2 章应有知情边界段');
   assert.strictEqual(ch2.meta.knowledgeCount, 1);
-  assert.ok(!ch2Section.includes('司马懿曾向曹操举荐他'), '第 2 章不得出现 F2 内容');
-  assert.ok(!ch2Section.includes('举荐'), '第 2 章不得出现 F2 关键词');
+  assert.ok(!ch2Section.includes('司马懿曾向曹操举荐他，此事只有曹操与荀彧知道'), '第 2 章不得出现 F2 全文');
+  assert.ok(!ch2Section.includes('关键词：'), '第 2 章不得出现 F2 关键词字段');
+  assert.ok(ch2Section.includes('F1（司马懿曾向曹操举荐他，此'), '未知条目必须带短标题');
 
   const ch3 = await assemble(work.id, 'pv7-ch-3');
   const ch3Section = knowledgeSection(ch3.messages[0].content);
   assert.ok(ch3Section.startsWith('## 本章知情边界（硬约束）'), '第 3 章应有知情边界段');
   assert.strictEqual(ch3.meta.knowledgeCount, 1);
-  assert.ok(!ch3Section.includes('司马懿曾向曹操举荐他'), '第 3 章不得出现 F2 内容');
-  assert.ok(!ch3Section.includes('举荐'), '第 3 章不得出现 F2 关键词');
+  assert.ok(!ch3Section.includes('司马懿曾向曹操举荐他，此事只有曹操与荀彧知道'), '第 3 章不得出现 F2 全文');
+  assert.ok(!ch3Section.includes('关键词：'), '第 3 章不得出现 F2 关键词字段');
+  assert.ok(ch3Section.includes('F1（司马懿曾向曹操举荐他，此'), '未知条目必须带短标题');
 
   const ch4 = await assemble(work.id, 'pv7-ch-4');
   const ch4Section = knowledgeSection(ch4.messages[0].content);
   assert.ok(ch4Section.startsWith('## 本章知情边界（硬约束）'), '第 4 章应有知情边界段');
   assert.strictEqual(ch4.meta.knowledgeCount, 1);
-  assert.ok(ch4Section.includes('司马懿曾向曹操举荐他'), '第 4 章必须包含 F2 内容');
-  assert.ok(ch4Section.includes('举荐'), '第 4 章必须包含 F2 关键词');
+  assert.ok(ch4Section.includes('司马懿曾向曹操举荐他，此事只有曹操与荀彧知道'), '第 4 章必须包含 F2 全文');
+  assert.ok(ch4Section.includes('关键词：举荐,曹操'), '第 4 章必须包含 F2 关键词字段');
   assert.match(ch4Section, /【司马懿】已知：/);
 });
 
@@ -265,9 +267,21 @@ test('超限：8 角色 × 多条事实整段 ≤700 字，先砍未知与证据
   assert.ok(section.length <= 700, `知情边界段应 ≤700 字，实际 ${section.length}`);
   assert.ok(section.includes('本章允许揭示'), '「本章允许揭示」绝不能被砍');
   assert.ok(section.includes('F1（B4 揭示）'), '允许揭示的条目必须保留');
+  assert.ok(
+    section.includes('规划外新事实本章合计仍限 1 条（本章总量，不是每角色）。'),
+    '有节拍表时，规划外新事实仍限本章合计 1 条'
+  );
   assert.ok(!section.includes('证据：'), '超限时证据行应先于允许揭示被砍');
   assert.ok(!section.includes('未知：'), '超限时「未知」列表应先被砍');
+  assert.ok(section.includes('F1（事实1：长长长长长长长长'), '超限时保留编号+短标题');
+  assert.ok(!section.includes('长'.repeat(80)), '超限时砍掉内容解释');
   assert.ok(result.meta.knowledgeCount <= 8);
+  const omitted = 8 - result.meta.knowledgeCount;
+  assert.ok(omitted > 0, '该场景必须触发角色行裁剪');
+  assert.ok(
+    section.includes(`其余 ${omitted} 人本轮未注入边界`),
+    '被砍掉的角色必须在段末计数，不能静默'
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -305,7 +319,7 @@ test('半知与怀疑分开标注，不合并成「已知」', async () => {
 // 5. 无节拍表
 // ---------------------------------------------------------------------------
 
-test('无节拍表：允许揭示为空，但必须写出「本章未规划揭示点」', async () => {
+test('无节拍表：允许揭示为空，但必须写出「最多允许揭示 1 条」而不是锁死故事', async () => {
   const work = await createWork('history_thriller', '无节拍表');
   await addChapter(work.id, {
     id: 'noplan-ch',
@@ -321,8 +335,15 @@ test('无节拍表：允许揭示为空，但必须写出「本章未规划揭�
   const result = await assemble(work.id, 'noplan-ch');
   const section = knowledgeSection(result.messages[0].content);
 
-  assert.ok(section.includes('本章未规划揭示点，仅允许已知范围内。'), '不能沉默，必须让作者看见');
-  assert.strictEqual(allowedLine(section), '本章允许揭示（来自节拍表）：本章未规划揭示点，仅允许已知范围内。');
+  assert.ok(section.includes('本章未规划揭示点'), '不能沉默，必须让作者看见');
+  assert.ok(section.includes('最多允许揭示 1 条新事实'), '无节拍表时允许 1 条，不能锁死');
+  assert.ok(section.includes('本章总量，不是每角色'), '必须说明 1 条是本章总量');
+  assert.ok(section.includes('未规划模式'), '必须让作者知道当前是未规划模式');
+  assert.ok(!section.includes('仅允许已知范围内'), '旧措辞必须移除');
+  assert.strictEqual(
+    allowedLine(section),
+    '本章允许揭示（未规划模式）：本章未规划揭示点。最多允许揭示 1 条新事实（本章总量，不是每角色），且必须写出触发契机与代价；不得本章连开多条。'
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -340,15 +361,20 @@ test('无节拍表 + 有未知事实：未知事实只进「未知」列表，�
 
   await addCharacter(work.id, { id: 'unknown-sima', name: '司马懿' });
   await addFact(work.id, { id: 'unknown-f1', content: '司马懿见过密诏', keywords: '密诏' });
-  await addFact(work.id, { id: 'unknown-f2', content: '曹操有意废长立幼', keywords: '废长立幼' });
+  await addFact(work.id, {
+    id: 'unknown-f2',
+    content: '曹操有意废长立幼，此事由荀彧密报',
+    keywords: '废长立幼',
+  });
   await addKnowledge(work.id, 'unknown-sima', 'unknown-f1', 1, 'knows');
 
   const result = await assemble(work.id, 'unknown-ch');
   const section = knowledgeSection(result.messages[0].content);
   const allowed = allowedLine(section);
 
-  assert.ok(section.includes('未知：F2'), '未知事实应出现在未知列表');
+  assert.ok(section.includes('未知：F2（曹操有意废长立幼，此事由'), '未知事实必须带短标题');
+  assert.ok(!section.includes('曹操有意废长立幼，此事由荀彧密报'), '未知事实不得带完整正文');
   assert.ok(!allowed.includes('F2'), '未知事实不得进入允许揭示');
-  assert.ok(!allowed.includes('曹操有意废长立幼'), '未知事实内容不得进入允许揭示');
+  assert.ok(!allowed.includes('曹操有意废长立幼，此事由荀彧密报'), '未知事实内容不得进入允许揭示');
   assert.ok(!allowed.includes('废长立幼'), '未知事实关键词不得进入允许揭示');
 });

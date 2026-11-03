@@ -1017,6 +1017,22 @@ const KNOWLEDGE_RULES = [
   '3. 未见过某证据的角色，不得引用该证据的内容或细节。',
 ].join('\n');
 
+/** 「1 条」是本章总量，不是每个角色各 1 条 */
+const KNOWLEDGE_TOTAL_NOTE = '本章总量，不是每角色';
+
+/**
+ * 事实的展示用短标题。
+ *
+ * story_facts 没有独立短标题字段，这里取 content 前 12 个字**仅用于注入展示**，
+ * 不改库、不新增字段。未知/怀疑条目必须带上它——只给 F1 编号，
+ * 模型不知道 F1 是什么，就无从避开，规则也就不可执行。
+ */
+function factShortTitle(fact) {
+  const content = String(fact.content || '').replace(/\s+/g, ' ').trim();
+  if (!content) return '';
+  return Array.from(content).slice(0, 12).join('');
+}
+
 /**
  * 生成「本章知情边界」分区（P.6.4）。
  *
@@ -1049,11 +1065,34 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
   const plan = beatPlan && beatPlan.plan ? beatPlan.plan : beatPlan;
   const planText = plan ? JSON.stringify(plan) : '';
   const signal = [chapter.outline || '', planText].filter(Boolean).join('\n');
-  // 按本章大纲/节拍表里出现的人名取角色；一个都没命中时取全部，上限 8 人。
+
+  // 上一章出场的人是第二优先级：本章大纲没点名时，他们比从未出场的角色
+  // 更可能有知情边界需要约束。
+  const previous = await get(
+    `SELECT * FROM chapters WHERE work_id = ? AND seq < ?
+     ORDER BY seq DESC LIMIT 1`,
+    [workId, chapter.seq]
+  );
+  const previousText = previous ? chapterBody(previous) : '';
+
+  const relevanceRank = (character) => {
+    const variants = nameVariants(character);
+    if (signal && variants.some((v) => signal.includes(v))) return 0;
+    if (previousText && variants.some((v) => previousText.includes(v))) return 1;
+    return 2;
+  };
+
+  // 按本章大纲/节拍表里出现的人名取角色；一个都没命中时取全部。
+  // 排序后取前 8——超限裁剪时从队尾砍，砍掉的永远是最不相关的角色。
   const matched = signal
     ? characters.filter((c) => nameVariants(c).some((v) => signal.includes(v)))
     : [];
-  const chosen = (matched.length ? matched : characters).slice(0, KNOWLEDGE_MAX_CHARACTERS);
+  const candidates = matched.length ? matched : characters;
+  const chosen = candidates
+    .map((c, index) => ({ c, index, rank: relevanceRank(c) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .slice(0, KNOWLEDGE_MAX_CHARACTERS)
+    .map((item) => item.c);
   if (!chosen.length) return { text: '', count: 0 };
 
   // 事实编号按创建顺序固定，同一个分区里稳定可读。
@@ -1080,19 +1119,22 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
   /**
    * 事实在注入块里的写法。
    *
-   * 只有「已知/半知」带内容——「未知」和「怀疑」只给编号，避免把秘密
-   * 提前写进上下文让模型顺手漏出去；这也是 PV7 能断言「第 2 章不含
-   * F2 的正文与关键词」的原因。
+   * 未知/怀疑：只给「编号 + ≤12 字短标题」，不带正文、不带关键词——
+   * 模型能认出大致是什么并避开，但不会拿到秘密的完整内容。
+   * 已知/半知：正文 + 关键词；超限压到 compact 时退回短标题，
+   * 绝不允许压成纯编号。
    */
   const factBrief = (fact, withContent, compact) => {
     const label = labels.get(fact.id) || '';
-    if (!withContent || compact) return label;
+    const shortTitle = factShortTitle(fact);
+    const brief = shortTitle ? `${label}（${shortTitle}）` : label;
+    if (!withContent || compact) return brief;
     const content = truncate(String(fact.content || '').replace(/\s+/g, ' ').trim(), 60);
     const keywords = String(fact.keywords || '').trim();
     const bits = [];
     if (content) bits.push(content);
     if (keywords) bits.push(`关键词：${keywords}`);
-    return bits.length ? `${label}（${bits.join('｜')}）` : label;
+    return bits.length ? `${label}（${bits.join('｜')}）` : brief;
   };
 
   const characterLine = (character, includeUnknown, compact) => {
@@ -1180,12 +1222,18 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
   };
 
   const allowedText = (limit) => {
-    const prefix = '本章允许揭示（来自节拍表）：';
     if (!reveals.length) {
-      return `${prefix}本章未规划揭示点，仅允许已知范围内。`;
+      // 没有节拍表时不能把故事锁死：允许本章自行推进 1 条，但要求写清契机与代价。
+      return (
+        '本章允许揭示（未规划模式）：本章未规划揭示点。' +
+        `最多允许揭示 1 条新事实（${KNOWLEDGE_TOTAL_NOTE}），且必须写出触发契机与代价；不得本章连开多条。`
+      );
     }
+    const prefix = '本章允许揭示（来自节拍表）：';
     const max = Math.max(0, Math.min(limit, reveals.length));
-    if (!max) return `${prefix}（条目过多，已省略）`;
+    if (!max) {
+      return `${prefix}（条目过多，已省略）。规划外新事实本章合计仍限 1 条（${KNOWLEDGE_TOTAL_NOTE}）。`;
+    }
     const items = reveals.slice(0, max).map(({ factId, beat }) => {
       const label = labels.get(factId) || '';
       const id = beat && beat.id ? beat.id : '';
@@ -1193,7 +1241,10 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
       return `${label}（${id}${type}）`;
     });
     const omitted = reveals.length - max;
-    return `${prefix}${items.join('、')}${omitted ? `…（另省略 ${omitted} 条）` : ''}`;
+    return (
+      `${prefix}${items.join('、')}${omitted ? `…（另省略 ${omitted} 条）` : ''}。` +
+      `规划外新事实本章合计仍限 1 条（${KNOWLEDGE_TOTAL_NOTE}）。`
+    );
   };
 
   const render = ({ includeUnknown, includeEvidence, compact, maxCharacters, revealLimit }) => {
@@ -1201,12 +1252,15 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
       .slice(0, maxCharacters)
       .map((character) => characterLine(character, includeUnknown, compact))
       .filter(Boolean);
+    const omitted = characters.length - lines.length;
     const blocks = ['## 本章知情边界（硬约束）'];
     if (lines.length) blocks.push(...lines);
     blocks.push('', allowedText(revealLimit));
     const evidence = includeEvidence ? evidenceText() : '';
     if (evidence) blocks.push(evidence);
     blocks.push('', KNOWLEDGE_RULES);
+    // 被 8 人上限或 700 字上限挡在外面的角色，必须让作者看见，而不是静默。
+    if (omitted > 0) blocks.push(`其余 ${omitted} 人本轮未注入边界`);
     return { text: blocks.join('\n'), count: lines.length };
   };
 
