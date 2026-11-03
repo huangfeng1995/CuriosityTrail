@@ -29,8 +29,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 5 → 6：范文编排锚点（reference_anchors）。
  * 版本 6 → 7：卡片提案（card_proposals）与卡片来源列。
  * 版本 7 → 8：历史悬疑模板开关（works.template）与锚点三表。
+ * 版本 8 → 9：人物卡正史/立场/底线/弱点，秘密/事实/知情矩阵/证据四表。
  */
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 /**
  * 版本号之前的老库遗留表。
@@ -176,6 +177,11 @@ CREATE TABLE IF NOT EXISTS characters (
   arc          TEXT,
   relations    TEXT,
   notes        TEXT,
+  -- 历史悬疑模板的四列。默认 NULL：未启用模板的作品与老库不产生任何新文案。
+  canon        TEXT,   -- 正史 / 虚构
+  stance       TEXT,   -- 立场
+  bottom_line  TEXT,   -- 底线
+  weakness     TEXT,   -- 弱点
   source_chapter_id TEXT,
   source_block_id   TEXT,
   created_at   TEXT NOT NULL,
@@ -480,6 +486,73 @@ CREATE TABLE IF NOT EXISTS anchor_violations (
   created_at   TEXT NOT NULL
 );
 
+-- 秘密的叙事容器。作者先写整条秘密，再拆成事实单元。
+CREATE TABLE IF NOT EXISTS story_secrets (
+  id          TEXT PRIMARY KEY,
+  work_id     TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  reveal_seq  INTEGER,
+  status      TEXT NOT NULL DEFAULT 'active'
+              CHECK (status IN ('active','revealed','dropped')),
+  created_at  TEXT NOT NULL,
+  modified_at TEXT NOT NULL
+);
+
+-- 事实单元：秘密被拆成的最小可被告知单位。
+CREATE TABLE IF NOT EXISTS story_facts (
+  id          TEXT PRIMARY KEY,
+  work_id     TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  secret_id   TEXT REFERENCES story_secrets(id) ON DELETE CASCADE,
+  part_no     INTEGER NOT NULL DEFAULT 1,
+  content     TEXT NOT NULL,
+  keywords    TEXT,
+  created_at  TEXT NOT NULL,
+  modified_at TEXT NOT NULL
+);
+
+-- 知情矩阵：只记状态变化点。
+--
+-- chapter_seq = N 表示「第 N 章写完后生效」，所以生成第 N 章时只能读到
+-- chapter_seq <= N - 1 的行。这条语义由 services/pipeline/knowledge.js
+-- 的 knowledgeAt() 统一收口，调用方不要自己拼条件。
+CREATE TABLE IF NOT EXISTS knowledge_matrix (
+  id            TEXT PRIMARY KEY,
+  work_id       TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  character_id  TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  fact_id       TEXT NOT NULL REFERENCES story_facts(id) ON DELETE CASCADE,
+  chapter_seq   INTEGER NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN
+                  ('suspects','partial','knows','exposed')),
+  evidence_id   TEXT,
+  source_chapter_id TEXT,
+  note          TEXT,
+  created_at    TEXT NOT NULL,
+  UNIQUE (character_id, fact_id, chapter_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_lookup
+  ON knowledge_matrix (work_id, character_id, chapter_seq);
+
+-- 证据台账：物证/人证在谁手上、被谁见过、何时暴露。
+CREATE TABLE IF NOT EXISTS evidence_items (
+  id            TEXT PRIMARY KEY,
+  work_id       TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  fact_id       TEXT REFERENCES story_facts(id) ON DELETE SET NULL,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  holder_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
+  holder_kind   TEXT NOT NULL DEFAULT 'character'
+                CHECK (holder_kind IN ('character','place','none')),
+  seen_by       TEXT NOT NULL DEFAULT '[]',
+  acquired_seq  INTEGER,
+  exposed_seq   INTEGER,
+  destroyed_seq INTEGER,
+  status        TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','destroyed','exposed')),
+  created_at    TEXT NOT NULL,
+  modified_at   TEXT NOT NULL
+);
+
 `;
 
 /**
@@ -616,6 +689,11 @@ async function migrate(fromVersion) {
   await ensureColumn('plot_cards', 'source_block_id', 'TEXT');
   // 7 → 8：模板开关。SCHEMA 已含该列，老库必须单独补。
   await ensureColumn('works', 'template', "TEXT NOT NULL DEFAULT ''");
+  // 8 → 9：人物卡四列。老行保持 NULL，formatCharacter 不会输出空标签。
+  await ensureColumn('characters', 'canon', 'TEXT');
+  await ensureColumn('characters', 'stance', 'TEXT');
+  await ensureColumn('characters', 'bottom_line', 'TEXT');
+  await ensureColumn('characters', 'weakness', 'TEXT');
 
   // prompt_overrides 需要复合主键，老库要重建一次（数据整体保留）
   await ensurePromptOverridesPk();
