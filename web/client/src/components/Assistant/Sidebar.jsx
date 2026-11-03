@@ -6,7 +6,7 @@ import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
 import { planApply } from './applyPlan';
-import { collectCriticFindings, buildAdoptPrompt } from './findings';
+import { collectCriticFindings, sendAdoptionBatch } from './findings';
 import { pendingActions } from './pendingActions';
 import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
@@ -101,6 +101,8 @@ export default function AssistantSidebar() {
   const activeRole = roles.find((r) => r.key === roleKey);
 
   const [activeFindingKey, setActiveFindingKey] = useState('');
+  // 已采纳的意见：批量/单条成功后都记在这里，避免重复发给写手
+  const [adoptedFindingKeys, setAdoptedFindingKeys] = useState(() => new Set());
 
   // 审稿意见的锚点按当前正文实时算：作者改稿后位置会变，不落库快照。
   const criticFindings = useMemo(
@@ -197,6 +199,8 @@ export default function AssistantSidebar() {
       // 必须兜底给作者一句看得见的话，不能留一个空气泡。
       let gotReply = false;
       let aborted = false;
+      // 批量采纳要据此决定「是否标记已采纳」：失败整批都不标
+      let failed = false;
 
       try {
         await streamPost(
@@ -349,6 +353,7 @@ export default function AssistantSidebar() {
               }
             } else if (event.type === 'error') {
               gotReply = true;
+              failed = true;
               dispatch({
                 type: 'streaming/set',
                 streaming: '',
@@ -378,6 +383,7 @@ export default function AssistantSidebar() {
           });
         } else {
           gotReply = true;
+          failed = true;
           dispatch({ type: 'notice/set', error: e.message });
           dispatch({
             type: 'message/update',
@@ -400,6 +406,8 @@ export default function AssistantSidebar() {
         streamBufRef.current = '';
         abortRef.current = null;
       }
+
+      return !failed && !aborted && gotReply;
     },
     [input, sending, dispatch, work, chapter, roleKey, conversationId, blocks, activeRole, roles, useMemory]
   );
@@ -524,17 +532,28 @@ export default function AssistantSidebar() {
   );
 
   /**
-   * 采纳一条可定位意见。
+   * 采纳一条或多条意见：整批只发一次 /chat。
    *
-   * 把意见正文与锚定的原文片段拼成写手的明确指令，走现有 /chat——
-   * 不新造通道，服务端也不解析这段文本。
+   * 失败时整批都不标记，并给一句人话提示；成功后把条目标成已采纳，
+   * 作者不会因为同一条意见被重复发给写手而反复改稿。
    */
-  const adoptFinding = useCallback(
-    (finding) => {
-      if (sending) return;
-      send(buildAdoptPrompt(finding), { roleKey: 'writer' });
+  const adoptFindings = useCallback(
+    async (findings) => {
+      if (sending) return { ok: false, sent: false, keys: [] };
+
+      const result = await sendAdoptionBatch(send, findings);
+      if (result.ok) {
+        setAdoptedFindingKeys((prev) => {
+          const next = new Set(prev);
+          result.keys.forEach((key) => next.add(key));
+          return next;
+        });
+      } else if (result.sent) {
+        toast.warning('这次没有改成，请再试一次');
+      }
+      return result;
     },
-    [send, sending]
+    [send, sending, toast]
   );
 
   /** 侧栏意见 → 正文：滚到对应块并高亮。 */
@@ -756,7 +775,8 @@ export default function AssistantSidebar() {
           onRemember={rememberMessage}
           findingsByMessage={findingsByMessage}
           activeFindingKey={activeFindingKey}
-          onAdoptFinding={adoptFinding}
+          adoptedFindingKeys={adoptedFindingKeys}
+          onAdoptFindings={adoptFindings}
           onJumpToFinding={jumpToFinding}
         />
       </div>

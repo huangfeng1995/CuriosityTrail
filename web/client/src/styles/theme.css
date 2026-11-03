@@ -2399,6 +2399,34 @@ body.ct-resizing * {
   color: var(--ink-3);
 }
 
+/* 多选：每条意见右侧一个勾选框，未定位的全章建议同样可选 */
+.ct-finding-check {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  margin-top: 2px;
+  cursor: pointer;
+}
+.ct-finding.is-selected {
+  background: var(--accent-dim);
+}
+.ct-finding.is-adopted {
+  opacity: 0.72;
+}
+.ct-finding.is-adopted .ct-finding-text {
+  text-decoration: line-through;
+  text-decoration-color: var(--border-strong);
+}
+.ct-finding-batch {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 2px 2px;
+  background: var(--bg-container);
+}
+
 /* ---------- 长期记忆面板 ---------- */
 /* 记忆是"AI 自己翻出来的旧账"，作者必须能一眼看到它从哪来，
    否则无法判断这次回答靠不靠谱。 */

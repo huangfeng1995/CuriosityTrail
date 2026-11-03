@@ -57,7 +57,8 @@ export default function MessageList({
   onRemember,
   findingsByMessage,
   activeFindingKey,
-  onAdoptFinding,
+  adoptedFindingKeys,
+  onAdoptFindings,
   onJumpToFinding,
 }) {
   // 占位提示的文案。
@@ -129,7 +130,8 @@ export default function MessageList({
                   onRevert={() => onRevert?.(msg)}
                   findings={findingsByMessage?.get(msg.id) || []}
                   activeFindingKey={activeFindingKey}
-                  onAdoptFinding={onAdoptFinding}
+                  adoptedFindingKeys={adoptedFindingKeys}
+                  onAdoptFindings={onAdoptFindings}
                   onJumpToFinding={onJumpToFinding}
                 />
               ) : (

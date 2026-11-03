@@ -1,5 +1,5 @@
-import React from 'react';
-import { Button } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { Button, Checkbox } from 'antd';
 import { CheckOutlined, RollbackOutlined } from '@ant-design/icons';
 import { REASON_LABEL } from './findings';
 
@@ -19,7 +19,8 @@ const ACTION_LABEL = {
  * - replace/append/insert：确实是正文，需要用户确认后写回
  *
  * 审稿人的 comment 若带 findings，就在正文下面列出每条意见：
- * 可定位的直接给「采纳」，未定位的标「全章建议」并说明降级原因。
+ * 每条都可以勾选（未定位的全章建议同样可以），底部一次交给写手改，
+ * 不用一条一条点、让写手来回改几轮。
  */
 export default function ActionCard({
   action,
@@ -30,13 +31,40 @@ export default function ActionCard({
   onRevert,
   findings = [],
   activeFindingKey = '',
-  onAdoptFinding,
+  adoptedFindingKeys,
+  onAdoptFindings,
   onJumpToFinding,
 }) {
   const isTextAction = ['replace', 'append', 'insert'].includes(action);
   // 空正文不渲染占位文案：卡片的 reason / findings 已经说明了情况，
   // 「（本次没有返回内容）」对作者没有信息量。
   const body = (content || '').trim();
+
+  // 勾选顺序就是发给写手的顺序：用数组保存，Set 会丢掉顺序。
+  const [selectedKeys, setSelectedKeys] = useState([]);
+  const [adopting, setAdopting] = useState(false);
+
+  const adopted = useMemo(() => {
+    if (adoptedFindingKeys instanceof Set) return adoptedFindingKeys;
+    return new Set(Array.isArray(adoptedFindingKeys) ? adoptedFindingKeys : []);
+  }, [adoptedFindingKeys]);
+
+  const toggle = (key) => {
+    setSelectedKeys((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    );
+  };
+
+  const selected = findings.filter((f) => selectedKeys.includes(f.key) && !adopted.has(f.key));
+
+  const adoptSelected = async () => {
+    if (!selected.length || adopting) return;
+    setAdopting(true);
+    const result = await onAdoptFindings?.(selected);
+    setAdopting(false);
+    // 只有整批成功才清空选择；失败时保留勾选，作者可以直接重试。
+    if (result?.ok) setSelectedKeys([]);
+  };
 
   return (
     <div className={`ct-action-card${applied ? ' is-applied' : ''}`}>
@@ -65,13 +93,15 @@ export default function ActionCard({
         <div className="ct-finding-list">
           {findings.map((finding) => {
             const located = finding.status === 'located';
+            const isAdopted = adopted.has(finding.key);
+            const isSelected = selectedKeys.includes(finding.key);
             return (
               <div
                 key={finding.key}
                 data-finding-key={finding.key}
                 className={`ct-finding${located ? '' : ' is-unlocated'}${
                   finding.key === activeFindingKey ? ' is-active' : ''
-                }`}
+                }${isAdopted ? ' is-adopted' : ''}${isSelected ? ' is-selected' : ''}`}
                 onClick={located ? () => onJumpToFinding?.(finding) : undefined}
                 title={located ? '跳到正文对应位置' : undefined}
               >
@@ -81,26 +111,41 @@ export default function ActionCard({
                   {finding.quote && (
                     <div className="ct-finding-quote">原文：{finding.quote}</div>
                   )}
-                  {located ? (
-                    <Button
-                      size="small"
-                      className="ct-finding-adopt"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAdoptFinding?.(finding);
-                      }}
-                    >
-                      采纳
-                    </Button>
-                  ) : (
+                  {!located && (
                     <span className="ct-finding-tag">
                       全章建议 · {REASON_LABEL[finding.reason] || '未定位'}
                     </span>
                   )}
                 </div>
+                <span
+                  className="ct-finding-check"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {isAdopted ? (
+                    <span className="ct-finding-tag">已采纳</span>
+                  ) : (
+                    <Checkbox
+                      checked={isSelected}
+                      onChange={() => toggle(finding.key)}
+                      aria-label={`选择第 ${finding.marker} 条意见`}
+                    />
+                  )}
+                </span>
               </div>
             );
           })}
+
+          <div className="ct-finding-batch">
+            <Button
+              size="small"
+              type="primary"
+              disabled={!selected.length}
+              loading={adopting}
+              onClick={adoptSelected}
+            >
+              采纳选中（{selected.length}）
+            </Button>
+          </div>
         </div>
       )}
     </div>
