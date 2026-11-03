@@ -1050,8 +1050,7 @@ router.post('/chat', async (req, res) => {
           chars: countWords(segmented.content),
           originalChars: segmented.originalChars,
           truncated: segmented.truncated,
-          trimmedOverruns: segmented.trimmedOverruns,
-          longParagraphSplits: segmented.longParagraphSplits,
+
           durationMs: Date.now() - segmentStartedAt,
           usage: segmented.usage,
         })
@@ -1351,8 +1350,7 @@ router.post('/chat', async (req, res) => {
               calls: [...segmented.calls, ...rewrite.calls],
               callCount: rewrite.callCount,
               degraded: rewrite.degraded || segmented.degraded,
-              trimmedOverruns: rewrite.trimmedOverruns ?? segmented.trimmedOverruns,
-              longParagraphSplits: rewrite.longParagraphSplits,
+
               truncated: rewrite.truncated,
               originalChars: rewrite.originalChars,
               chars: rewrite.chars,
@@ -1522,7 +1520,7 @@ router.post('/chat', async (req, res) => {
     const segmentBadge = segmented ? segmentWriter.segmentBadge(segmented.degraded) : '';
     const truncationBadge =
       segmented && segmented.truncated
-        ? `【字数硬顶 ${segmentWriter.MAX_CHAPTER_CHARS}：已截到最后一个完整段】`
+        ? `【字数安全上限 ${segmentWriter.MAX_CHAPTER_CHARS}：已截到最后一个完整段】`
         : '';
     if (segmentBadge || truncationBadge || badge) {
       payload.reason = [segmentBadge, truncationBadge, badge, payload.reason].filter(Boolean).join(' ');
@@ -1535,8 +1533,7 @@ router.post('/chat', async (req, res) => {
         calls: segmented.callCount,
         continuations: segmented.continuations,
         degraded: segmented.degraded || '',
-        trimmedOverruns: segmented.trimmedOverruns || 0,
-        longParagraphSplits: segmented.longParagraphSplits || 0,
+
         truncated: Boolean(segmented.truncated),
         originalChars: segmented.originalChars || 0,
         chars: segmented.chars || 0,

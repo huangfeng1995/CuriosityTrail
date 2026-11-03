@@ -112,7 +112,7 @@ test('节拍数越界、缺字段、缺 endHook、段数越界都会被拒绝', 
     [
       '全章段数太少',
       makePlan({ beats: makePlan().beats.map((b) => ({ ...b, paragraphs: 1 })) }),
-      /全章段落数必须在 40–55/,
+      /全章段落数必须在 20–80/,
     ],
     [
       '单拍段落少于 3',
@@ -127,17 +127,6 @@ test('节拍数越界、缺字段、缺 endHook、段数越界都会被拒绝', 
         beats: makePlan().beats.map((b, i) => (i === 0 ? { ...b, paragraphs: 11 } : b)),
       }),
       /paragraphs 必须是 3–10/,
-    ],
-    [
-      '全章段数太多',
-      makePlan({
-        beats: [...makePlan().beats, ...makePlan().beats.slice(0, 2)].map((b, i) => ({
-          ...b,
-          id: `B${i + 1}`,
-          paragraphs: 10,
-        })),
-      }),
-      /全章段落数必须在 40–55/,
     ],
     [
       'infoGain 太短',

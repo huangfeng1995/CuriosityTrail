@@ -33,8 +33,9 @@ const MAX_BEATS = 8;
  */
 const MIN_PARAGRAPHS = 3;
 const MAX_PARAGRAPHS = 10;
-const MIN_TOTAL_PARAGRAPHS = 40;
-const MAX_TOTAL_PARAGRAPHS = 55;
+// 段落数只做安全下限（防止把长章规划成几段），不作为文章结构的验收门槛。
+const MIN_TOTAL_PARAGRAPHS = 20;
+const MAX_TOTAL_PARAGRAPHS = 80;
 
 /** 空钩子话术，出现即判不合格 */
 const EMPTY_HOOKS = ['且听下回分解', '欲知后事', '下回分解'];
@@ -50,7 +51,7 @@ const PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象�
 字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
 beats 4–8 个；每拍含 id（B1…Bn）、type（行动|转折|冲突|揭示|决定|过渡）、goal、obstacle、cost、
 delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–10）、endHook（这一拍结束时的悬念或钩子）。
-单章是 5000 字量级的长章：全章 paragraphs 合计 40–55（基线范文 45 段），按这个体量给每拍估段数。
+单章是 5000 字量级的长章：按内容需要给每拍估段数，长章大致 35–60 段即可，不必凑固定段数。
 每个节拍必须让至少一个变量发生改变，必须写出代价，禁止空转抒情段。
 mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不新增未提供的人物或设定。`;
 
