@@ -37,6 +37,13 @@ function isValidTemplate(value) {
 }
 
 /**
+ * 流水线子表。升级库上 PRAGMA foreign_keys 并不可靠（只在首启打开），
+ * 不能指望 ON DELETE CASCADE，删作品时必须逐表显式清理。
+ * 后续新增流水线表也要加到这张清单里，否则会留下孤儿行。
+ */
+const PIPELINE_CHILD_TABLES = ['anchor_violations', 'work_anchors', 'work_blank_areas'];
+
+/**
  * blocks 为权威数据，同时维护 content 纯文本派生快照。
  */
 function deriveContent(blocks) {
@@ -148,14 +155,22 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    // 必须先确认归属：下面的子表清理按 work_id 删，不校验归属会误删别人的数据
+    const work = await ownedWork(req.params.id, req.userId);
+    if (!work) return res.status(404).json({ error: '作品不存在' });
+
     // 先把要删的向量 URI 抓好——作品一删，台账就随外键级联清空了
     await memory.scheduleRemoveWork({ userId: req.userId, workId: req.params.id });
 
-    const result = await run('DELETE FROM works WHERE id = ? AND user_id = ?', [
+    // 外键级联在升级库上不生效，流水线子表必须显式清空
+    for (const table of PIPELINE_CHILD_TABLES) {
+      await run(`DELETE FROM ${table} WHERE work_id = ?`, [req.params.id]);
+    }
+
+    await run('DELETE FROM works WHERE id = ? AND user_id = ?', [
       req.params.id,
       req.userId,
     ]);
-    if (!result.changes) return res.status(404).json({ error: '作品不存在' });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
