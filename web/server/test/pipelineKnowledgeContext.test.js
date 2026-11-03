@@ -149,7 +149,7 @@ test('PV7：chapter_seq=3 表示第 3 章写完后生效，第 2/3 章只见短�
   assert.strictEqual(ch2.meta.knowledgeCount, 1);
   assert.ok(!ch2Section.includes('司马懿曾向曹操举荐他，此事只有曹操与荀彧知道'), '第 2 章不得出现 F2 全文');
   assert.ok(!ch2Section.includes('关键词：'), '第 2 章不得出现 F2 关键词字段');
-  assert.ok(ch2Section.includes('F1（司马懿曾向曹操举荐他，此'), '未知条目必须带短标题');
+  assert.ok(ch2Section.includes('F1（司马懿曾向曹操举荐他）'), '未知条目必须带短标题，且在逗号前断句');
 
   const ch3 = await assemble(work.id, 'pv7-ch-3');
   const ch3Section = knowledgeSection(ch3.messages[0].content);
@@ -157,7 +157,7 @@ test('PV7：chapter_seq=3 表示第 3 章写完后生效，第 2/3 章只见短�
   assert.strictEqual(ch3.meta.knowledgeCount, 1);
   assert.ok(!ch3Section.includes('司马懿曾向曹操举荐他，此事只有曹操与荀彧知道'), '第 3 章不得出现 F2 全文');
   assert.ok(!ch3Section.includes('关键词：'), '第 3 章不得出现 F2 关键词字段');
-  assert.ok(ch3Section.includes('F1（司马懿曾向曹操举荐他，此'), '未知条目必须带短标题');
+  assert.ok(ch3Section.includes('F1（司马懿曾向曹操举荐他）'), '未知条目必须带短标题，且在逗号前断句');
 
   const ch4 = await assemble(work.id, 'pv7-ch-4');
   const ch4Section = knowledgeSection(ch4.messages[0].content);
@@ -273,7 +273,7 @@ test('超限：8 角色 × 多条事实整段 ≤700 字，先砍未知与证据
   );
   assert.ok(!section.includes('证据：'), '超限时证据行应先于允许揭示被砍');
   assert.ok(!section.includes('未知：'), '超限时「未知」列表应先被砍');
-  assert.ok(section.includes('F1（事实1：长长长长长长长长'), '超限时保留编号+短标题');
+  assert.ok(section.includes('F1（事实1）'), '超限时保留编号+短标题，且在冒号前断句');
   assert.ok(!section.includes('长'.repeat(80)), '超限时砍掉内容解释');
   assert.ok(result.meta.knowledgeCount <= 8);
   const omitted = 8 - result.meta.knowledgeCount;
@@ -372,9 +372,64 @@ test('无节拍表 + 有未知事实：未知事实只进「未知」列表，�
   const section = knowledgeSection(result.messages[0].content);
   const allowed = allowedLine(section);
 
-  assert.ok(section.includes('未知：F2（曹操有意废长立幼，此事由'), '未知事实必须带短标题');
+  assert.ok(section.includes('未知：F2（曹操有意废长立幼）'), '未知事实必须带短标题，且在逗号前断句');
   assert.ok(!section.includes('曹操有意废长立幼，此事由荀彧密报'), '未知事实不得带完整正文');
   assert.ok(!allowed.includes('F2'), '未知事实不得进入允许揭示');
   assert.ok(!allowed.includes('曹操有意废长立幼，此事由荀彧密报'), '未知事实内容不得进入允许揭示');
   assert.ok(!allowed.includes('废长立幼'), '未知事实关键词不得进入允许揭示');
+});
+
+// ---------------------------------------------------------------------------
+// 7. 短标题按句读断句
+// ---------------------------------------------------------------------------
+
+test('短标题断句：标点前断、窗口末尾是标点、无标点硬截加省略号', async () => {
+  const work = await createWork('history_thriller', '短标题断句作品');
+  await addChapter(work.id, {
+    id: 'title-ch',
+    seq: 1,
+    title: '试探',
+    outline: '司马懿在府中。',
+  });
+  await addCharacter(work.id, { id: 'title-sima', name: '司马懿' });
+  await addCharacter(work.id, { id: 'title-yang', name: '杨俊' });
+
+  // 三种边界：逗号在 10 字处 / 逗号正好是窗口第 12 字 / 前 12 字没有标点。
+  await addFact(work.id, {
+    id: 'title-f1',
+    content: '司马懿曾向曹操举荐他，此事只有曹操与荀彧知道',
+    createdAt: '2026-01-01T00:00:01.000Z',
+  });
+  await addFact(work.id, {
+    id: 'title-f2',
+    content: '甲乙丙丁戊己庚辛壬癸子，后续内容',
+    createdAt: '2026-01-01T00:00:02.000Z',
+  });
+  await addFact(work.id, {
+    id: 'title-f3',
+    content: '壹贰叁肆伍陆柒捌玖拾甲乙，丙丁',
+    createdAt: '2026-01-01T00:00:03.000Z',
+  });
+
+  // 知情边界段只在矩阵有行时才生成；这行第 1 章不可见（写完后才生效），
+  // 只用来打开分区，不影响司马懿的「未知」。
+  await addKnowledge(work.id, 'title-yang', 'title-f1', 1, 'knows');
+
+  const result = await assemble(work.id, 'title-ch');
+  const section = knowledgeSection(result.messages[0].content);
+  const line = section.split('\n').find((row) => row.startsWith('【司马懿】')) || '';
+
+  assert.ok(line.includes('F1（司马懿曾向曹操举荐他）'), '逗号在窗口内：断在逗号前，不带「，此」');
+  assert.ok(line.includes('F2（甲乙丙丁戊己庚辛壬癸子）'), '逗号是窗口最后一个字：仍断在逗号前');
+  assert.ok(
+    line.includes('F3（壹贰叁肆伍陆柒捌玖拾甲乙…）'),
+    '前 12 字没有标点：硬截并补省略号'
+  );
+  assert.ok(!line.includes('F1（司马懿曾向曹操举荐他，此'), '不能留下「逗号 + 孤立单字」');
+
+  const titles = Array.from(line.matchAll(/F\d+（([^）]+)）/g)).map((m) => m[1]);
+  assert.strictEqual(titles.length, 3, '三条未知事实都应带短标题');
+  for (const title of titles) {
+    assert.ok(!/[。，、；：！？]/u.test(title), `短标题不得含句读：${title}`);
+  }
 });

@@ -1020,17 +1020,47 @@ const KNOWLEDGE_RULES = [
 /** 「1 条」是本章总量，不是每个角色各 1 条 */
 const KNOWLEDGE_TOTAL_NOTE = '本章总量，不是每角色';
 
+/** 短标题窗口：最多 12 个字 */
+const FACT_TITLE_LIMIT = 12;
+/** 句读：截断时优先在这些位置断开，避免留下「，此」这种残句 */
+const FACT_TITLE_PUNCT = '。，、；：！？';
+
 /**
  * 事实的展示用短标题。
  *
- * story_facts 没有独立短标题字段，这里取 content 前 12 个字**仅用于注入展示**，
+ * story_facts 没有独立短标题字段，这里从 content 截**仅用于注入展示**，
  * 不改库、不新增字段。未知/怀疑条目必须带上它——只给 F1 编号，
  * 模型不知道 F1 是什么，就无从避开，规则也就不可执行。
+ *
+ * 截断规则：
+ *   1. 在 12 字窗口内找最后一个句读，优先断在它前面并丢掉标点；
+ *   2. 窗口内没有句读就按前 12 字硬截，再剪掉尾部标点；
+ *   3. 硬截（内容仍超过 12 字）时末尾补「…」，让人一眼看出是截断。
+ * 这样不会出现「逗号 + 一个孤立字」的残句。
  */
 function factShortTitle(fact) {
   const content = String(fact.content || '').replace(/\s+/g, ' ').trim();
   if (!content) return '';
-  return Array.from(content).slice(0, 12).join('');
+
+  const chars = Array.from(content);
+  const window = chars.slice(0, FACT_TITLE_LIMIT);
+
+  let cutAt = -1;
+  for (let i = window.length - 1; i >= 0; i -= 1) {
+    if (FACT_TITLE_PUNCT.includes(window[i])) {
+      cutAt = i;
+      break;
+    }
+  }
+
+  if (cutAt >= 0) {
+    const title = window.slice(0, cutAt).join('').replace(/[。，、；：！？]+$/u, '');
+    if (title) return title;
+    // 极端内容以句读开头：退回硬截，至少不能退化成纯编号。
+  }
+
+  const hard = window.join('').replace(/[。，、；：！？]+$/u, '');
+  return chars.length > FACT_TITLE_LIMIT ? `${hard}…` : hard;
 }
 
 /**
