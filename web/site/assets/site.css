@@ -241,12 +241,12 @@ button {
   flex-shrink: 0;
 }
 
-/* 品牌标识：毛笔「寻」字，墨色主体 + 朱砂点睛，跟随主题变量 */
+/* 品牌标识：单笔勾出的钢笔尖，朱砂笔缝延伸成墨迹，跟随主题变量 */
 .brand-logo {
   display: block;
   flex: none;
   width: 30px;
-  height: 34px;
+  height: 30px;
 }
 
 .ct-logo-ink {
@@ -1605,7 +1605,7 @@ html[data-theme='dark'] .own-item {
 
 .foot-brand .brand-logo {
   width: 26px;
-  height: 30px;
+  height: 26px;
 }
 
 .foot-note {
