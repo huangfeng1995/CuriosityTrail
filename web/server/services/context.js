@@ -1252,7 +1252,9 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
       .slice(0, maxCharacters)
       .map((character) => characterLine(character, includeUnknown, compact))
       .filter(Boolean);
-    const omitted = characters.length - lines.length;
+    // 只把「本来在本章候选名单里、却没进注入块」的人算作未注入：
+    // 大纲里完全没出场的人不在候选里，算进来会虚增数字。
+    const omitted = candidates.length - lines.length;
     const blocks = ['## 本章知情边界（硬约束）'];
     if (lines.length) blocks.push(...lines);
     blocks.push('', allowedText(revealLimit));
