@@ -13,6 +13,14 @@
  *   3. toState 合法且为升级；一次只能升一级，跳级进 pending；
  *   4. chapterSeq 与本章一致（「第 N 章写完后生效」）。
  *
+ * 分级落库：
+ *   - suspects / partial：四条全过即自动写（低风险，少收紧一点代价小）；
+ *   - knows / exposed：即使四条全过，也必须进 pending 等作者确认。
+ *
+ * 原因：错误地把某人判成「已知」，会抹掉本来留着的悬念，还会让后文
+ * 出现「他早就知道却一直没反应」的前后矛盾；漏判只是这一章少收紧一点，
+ * 下一章还能补。宁可松，不可错紧。
+ *
  * 失败降级：模型调用/解析失败时零写入，记 knowledge_scan_failed，
  * 下一章继续读旧边界——方向一定是保守，不是激进。
  */
@@ -149,8 +157,16 @@ function scanFailed(workId, chapterId, chapterSeq, reason) {
       reason,
     })
   );
-  return { applied: [], pending: [], failed: true };
+  return { applied: [], pending: [], failed: true, knowledgePendingCount: 0 };
 }
+
+/**
+ * 高置信状态：即使校验全过也不自动写，必须作者确认。
+ *
+ * 错判成「已知/公开」的代价不对称——悬念被抹掉、后文对不上；
+ * 漏判只是少收紧，下一章还能补。
+ */
+const CONFIRM_REQUIRED_STATES = new Set(['knows', 'exposed']);
 
 /**
  * 扫描一章正文中的知情变化。
@@ -195,7 +211,7 @@ async function scanKnowledge(params = {}) {
     [workId]
   );
   if (!characters.length || !facts.length) {
-    return { applied: [], pending: [], failed: false };
+    return { applied: [], pending: [], failed: false, knowledgePendingCount: 0 };
   }
 
   // 与注入块同一套编号：按创建顺序 F1…Fn，模型看到的是编号，落库时再换回 id。
@@ -332,6 +348,12 @@ async function scanKnowledge(params = {}) {
       reject('跳级');
       continue;
     }
+    // 校验都过了，但「已知/公开」是高置信状态：不自动生效。
+    // 注意这条必须放在四条校验之后，跳级等问题仍按原原因进 pending。
+    if (CONFIRM_REQUIRED_STATES.has(toState)) {
+      reject(`需作者确认：${toState} 不能自动生效`);
+      continue;
+    }
 
     const key = `${character.id}\u0000${fact.id}`;
     if (appliedKeys.has(key)) {
@@ -379,7 +401,22 @@ async function scanKnowledge(params = {}) {
   }
 
   if (statements.length) await transaction(statements);
-  return { applied, pending, failed: false };
+  // pending 在没有 UI 之前不能静默堆积：留一条可检索的日志，
+  // 同时在响应里回 knowledgePendingCount，前端/脚本都能看到。
+  if (pending.length) {
+    console.error(
+      JSON.stringify({
+        event: 'knowledge_scan_pending',
+        workId,
+        chapterId,
+        chapterSeq: seq,
+        // 字段名与接口响应保持一致，日志和前端可以用同一个键检索。
+        knowledgePendingCount: pending.length,
+        appliedCount: applied.length,
+      })
+    );
+  }
+  return { applied, pending, failed: false, knowledgePendingCount: pending.length };
 }
 
 module.exports = {

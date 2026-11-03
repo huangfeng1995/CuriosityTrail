@@ -275,7 +275,7 @@ router.post('/:workId/knowledge/scan', async (req, res) => {
       return res.status(err.status).json({ error: err.message });
     }
     console.error('[pipeline] 知情扫描失败:', err);
-    return res.json({ applied: [], pending: [], failed: true });
+    return res.json({ applied: [], pending: [], failed: true, knowledgePendingCount: 0 });
   }
 });
 

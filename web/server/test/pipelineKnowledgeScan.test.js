@@ -3,14 +3,14 @@
 /**
  * HP7：知情扫描与证据句闸门（P.6.5 / PV8）。
  *
- * 五条主场景：
- *   1. 证据句逐字命中 → 自动落库
+ * 主场景：
+ *   1. suspects 证据句逐字命中 → 自动落库
  *   2. 证据句不存在 → 进 pending，不落库
  *   3. 跳级（unknown→knows）→ 进 pending
- *   4. exposed 不自动扩散到其他角色
- *   5. 扫描失败 → 零写入，旧边界不变
- *
- * 另补：chapterSeq 与章节不一致 → 4xx，零写入。
+ *   4. knows 校验全过 → 仍然只进 pending（静默失效守卫）
+ *   5. exposed 不自动落库、不扩散到其他角色
+ *   6. 扫描失败 → 零写入，旧边界不变
+ *   7. chapterSeq 与章节不一致 → 4xx，零写入
  */
 
 const test = require('node:test');
@@ -147,6 +147,7 @@ test('证据句逐字命中：自动写入 knowledge_matrix，chapter_seq=本章
   assert.strictEqual(result.failed, false);
   assert.strictEqual(result.applied.length, 1);
   assert.strictEqual(result.pending.length, 0);
+  assert.strictEqual(result.knowledgePendingCount, 0);
   const rows = await matrixRows(work.id, 1);
   assert.strictEqual(rows.length, 1);
   assert.strictEqual(rows[0].state, 'suspects');
@@ -220,10 +221,46 @@ test('跳级（unknown → knows）：进 pending，不写 knowledge_matrix', as
 });
 
 // ---------------------------------------------------------------------------
-// 4. exposed 不自动扩散到其他角色
+// 4. knows 校验全过 → 仍然只进 pending（静默失效守卫）
 // ---------------------------------------------------------------------------
 
-test('exposed 只写触发角色，不扩散到其他角色', async () => {
+test('knows 校验全过：仍然只进 pending，不写 knowledge_matrix', async () => {
+  const work = await createWork('扫描确知需确认');
+  await addChapter(work.id, { id: 'know-ch', seq: 2 });
+  await addCharacter(work.id, { id: 'know-sima', name: '司马懿' });
+  await addFact(work.id, { id: 'know-f1', content: '司马懿见过密诏' });
+  // 上一章已经是半知，这次 partial → knows 正好升一级，四条校验全过。
+  await addKnowledge(work.id, 'know-sima', 'know-f1', 1, 'partial');
+
+  const result = await scanKnowledge({
+    workId: work.id,
+    chapterId: 'know-ch',
+    chapterSeq: 2,
+    text: '司马懿见过密诏，终于确认是真的。',
+    provider: fakeProvider([
+      {
+        character: '司马懿',
+        factId: 'F1',
+        toState: 'knows',
+        evidence: '司马懿见过密诏',
+      },
+    ]),
+  });
+
+  assert.strictEqual(result.failed, false);
+  assert.strictEqual(result.applied.length, 0, '「已知」不能静默自动落库');
+  assert.strictEqual(result.pending.length, 1);
+  assert.strictEqual(result.knowledgePendingCount, 1);
+  assert.strictEqual(result.pending[0].reason, '需作者确认：knows 不能自动生效');
+  assert.strictEqual((await matrixRows(work.id, 2)).length, 0, '绝不能写 knowledge_matrix');
+  assert.strictEqual((await pendingRows(work.id)).length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 5. exposed 不自动落库、不扩散到其他角色
+// ---------------------------------------------------------------------------
+
+test('exposed 只进 pending，不落库、不扩散到其他角色', async () => {
   const work = await createWork('扫描不扩散');
   await addChapter(work.id, { id: 'spread-ch', seq: 2 });
   await addCharacter(work.id, { id: 'spread-sima', name: '司马懿' });
@@ -246,12 +283,11 @@ test('exposed 只写触发角色，不扩散到其他角色', async () => {
     ]),
   });
 
-  assert.strictEqual(result.applied.length, 1);
-  assert.strictEqual(result.pending.length, 0);
-  const seq2 = await matrixRows(work.id, 2);
-  assert.strictEqual(seq2.length, 1);
-  assert.strictEqual(seq2[0].character_id, 'spread-sima');
-  assert.strictEqual(seq2[0].state, 'exposed');
+  assert.strictEqual(result.applied.length, 0);
+  assert.strictEqual(result.pending.length, 1);
+  assert.strictEqual(result.knowledgePendingCount, 1);
+  assert.strictEqual(result.pending[0].reason, '需作者确认：exposed 不能自动生效');
+  assert.strictEqual((await matrixRows(work.id, 2)).length, 0);
 
   // 杨平没有在正文里看到/被告知，任何一张表都不该出现他的行。
   const yangRows = await db.all(
@@ -259,11 +295,15 @@ test('exposed 只写触发角色，不扩散到其他角色', async () => {
     [work.id, 'spread-yang']
   );
   assert.strictEqual(yangRows.length, 0);
-  assert.strictEqual((await pendingRows(work.id)).length, 0);
+  const yangPending = await db.all(
+    'SELECT * FROM knowledge_pending WHERE work_id = ? AND character_id = ?',
+    [work.id, 'spread-yang']
+  );
+  assert.strictEqual(yangPending.length, 0, 'exposed 不得扩散出其他角色的 pending');
 });
 
 // ---------------------------------------------------------------------------
-// 5. 扫描失败 → 零写入，旧边界不变
+// 6. 扫描失败 → 零写入，旧边界不变
 // ---------------------------------------------------------------------------
 
 test('扫描失败：零写入，旧边界保持不变', async () => {
@@ -303,7 +343,7 @@ test('扫描失败：零写入，旧边界保持不变', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. chapterSeq 与章节不一致 → 400，零写入
+// 7. chapterSeq 与章节不一致 → 400，零写入
 // ---------------------------------------------------------------------------
 
 test('chapterSeq 与章节不一致：拒绝请求，零写入', async () => {
