@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Input, Button, Form, message, Empty, InputNumber, Select } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import api from '../../api/client';
 
 /**
@@ -13,6 +14,7 @@ import api from '../../api/client';
 export default function WorkInfoPanel({ work, onSaved }) {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!work) return;
@@ -96,6 +98,16 @@ export default function WorkInfoPanel({ work, onSaved }) {
         >
           保存作品信息
         </Button>
+        {work.template === 'history_thriller' && (
+          <Button
+            type="link"
+            size="small"
+            block
+            onClick={() => navigate(`/works/${work.id}/pipeline`)}
+          >
+            打开锚点库
+          </Button>
+        )}
       </Form>
     </div>
   );

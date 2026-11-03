@@ -21,6 +21,7 @@ import StylePage from './pages/Style';
 import SettingsPage from './pages/SettingsPage';
 import StatsPage from './pages/Stats';
 import FeedbackPage from './pages/Feedback';
+import PipelinePage from './pages/Pipeline';
 import BrandLogo from './components/BrandLogo';
 
 const { Header, Content } = Layout;
@@ -222,6 +223,14 @@ function AppShell({ isDark, setIsDark }) {
               <WorkspaceProvider>
                 <Workspace />
               </WorkspaceProvider>
+            }
+          />
+          <Route
+            path="/works/:workId/pipeline"
+            element={
+              <div className="ct-page">
+                <PipelinePage />
+              </div>
             }
           />
           <Route
