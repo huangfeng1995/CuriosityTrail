@@ -40,6 +40,10 @@ export default function CharacterPanel({ workId }) {
         speech: '',
         goal: '',
         arc: '',
+        canon: '',
+        stance: '',
+        bottom_line: '',
+        weakness: '',
         notes: '',
       }
     );
@@ -156,6 +160,19 @@ export default function CharacterPanel({ workId }) {
           </Form.Item>
           <Form.Item name="arc" label="成长弧" help="从什么状态变成什么状态。">
             <Input placeholder="从独来独往到愿意信任搭档" />
+          </Form.Item>
+          {/* 历史悬疑模板的四项。留空不写入任何标签，老卡片行为不变。 */}
+          <Form.Item name="canon" label="正史 / 虚构" help="这个人哪些是史实、哪些是虚构。">
+            <Input placeholder="史实人物；早年经历为虚构" />
+          </Form.Item>
+          <Form.Item name="stance" label="立场" help="他站在谁那边，遇到冲突会怎么选。">
+            <Input placeholder="忠于司空，但不愿牵连旧友" />
+          </Form.Item>
+          <Form.Item name="bottom_line" label="底线" help="什么事他绝不会做，越线即人设崩坏。">
+            <Input placeholder="不出卖同僚，不杀妇孺" />
+          </Form.Item>
+          <Form.Item name="weakness" label="弱点" help="能被对手利用的软肋。">
+            <Input placeholder="多疑；护短，容易被家人要挟" />
           </Form.Item>
           <Form.Item name="notes" label="备注">
             <Input.TextArea rows={2} placeholder="禁忌、习惯、小动作" />

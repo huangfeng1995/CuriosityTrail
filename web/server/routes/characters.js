@@ -53,8 +53,23 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { workId, name, aliases, role, identity, personality, speech, goal, arc, relations, notes } =
-    req.body || {};
+  const {
+    workId,
+    name,
+    aliases,
+    role,
+    identity,
+    personality,
+    speech,
+    goal,
+    arc,
+    relations,
+    notes,
+    canon,
+    stance,
+    bottom_line,
+    weakness,
+  } = req.body || {};
 
   if (!workId) return res.status(400).json({ error: '缺少 workId' });
   if (!name || !String(name).trim()) {
@@ -69,8 +84,9 @@ router.post('/', async (req, res) => {
     const ts = now();
     await run(
       `INSERT INTO characters
-         (id, work_id, name, aliases, role, identity, personality, speech, goal, arc, relations, notes, created_at, modified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, work_id, name, aliases, role, identity, personality, speech, goal, arc, relations, notes,
+          canon, stance, bottom_line, weakness, created_at, modified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         workId,
@@ -84,6 +100,10 @@ router.post('/', async (req, res) => {
         arc || '',
         normalizeRelations(relations),
         notes || '',
+        canon ?? null,
+        stance ?? null,
+        bottom_line ?? null,
+        weakness ?? null,
         ts,
         ts,
       ]
@@ -114,8 +134,22 @@ router.get('/:id', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, aliases, role, identity, personality, speech, goal, arc, relations, notes } =
-    req.body || {};
+  const {
+    name,
+    aliases,
+    role,
+    identity,
+    personality,
+    speech,
+    goal,
+    arc,
+    relations,
+    notes,
+    canon,
+    stance,
+    bottom_line,
+    weakness,
+  } = req.body || {};
 
   try {
     const existing = await ownedCharacter(req.params.id, req.userId);
@@ -123,7 +157,8 @@ router.put('/:id', async (req, res) => {
 
     await run(
       `UPDATE characters SET name = ?, aliases = ?, role = ?, identity = ?, personality = ?,
-         speech = ?, goal = ?, arc = ?, relations = ?, notes = ?, modified_at = ?
+         speech = ?, goal = ?, arc = ?, relations = ?, notes = ?,
+         canon = ?, stance = ?, bottom_line = ?, weakness = ?, modified_at = ?
        WHERE id = ?`,
       [
         name !== undefined ? String(name).trim() : existing.name,
@@ -136,6 +171,10 @@ router.put('/:id', async (req, res) => {
         arc !== undefined ? arc : existing.arc,
         relations !== undefined ? normalizeRelations(relations) : existing.relations,
         notes !== undefined ? notes : existing.notes,
+        canon !== undefined ? canon : existing.canon,
+        stance !== undefined ? stance : existing.stance,
+        bottom_line !== undefined ? bottom_line : existing.bottom_line,
+        weakness !== undefined ? weakness : existing.weakness,
         now(),
         req.params.id,
       ]
