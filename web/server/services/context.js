@@ -23,6 +23,7 @@ const { all, get } = require('../database');
 const { getRole } = require('./roles');
 const skills = require('./skills');
 const style = require('./style');
+const { isPipelineEnabled } = require('./pipeline/gate');
 
 /** 大纲最多注入的字符数 */
 const OUTLINE_LIMIT = 4000;
@@ -32,6 +33,10 @@ const CONTINUITY_LIMIT = 500;
 const CONTENT_LIMIT = 12000;
 /** 灵感速记最多注入多少条 */
 const INSPIRATION_LIMIT = 10;
+/** 历史锚点分区上限：整段（含标题、脚注、省略提示）不超过 800 字 */
+const ANCHOR_LIMIT = 800;
+/** 历史锚点最多展示 12 条 */
+const ANCHOR_MAX_ITEMS = 12;
 /** system 上下文总字符预算：约 2.4 万字，超了按优先级让位，给回复留出空间 */
 const CONTEXT_BUDGET = 24000;
 /** 侧边栏历史消息的字符预算（只保留最近的部分，更早的省略） */
@@ -46,7 +51,7 @@ const HISTORY_BUDGET = 12000;
 const PRIORITY = {
   ROLE: 1,        // 角色提示词、本次任务要求
   CONTENT: 2,     // 作品/章节信息、当前正文、段落索引、衔接
-  FACT: 3,        // 人物卡、设定卡
+  FACT: 3,        // 人物卡、设定卡、历史锚点
   MEMORY: 4,      // 长期记忆
   RETRIEVAL: 5,   // 检索资料
   INSPIRATION: 6, // 灵感速记
@@ -381,6 +386,10 @@ async function assembleContext(params = {}) {
     styleRules: Boolean(styleText),
     emptyChapter: false,
     previousChapter: '',
+    pipeline: false,
+    // 本轮实际注入的锚点条数。关闭模板、库为空、或一条都没放进来时都是 0。
+    // 「开了模板但注入 0 条」必须是一个能被看见的事实，而不是沉默。
+    anchorCount: 0,
   };
 
   if (styleText) {
@@ -396,6 +405,7 @@ async function assembleContext(params = {}) {
   }
 
   if (work) {
+    meta.pipeline = isPipelineEnabled(work);
     const workLines = ['## 作品信息'];
     workLines.push(`标题：${work.title}`);
     if (work.genre) workLines.push(`题材：${work.genre}`);
@@ -498,6 +508,47 @@ async function assembleContext(params = {}) {
         `## 人物设定\n${selected.map(formatCharacter).join('\n\n')}`,
         PRIORITY.FACT
       );
+    }
+  }
+
+  // ---- 3.5 历史锚点层 ----
+  // 位置：人物之后、知情边界（HP6）之前。
+  //
+  // 只在模板启用时查库；关闭态不新增任何查询，也不产生任何段落，
+  // 保证 system 内容与改动前逐字节相同。
+  //
+  // 这一段是 fixed：它要么完整出现在上下文里，要么不出现。
+  // 因此它的长度会从总预算里预扣（见下方 applyBudget 调用），
+  // 不能让它去和正文抢同一份额度。
+  let anchorText = '';
+  if (meta.pipeline && work) {
+    try {
+      const signalParts = [
+        chapter ? chapter.title : '',
+        chapter ? chapter.outline : '',
+      ];
+      if (chapter && chapter.seq > 1) {
+        const prev = await get(
+          `SELECT * FROM chapters
+           WHERE work_id = ? AND seq < ?
+           ORDER BY seq DESC LIMIT 1`,
+          [workId, chapter.seq]
+        );
+        if (prev) signalParts.push(chapterBody(prev).slice(-CONTINUITY_LIMIT));
+      }
+      const rows = await all(
+        `SELECT * FROM work_anchors
+         WHERE work_id = ? AND status = 'active'
+         ORDER BY created_at ASC, id ASC`,
+        [workId]
+      );
+      const built = buildAnchorSection(rows, signalParts.filter(Boolean).join('\n'));
+      anchorText = built.text;
+      meta.anchorCount = built.count;
+      if (anchorText) addPart(anchorText, PRIORITY.FACT, true);
+    } catch (e) {
+      // 取锚点失败只跳过该分区，不能让整轮写作失败。
+      console.error('[context] 历史锚点加载失败:', e.message);
     }
   }
 
@@ -707,7 +758,10 @@ async function assembleContext(params = {}) {
 
   const fitted = applyBudget(
     parts,
-    Math.max(2000, CONTEXT_BUDGET - skillsText.length - styleText.length)
+    Math.max(
+      2000,
+      CONTEXT_BUDGET - skillsText.length - styleText.length - anchorText.length
+    )
   );
   const segments = fitted.map((p) => p.text).filter(Boolean);
   if (skillsText) segments.push(skillsText);
@@ -743,6 +797,159 @@ function statusLabel(status) {
     done: '已完成',
   };
   return map[status] || status || '草稿';
+}
+
+// ---------------------------------------------------------------------------
+// 历史锚点分区
+// ---------------------------------------------------------------------------
+
+const ANCHOR_CONFIDENCE_RANK = { sourced: 0, inferable: 1, blank: 2 };
+
+/** 零命中兜底时置顶的说明行：让模型和作者都知道这些锚点不是按本章主体挑的 */
+const ANCHOR_FALLBACK_NOTICE = '以下锚点未命中本章主体，作为全局约束带入';
+
+/**
+ * 锚点的 subject 是否命中本章的信号（标题 / 大纲 / 上一章结尾）。
+ *
+ * 这是 P.5.5 的「按主体挑选」部分，不含不可变 time/office 的通用条目——
+ * 后者是「每章都该带上」，不是「这一章讲到了它」。
+ */
+function subjectAnchorRelevant(anchor, signal) {
+  const subject = String(anchor.subject || '').trim();
+  return Boolean(subject) && signal.includes(subject);
+}
+
+/**
+ * 锚点是否该进本章上下文。
+ *
+ * P.5.5 的选择规则：subject 命中本章标题 / 大纲 / 上一章结尾；
+ * 另外 time / office 类的不可变锚点无条件带上——章序、官制错一次，
+ * 整段情节就站不住了。
+ */
+function anchorRelevant(anchor, signal) {
+  if (anchor.immutable === 1 && (anchor.kind === 'time' || anchor.kind === 'office')) {
+    return true;
+  }
+  return subjectAnchorRelevant(anchor, signal);
+}
+
+function sourceCitation(anchor) {
+  const title = String(anchor.source_title || '')
+    .trim()
+    .replace(/^《/, '')
+    .replace(/》$/, '')
+    .trim();
+  if (!title) return '';
+  const locator = String(anchor.source_locator || '').trim();
+  return locator ? `《${title}·${locator}》` : `《${title}》`;
+}
+
+function formatAnchorLine(anchor) {
+  const claim = truncate(String(anchor.claim || '').trim(), 240);
+  if (anchor.confidence === 'blank') {
+    const usable = String(anchor.usable_for || '').trim();
+    return `[空白·可虚构] ${claim}${usable ? `——${usable}` : ''}`;
+  }
+  const citation = sourceCitation(anchor);
+  if (anchor.confidence === 'sourced') {
+    return `[有出处] ${claim}${citation ? `（${citation}）` : ''}`;
+  }
+  return `[可推定] ${claim}${citation ? `（${citation}一般认为）` : '（一般认为）'}`;
+}
+
+/**
+ * 生成「历史锚点」分区。
+ *
+ * 上限 800 字是**整段**上限：标题、说明行、每行、脚注、省略提示都算在内。
+ *
+ * 两种模式：
+ *   - 正常：subject 命中本章主体 → 按「不可变优先 → sourced > inferable > blank
+ *     → 创建时间」排序截断；
+ *   - 零命中兜底：一条都没命中但库里有 active 锚点 → 改为按「不可变
+ *     time/office 优先 → 不可变 → 出处等级」挑前 N 条，并在段首说明
+ *     这些是作为全局约束带入的。宁可只剩说明行，也不返回空段。
+ *
+ * @param {Array<Object>} rows status='active' 的锚点
+ * @param {string} signal 本章标题 / 大纲 / 上一章结尾
+ * @returns {{text: string, count: number}} 空 text 表示没有可注入的锚点；
+ *   count 是实际写进分区的条数（「已省略」的不算）
+ */
+function buildAnchorSection(rows, signal) {
+  const active = (rows || []).filter((a) => a && a.subject != null);
+  if (!active.length) return { text: '', count: 0 };
+
+  // 零命中兜底：subject 一条都没命中时，不能静默什么都不注入——
+  // 作者看到的是「开了模板却毫无效果」，和风格参照的老毛病一模一样。
+  const subjectHits = active.filter((a) => subjectAnchorRelevant(a, signal));
+  const fallback = subjectHits.length === 0;
+  const selected = fallback
+    ? active
+    : active.filter((a) => anchorRelevant(a, signal));
+
+  if (!selected.length) return { text: '', count: 0 };
+
+  const isImmutableTimeOffice = (a) =>
+    a.immutable === 1 && (a.kind === 'time' || a.kind === 'office');
+
+  selected.sort((a, b) => {
+    // 兜底模式：time/office 的不可变锚点（年号、官制）先上，它们是全局约束
+    if (fallback) {
+      const global = isImmutableTimeOffice(b) - isImmutableTimeOffice(a);
+      if (global) return global;
+    }
+    const immutable = (b.immutable === 1 ? 1 : 0) - (a.immutable === 1 ? 1 : 0);
+    if (immutable) return immutable;
+    const rank =
+      (ANCHOR_CONFIDENCE_RANK[a.confidence] ?? 99) -
+      (ANCHOR_CONFIDENCE_RANK[b.confidence] ?? 99);
+    if (rank) return rank;
+    return String(a.created_at || '').localeCompare(String(b.created_at || '')) ||
+      String(a.id || '').localeCompare(String(b.id || ''));
+  });
+
+  const HEADING = '## 历史锚点（本章硬约束）';
+  const FOOTER =
+    '本章不可改动：上列 [有出处]/[可推定] 条目。空白区可虚构，但不得写成确凿史实。';
+
+  const render = (lines, omitted) => {
+    const blocks = [HEADING];
+    if (fallback) blocks.push(ANCHOR_FALLBACK_NOTICE);
+    blocks.push(...lines);
+    // 兜底且一条都放不进时，只留说明行：此时「已省略」只是噪音。
+    if (omitted > 0 && lines.length) blocks.push(`…（已省略 ${omitted} 条）`);
+    return `${blocks.join('\n')}\n\n${FOOTER}`;
+  };
+
+  const lines = [];
+  for (const anchor of selected) {
+    if (lines.length >= ANCHOR_MAX_ITEMS) break;
+    const formatted = formatAnchorLine(anchor);
+    const next = lines.concat(formatted);
+    const omitted = selected.length - next.length;
+    // 用「下一行 + 最坏省略提示」试算，保证最终整段不超 800 字。
+    if (render(next, omitted).length > ANCHOR_LIMIT) break;
+    lines.push(formatted);
+  }
+
+  if (!lines.length) {
+    // 兜底模式至少留下说明行；正常模式则返回空段（不产生空标题）。
+    return fallback
+      ? { text: render([], 0), count: 0 }
+      : { text: '', count: 0 };
+  }
+
+  const omitted = selected.length - lines.length;
+  let text = render(lines, omitted);
+  // 兜底：省略提示或脚注导致越界时，继续从尾部让位。
+  while (lines.length && text.length > ANCHOR_LIMIT) {
+    lines.pop();
+    text = render(lines, selected.length - lines.length);
+  }
+  if (lines.length) return { text, count: lines.length };
+  // 让位到一条不剩：兜底模式仍保留说明行（宁可只有这一行，也不返回空段）。
+  return fallback
+    ? { text: render([], 0), count: 0 }
+    : { text: '', count: 0 };
 }
 
 module.exports = {
