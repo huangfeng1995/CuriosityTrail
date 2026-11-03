@@ -279,4 +279,200 @@ router.post('/:workId/knowledge/scan', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// 待确认队列
+// ---------------------------------------------------------------------------
+
+function toPendingKnowledge(row) {
+  return {
+    id: row.id,
+    chapterId: row.chapter_id,
+    chapterSeq: row.chapter_seq,
+    characterId: row.character_id,
+    characterName: row.character_name,
+    factId: row.fact_id,
+    factLabel: row.fact_label,
+    fromState: row.from_state,
+    toState: row.to_state,
+    evidence: row.evidence,
+    reason: row.reason,
+    status: row.status,
+    createdAt: row.created_at,
+  };
+}
+
+function toViolation(row) {
+  return {
+    id: row.id,
+    chapterId: row.chapter_id,
+    chapterSeq: row.chapter_seq,
+    chapterTitle: row.chapter_title || '',
+    anchorId: row.anchor_id,
+    ruleType: row.rule_type,
+    severity: row.severity,
+    quote: row.quote,
+    offsetStart: row.offset_start,
+    detail: row.detail || '',
+    createdAt: row.created_at,
+  };
+}
+
+/**
+ * 待确认队列：知情变化 + 本章锚点冲突。
+ *
+ * 这两类都是「引擎已经发现、但不能自己生效」的东西，必须集中给作者看；
+ * 否则 pending 只是在库里堆积，等于静默丢弃。
+ */
+router.get('/:workId/pending', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const knowledge = await all(
+      `SELECT * FROM knowledge_pending
+       WHERE work_id = ? AND status = 'pending'
+       ORDER BY created_at ASC, id ASC`,
+      [work.id]
+    );
+    const violations = await all(
+      `SELECT v.*, c.title AS chapter_title, c.seq AS chapter_seq
+       FROM anchor_violations v
+       LEFT JOIN chapters c ON c.id = v.chapter_id
+       WHERE v.work_id = ? AND v.dismissed = 0
+       ORDER BY v.created_at ASC, v.id ASC`,
+      [work.id]
+    );
+
+    return res.json({
+      knowledge: knowledge.map(toPendingKnowledge),
+      violations: violations.map(toViolation),
+    });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+/**
+ * 确认一条知情变化。
+ *
+ * 这条路由就是「作者确认后才落库」的闸门：扫描自动写入只到 suspects/partial，
+ * knows/exposed 与任何校验不过的条目都停在这里，等这一步。
+ */
+router.post('/:workId/pending/knowledge/:id/confirm', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const row = await get(
+      'SELECT * FROM knowledge_pending WHERE id = ? AND work_id = ?',
+      [req.params.id, work.id]
+    );
+    if (!row) return res.status(404).json({ error: '待确认条目不存在' });
+    if (row.status !== 'pending') {
+      return res.status(409).json({ error: `当前状态 ${row.status} 不能确认` });
+    }
+    // 角色或事实没解析出来时不能硬写：matrix 的外键会直接失败。
+    if (!row.character_id || !row.fact_id) {
+      return res.status(422).json({
+        error: '这一条的角色或事实没能对应到库里，不能确认；请先补齐人物/事实后重新扫描',
+      });
+    }
+    if (!knowledgeScan.STATES.has(row.to_state)) {
+      return res.status(422).json({ error: `状态不合法：${row.to_state}` });
+    }
+
+    const exists = await get(
+      `SELECT id FROM knowledge_matrix
+       WHERE character_id = ? AND fact_id = ? AND chapter_seq = ?`,
+      [row.character_id, row.fact_id, row.chapter_seq]
+    );
+    if (exists) {
+      return res.status(409).json({ error: '本章已有该角色/事实的知情记录，不能重复写入' });
+    }
+
+    const ts = now();
+    await transaction([
+      {
+        sql: `INSERT INTO knowledge_matrix
+                (id, work_id, character_id, fact_id, chapter_seq, state,
+                 evidence_id, source_chapter_id, note, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+        params: [
+          crypto.randomUUID(),
+          work.id,
+          row.character_id,
+          row.fact_id,
+          row.chapter_seq,
+          row.to_state,
+          row.chapter_id,
+          row.evidence,
+          ts,
+        ],
+      },
+      {
+        sql: `UPDATE knowledge_pending SET status = 'confirmed', modified_at = ?
+              WHERE id = ?`,
+        params: [ts, row.id],
+      },
+    ]);
+
+    return res.json({ ok: true, knowledge: toPendingKnowledge({ ...row, status: 'confirmed' }) });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+/** 驳回一条知情变化：只改 pending 状态，不碰 knowledge_matrix。 */
+router.post('/:workId/pending/knowledge/:id/dismiss', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const row = await get(
+      'SELECT * FROM knowledge_pending WHERE id = ? AND work_id = ?',
+      [req.params.id, work.id]
+    );
+    if (!row) return res.status(404).json({ error: '待确认条目不存在' });
+    if (row.status !== 'pending') {
+      return res.status(409).json({ error: `当前状态 ${row.status} 不能驳回` });
+    }
+
+    await run(
+      "UPDATE knowledge_pending SET status = 'dismissed', modified_at = ? WHERE id = ?",
+      [now(), row.id]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+/**
+ * 驳回一条锚点冲突。
+ *
+ * block 级（有出处 + 不可变）不允许驳回：它意味着正文与史实硬冲突，
+ * 只能改正文，不能靠点一下让它消失。
+ */
+router.post('/:workId/violations/:id/dismiss', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const row = await get(
+      'SELECT * FROM anchor_violations WHERE id = ? AND work_id = ?',
+      [req.params.id, work.id]
+    );
+    if (!row) return res.status(404).json({ error: '冲突记录不存在' });
+    if (row.severity === 'block') {
+      return res.status(409).json({ error: 'block 级冲突必须改写正文，不能驳回' });
+    }
+    if (row.dismissed === 1) return res.json({ ok: true });
+
+    await run('UPDATE anchor_violations SET dismissed = 1 WHERE id = ?', [row.id]);
+    return res.json({ ok: true });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
 module.exports = router;

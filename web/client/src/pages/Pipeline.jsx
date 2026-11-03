@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Empty, Spin } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import AnchorLibrary from '../components/Pipeline/AnchorLibrary';
+import PendingQueue from '../components/Pipeline/PendingQueue';
 
 /**
  * 历史悬疑流水线的作者页。
@@ -14,6 +15,8 @@ import AnchorLibrary from '../components/Pipeline/AnchorLibrary';
 export default function Pipeline() {
   const { workId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(searchParams.get('tab') === 'pending' ? 'pending' : 'anchors');
   const [work, setWork] = useState(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -86,7 +89,32 @@ export default function Pipeline() {
         </Button>
       </div>
 
-      <AnchorLibrary workId={work.id} />
+      <div className="ct-pipeline-tabs" role="tablist" aria-label="历史悬疑工具">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'anchors'}
+          className={`ct-pipeline-tab${tab === 'anchors' ? ' is-active' : ''}`}
+          onClick={() => setTab('anchors')}
+        >
+          锚点库
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'pending'}
+          className={`ct-pipeline-tab${tab === 'pending' ? ' is-active' : ''}`}
+          onClick={() => setTab('pending')}
+        >
+          待确认
+        </button>
+      </div>
+
+      {tab === 'anchors' ? (
+        <AnchorLibrary workId={work.id} />
+      ) : (
+        <PendingQueue workId={work.id} />
+      )}
     </div>
   );
 }
