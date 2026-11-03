@@ -125,9 +125,9 @@ test.after(async () => {
 // 迁移
 // ---------------------------------------------------------------------------
 
-test('迁移：user_version 7 → 9，原有数据行数不变，works 补上 template', async () => {
+test('迁移：user_version 7 → 10，原有数据行数不变，works 补上 template', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 9, '迁移后版本号应为 9');
+  assert.strictEqual(version.user_version, 10, '迁移后版本号应为 10');
 
   for (const [table, expected] of Object.entries(LEGACY_COUNTS)) {
     const row = await db.get(`SELECT COUNT(*) AS c FROM ${table}`);

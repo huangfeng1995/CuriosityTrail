@@ -42,6 +42,7 @@ const {
 const referenceAnchor = require('../services/agent/referenceAnchor');
 const segmentWriter = require('../services/agent/segmentWriter');
 const { checkAnchors } = require('../services/pipeline/anchorCheck');
+const knowledgeScan = require('../services/pipeline/knowledgeScan');
 
 const router = express.Router();
 
@@ -1836,6 +1837,19 @@ router.post('/chat', async (req, res) => {
       // 前端不读也不影响；存在就是为了让「命中了什么」有据可查。
       anchorViolations,
     });
+
+    // ---- 知情扫描（HP7）----
+    //
+    // 正文交付之后异步触发，不阻塞作者继续写。扫描失败只降级：
+    // 本章不更新、下一章继续用旧边界——保守方向，绝不拿猜测改边界。
+    if (meta.pipeline && generatedProse && chapterId && payload.content.trim()) {
+      const scanText = payload.content;
+      setImmediate(() => {
+        knowledgeScan
+          .scanKnowledge({ workId, chapterId, text: scanText })
+          .catch((err) => console.error('[ai] 知情扫描失败（已跳过）:', err.message));
+      });
+    }
   } catch (err) {
     console.error('AI chat 失败：', err.message);
 

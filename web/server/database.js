@@ -30,8 +30,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 6 → 7：卡片提案（card_proposals）与卡片来源列。
  * 版本 7 → 8：历史悬疑模板开关（works.template）与锚点三表。
  * 版本 8 → 9：人物卡正史/立场/底线/弱点，秘密/事实/知情矩阵/证据四表。
+ * 版本 9 → 10：知情扫描待确认表（knowledge_pending）。
  */
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 /**
  * 版本号之前的老库遗留表。
@@ -552,6 +553,30 @@ CREATE TABLE IF NOT EXISTS evidence_items (
   created_at    TEXT NOT NULL,
   modified_at   TEXT NOT NULL
 );
+
+-- 待确认的知情变化：扫描没有全过的条目先落在这里，作者确认后才写 knowledge_matrix。
+-- 实体可能没解析出来（角色不存在/事实不存在），所以 character_id、fact_id 允许 NULL，
+-- 同时保留模型给的原始名字/编号，作者才能判断它到底想说什么。
+CREATE TABLE IF NOT EXISTS knowledge_pending (
+  id            TEXT PRIMARY KEY,
+  work_id       TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  chapter_id    TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+  chapter_seq   INTEGER NOT NULL,
+  character_id  TEXT REFERENCES characters(id) ON DELETE SET NULL,
+  character_name TEXT NOT NULL,
+  fact_id       TEXT REFERENCES story_facts(id) ON DELETE SET NULL,
+  fact_label    TEXT NOT NULL,
+  from_state    TEXT NOT NULL,
+  to_state      TEXT NOT NULL,
+  evidence      TEXT NOT NULL,
+  reason        TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','confirmed','dismissed')),
+  created_at    TEXT NOT NULL,
+  modified_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_pending_work
+  ON knowledge_pending (work_id, status, created_at);
 
 `;
 

@@ -159,9 +159,9 @@ test.after(async () => {
 // 迁移
 // ---------------------------------------------------------------------------
 
-test('迁移：user_version 8 → 9，行数不变，四列默认 NULL，新表存在', async () => {
+test('迁移：user_version 8 → 10，行数不变，四列默认 NULL，新表存在', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 9);
+  assert.strictEqual(version.user_version, 10);
 
   for (const [table, expected] of Object.entries(LEGACY_COUNTS)) {
     assert.strictEqual(migratedCounts[table], expected, `${table} 迁移后行数不能变化`);
@@ -183,9 +183,9 @@ test('迁移：user_version 8 → 9，行数不变，四列默认 NULL，新表�
   const tables = await db.all(
     `SELECT name FROM sqlite_master
      WHERE type = 'table' AND name IN
-       ('story_secrets','story_facts','knowledge_matrix','evidence_items')`
+       ('story_secrets','story_facts','knowledge_matrix','evidence_items','knowledge_pending')`
   );
-  assert.strictEqual(tables.length, 4, '秘密/事实/矩阵/证据四表都应创建');
+  assert.strictEqual(tables.length, 5, '秘密/事实/矩阵/证据/待确认五表都应创建');
 });
 
 // ---------------------------------------------------------------------------

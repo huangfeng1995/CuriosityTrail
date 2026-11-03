@@ -15,6 +15,7 @@ const { all, get, run, transaction } = require('../database');
 const { ownedWork } = require('../services/scope');
 const { isPipelineEnabled } = require('../services/pipeline/gate');
 const anchors = require('../services/pipeline/anchors');
+const knowledgeScan = require('../services/pipeline/knowledgeScan');
 
 const router = express.Router();
 
@@ -239,5 +240,43 @@ function statusHandler(action) {
 
 router.post('/:workId/anchors/:id/activate', statusHandler('activate'));
 router.post('/:workId/anchors/:id/reject', statusHandler('reject'));
+
+// ---------------------------------------------------------------------------
+// 知情扫描（HP7）
+// ---------------------------------------------------------------------------
+
+/**
+ * 扫描正文里的知情变化。
+ *
+ * 扫描失败是**降级**，不是错误响应：本章不更新、旧边界继续用，
+ * 前端不需要为它弹红条。只有输入本身不合法（章节不存在/章节号不符）
+ * 才返回 4xx。
+ */
+router.post('/:workId/knowledge/scan', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const { chapterId, chapterSeq, text } = req.body || {};
+    if (!chapterId) return res.status(400).json({ error: '缺少 chapterId' });
+    if (!text || !String(text).trim()) {
+      return res.status(400).json({ error: '缺少要扫描的正文' });
+    }
+
+    const result = await knowledgeScan.scanKnowledge({
+      workId: work.id,
+      chapterId,
+      chapterSeq,
+      text: String(text),
+    });
+    return res.json(result);
+  } catch (err) {
+    if (err instanceof knowledgeScan.ScanInputError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    console.error('[pipeline] 知情扫描失败:', err);
+    return res.json({ applied: [], pending: [], failed: true });
+  }
+});
 
 module.exports = router;
