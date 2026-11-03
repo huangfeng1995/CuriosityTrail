@@ -438,14 +438,10 @@ body {
   display: flex;
   overflow: hidden;
 
-  /* 正文宽度上限。
-     原来写死 960px——三栏时中栏本来就窄，正文再卡一道，
-     大屏上左右空出来一大片。提出来做成变量，专注模式再放宽一档。
-
-     960px 是 55 汉字/行，本来就偏长了（中文舒服在 40–50 字/行），
-     所以只敢放到 1160px（59 字/行）。再宽眼睛回行容易跳行，
-     那比「左右空着」更伤。 */
-  --ct-editor-width: 1000px;
+  /* 正文列宽度上限：随视口在 960–1100px 之间走。
+     三栏时中栏本来就窄，正文再卡一道，大屏上左右会空出一大片；
+     1100px 约 66 汉字/行，再宽回行容易跳行。 */
+  --ct-editor-width: clamp(960px, 76vw, 1100px);
 }
 
 .ct-workspace.is-focus {
@@ -548,26 +544,28 @@ body.ct-resizing * {
 }
 
 /* ---------- 把手上的折叠按钮 ----------
-   位于把手顶部，一个小三角，点击收起对应侧栏。
+   位于把手顶部，点击收起对应侧栏。
+   常态就露出来（半透明），鼠标靠近变实——收起入口不能只在悬停时存在，
+   否则作者根本不知道这两栏是可以收的。
    不参与拖拽（stopPropagation），所以不会误触拖动。 */
 .ct-resizer-collapse {
   position: absolute;
   top: 8px;
   left: 50%;
   transform: translateX(-50%);
-  width: 14px;
-  height: 22px;
-  border: none;
+  width: 18px;
+  height: 26px;
+  border: 1px solid var(--border);
   background: var(--bg-sunken);
   color: var(--text-secondary);
   font-size: 14px;
-  line-height: 22px;
+  line-height: 24px;
   text-align: center;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 0;
   z-index: 6;
-  opacity: 0;
+  opacity: 0.55;
   transition: opacity 0.16s ease, background-color 0.16s ease;
 }
 .ct-resizer:hover .ct-resizer-collapse,
@@ -1421,7 +1419,9 @@ body.ct-resizing * {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px 16px;
-  max-width: 860px;
+  /* 与正文列同宽，并让出块按钮沟，标题和正文首字对齐 */
+  max-width: var(--ct-editor-width, 1000px);
+  padding-left: 44px;
   margin: 0 auto;
 }
 .ct-chapter-title {
@@ -1735,6 +1735,10 @@ body.ct-resizing * {
 @media (max-width: 768px) {
   .ct-editor-head {
     padding: 12px 14px 8px;
+  }
+  /* 移动端没有块按钮沟，标题不再让位 */
+  .ct-editor-head-row {
+    padding-left: 0;
   }
   .ct-editor-scroll {
     padding: 18px 14px 100px;

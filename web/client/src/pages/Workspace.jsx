@@ -91,6 +91,22 @@ export default function Workspace() {
     };
   }, [messages, sending, goToPending, setFocusMode, toast]);
 
+  // 桌面端折叠快捷键：⌘/Ctrl + \ 收右栏，⌘/Ctrl + Shift + \ 收左栏。
+  // 移动端是抽屉布局，没有可收的两栏；专注模式里两栏已被盖住，
+  // 这时按键不该顺手改掉作者平时的折叠偏好。
+  useEffect(() => {
+    if (isMobile || focusMode) return;
+    const onKeyDown = (e) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key !== '\\') return;
+      e.preventDefault();
+      if (e.shiftKey) toggleLeft();
+      else toggleRight();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isMobile, focusMode, toggleLeft, toggleRight]);
+
   // 登记当前作品，让 FocusProvider 能判断「是不是换作品了」。
   //
   // 「换作品就退出专注模式」这个判断放在 FocusProvider 里：
@@ -311,7 +327,7 @@ export default function Workspace() {
         className="ct-col-toggle is-left"
         data-hidden={!collapsed.left || focusMode ? 'true' : undefined}
         onClick={toggleLeft}
-        title="展开左栏（目录与资料）"
+        title={'展开左栏（目录与资料） · ⌘/Ctrl+Shift+\\'}
         aria-label="展开左栏"
       >
         ›
@@ -322,7 +338,7 @@ export default function Workspace() {
         className="ct-col-toggle is-right"
         data-hidden={!collapsed.right || focusMode ? 'true' : undefined}
         onClick={toggleRight}
-        title="展开右栏（AI 助手）"
+        title={'展开右栏（AI 助手） · ⌘/Ctrl+\\'}
         aria-label="展开右栏"
       >
         ‹

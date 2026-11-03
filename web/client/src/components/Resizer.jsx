@@ -104,7 +104,7 @@ export default function Resizer({
             e.stopPropagation();
             onCollapse();
           }}
-          title={side === 'left' ? '收起左栏' : '收起右栏'}
+          title={side === 'left' ? '收起左栏（⌘/Ctrl+Shift+\\）' : '收起右栏（⌘/Ctrl+\\）'}
           aria-label={side === 'left' ? '收起左栏' : '收起右栏'}
         >
           {side === 'left' ? '‹' : '›'}
