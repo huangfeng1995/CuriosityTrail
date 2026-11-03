@@ -34,6 +34,9 @@ export default function ActionCard({
   onJumpToFinding,
 }) {
   const isTextAction = ['replace', 'append', 'insert'].includes(action);
+  // 空正文不渲染占位文案：卡片的 reason / findings 已经说明了情况，
+  // 「（本次没有返回内容）」对作者没有信息量。
+  const body = (content || '').trim();
 
   return (
     <div className={`ct-action-card${applied ? ' is-applied' : ''}`}>
@@ -56,9 +59,7 @@ export default function ActionCard({
         )}
       </div>
 
-      <div className="ct-action-body">
-        {(content || '').trim() || '（本次没有返回内容）'}
-      </div>
+      {body && <div className="ct-action-body">{body}</div>}
 
       {findings.length > 0 && (
         <div className="ct-finding-list">

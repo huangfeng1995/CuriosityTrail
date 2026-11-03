@@ -133,11 +133,13 @@ export default function MessageList({
                   onJumpToFinding={onJumpToFinding}
                 />
               ) : (
-                // 只有空白字符的回复也要当成空：否则气泡画出来是空的，
-                // 作者看到一片空白，既没有内容也没有提示
-                <div className="ct-msg-bubble is-ai">
-                  {(msg.content || '').trim() || '（本次没有返回内容）'}
-                </div>
+                // 只有空白字符的回复也要当成空：空回复不画气泡，
+                // 「本次没有返回内容」这类占位文案不给作者看。
+                (msg.content || '').trim() ? (
+                  <div className="ct-msg-bubble is-ai">
+                    {(msg.content || '').trim()}
+                  </div>
+                ) : null
               )}
               <div className="ct-msg-foot">
                 <RememberButton msg={msg} onRemember={onRemember} />
