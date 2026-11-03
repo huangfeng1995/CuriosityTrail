@@ -24,6 +24,7 @@ const { getRole } = require('./roles');
 const skills = require('./skills');
 const style = require('./style');
 const { isPipelineEnabled } = require('./pipeline/gate');
+const { knowledgeAt } = require('./pipeline/knowledge');
 
 /** 大纲最多注入的字符数 */
 const OUTLINE_LIMIT = 4000;
@@ -37,6 +38,10 @@ const INSPIRATION_LIMIT = 10;
 const ANCHOR_LIMIT = 800;
 /** 历史锚点最多展示 12 条 */
 const ANCHOR_MAX_ITEMS = 12;
+/** 知情边界分区上限：整段（含标题、规则、脚注）不超过 700 字 */
+const KNOWLEDGE_LIMIT = 700;
+/** 知情边界最多注入 8 个角色 */
+const KNOWLEDGE_MAX_CHARACTERS = 8;
 /** system 上下文总字符预算：约 2.4 万字，超了按优先级让位，给回复留出空间 */
 const CONTEXT_BUDGET = 24000;
 /** 侧边栏历史消息的字符预算（只保留最近的部分，更早的省略） */
@@ -340,6 +345,9 @@ function chapterBody(chapter) {
  * @param {string} params.userId 当前用户，用于数据归属校验与私有素材注入
  * @param {boolean} [params.includeChapterBody] 是否注入整章正文，默认 true。
  *   规划步不需要整章正文，关掉可省 12000 字预算，也避免模型把原文改写一遍。
+ * @param {Object} [params.beatPlan] 本章节拍表（validateBeatPlan 的返回或 plan 本身）。
+ *   只有传了它，「本章允许揭示」才有内容；不传就是空——这是刻意的保守设定：
+ *   没有节拍表时，模型只能写已知范围内的事。
  * @returns {Promise<{messages: Array, meta: Object}>}
  */
 async function assembleContext(params = {}) {
@@ -356,6 +364,7 @@ async function assembleContext(params = {}) {
     extraInstruction,
     userId,
     includeChapterBody = true,
+    beatPlan,
   } = params;
 
   const role = await getRole(roleKey, userId);
@@ -390,6 +399,8 @@ async function assembleContext(params = {}) {
     // 本轮实际注入的锚点条数。关闭模板、库为空、或一条都没放进来时都是 0。
     // 「开了模板但注入 0 条」必须是一个能被看见的事实，而不是沉默。
     anchorCount: 0,
+    // 本轮知情边界实际注入的角色数。关闭模板、矩阵为空、或没有可注入的角色时都是 0。
+    knowledgeCount: 0,
   };
 
   if (styleText) {
@@ -549,6 +560,40 @@ async function assembleContext(params = {}) {
     } catch (e) {
       // 取锚点失败只跳过该分区，不能让整轮写作失败。
       console.error('[context] 历史锚点加载失败:', e.message);
+    }
+  }
+
+  // ---- 3.6 本章知情边界层 ----
+  // 位置：历史锚点之后、设定层之前（P.6.4）。
+  //
+  // 与锚点一样，只在模板启用时查库；关闭态不新增查询、不产生段落，
+  // 保证 system 内容与改动前逐字节相同。
+  //
+  // 这里是 fixed 分区：长度从总预算里预扣，不跟正文/大纲抢额度。
+  // 数据为空（knowledge_matrix 一行都没有）时不产生空标题段落，
+  // knowledgeCount 保持 0——与锚点空库同一原则。
+  let knowledgeText = '';
+  if (meta.pipeline && work && chapter) {
+    try {
+      const visible = await knowledgeAt(workId, chapter.seq);
+      const hasMatrix = await get(
+        'SELECT id FROM knowledge_matrix WHERE work_id = ? LIMIT 1',
+        [workId]
+      );
+      if (hasMatrix) {
+        const built = await buildKnowledgeSection({
+          workId,
+          chapter,
+          visible,
+          beatPlan,
+        });
+        knowledgeText = built.text;
+        meta.knowledgeCount = built.count;
+        if (knowledgeText) addPart(knowledgeText, PRIORITY.FACT, true);
+      }
+    } catch (e) {
+      // 取知情边界失败只跳过该分区，不能让整轮写作失败。
+      console.error('[context] 知情边界加载失败:', e.message);
     }
   }
 
@@ -760,7 +805,7 @@ async function assembleContext(params = {}) {
     parts,
     Math.max(
       2000,
-      CONTEXT_BUDGET - skillsText.length - styleText.length - anchorText.length
+      CONTEXT_BUDGET - skillsText.length - styleText.length - anchorText.length - knowledgeText.length
     )
   );
   const segments = fitted.map((p) => p.text).filter(Boolean);
@@ -950,6 +995,265 @@ function buildAnchorSection(rows, signal) {
   return fallback
     ? { text: render([], 0), count: 0 }
     : { text: '', count: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// 知情边界分区
+// ---------------------------------------------------------------------------
+
+/** 知情状态 → 注入块的四类标签。exposed 是「已公开」，对本人而言仍是已知。 */
+const KNOWLEDGE_STATE_LABEL = {
+  knows: '已知',
+  exposed: '已知',
+  partial: '半知',
+  suspects: '怀疑',
+};
+
+/** P.6.4 的三条规则，逐字照抄 */
+const KNOWLEDGE_RULES = [
+  '规则：',
+  '1. 角色只能说/用其「已知」与「本章允许揭示」的事实；',
+  '2. 「未知」的事实不得被该角色说出、暗示或当作行动依据；',
+  '3. 未见过某证据的角色，不得引用该证据的内容或细节。',
+].join('\n');
+
+/**
+ * 生成「本章知情边界」分区（P.6.4）。
+ *
+ * 上限 700 字是**整段**上限：标题、角色行、允许揭示、证据、规则、省略提示都算在内。
+ *
+ * 裁剪顺序是硬要求：
+ *   1. 先砍各角色的「未知」列表（未知比已知更可省略）；
+ *   2. 再砍证据行；
+ *   3. **绝不砍「本章允许揭示」这一行**。
+ * 之后才允许退到「只留事实编号」、再减少角色行。
+ *
+ * @param {Object} params
+ * @param {string} params.workId
+ * @param {Object} params.chapter 当前章节（用 outline 选人）
+ * @param {Array}  params.visible knowledgeAt() 返回的可见矩阵行
+ * @param {Object} [params.beatPlan] 节拍表；没有时允许揭示为空
+ * @returns {Promise<{text: string, count: number}>} count = 实际注入的角色数
+ */
+async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
+  const characters = await all(
+    'SELECT * FROM characters WHERE work_id = ? ORDER BY name',
+    [workId]
+  );
+  const facts = await all(
+    'SELECT * FROM story_facts WHERE work_id = ? ORDER BY created_at ASC, id ASC',
+    [workId]
+  );
+  if (!characters.length || !facts.length) return { text: '', count: 0 };
+
+  const plan = beatPlan && beatPlan.plan ? beatPlan.plan : beatPlan;
+  const planText = plan ? JSON.stringify(plan) : '';
+  const signal = [chapter.outline || '', planText].filter(Boolean).join('\n');
+  // 按本章大纲/节拍表里出现的人名取角色；一个都没命中时取全部，上限 8 人。
+  const matched = signal
+    ? characters.filter((c) => nameVariants(c).some((v) => signal.includes(v)))
+    : [];
+  const chosen = (matched.length ? matched : characters).slice(0, KNOWLEDGE_MAX_CHARACTERS);
+  if (!chosen.length) return { text: '', count: 0 };
+
+  // 事实编号按创建顺序固定，同一个分区里稳定可读。
+  const labels = new Map(facts.map((fact, index) => [fact.id, `F${index + 1}`]));
+
+  // knowledgeAt() 每个 (角色, 事实) 只返回最新一条，这里直接落成两层 Map。
+  const stateByCharacter = new Map();
+  for (const row of visible || []) {
+    if (!row || !row.character_id || !row.fact_id) continue;
+    if (!stateByCharacter.has(row.character_id)) {
+      stateByCharacter.set(row.character_id, new Map());
+    }
+    stateByCharacter.get(row.character_id).set(row.fact_id, row.state);
+  }
+
+  const evidenceRows = await all(
+    `SELECT * FROM evidence_items
+     WHERE work_id = ? AND status = 'active'
+     ORDER BY created_at ASC, id ASC`,
+    [workId]
+  );
+  const characterNames = new Map(characters.map((c) => [c.id, c.name]));
+
+  /**
+   * 事实在注入块里的写法。
+   *
+   * 只有「已知/半知」带内容——「未知」和「怀疑」只给编号，避免把秘密
+   * 提前写进上下文让模型顺手漏出去；这也是 PV7 能断言「第 2 章不含
+   * F2 的正文与关键词」的原因。
+   */
+  const factBrief = (fact, withContent, compact) => {
+    const label = labels.get(fact.id) || '';
+    if (!withContent || compact) return label;
+    const content = truncate(String(fact.content || '').replace(/\s+/g, ' ').trim(), 60);
+    const keywords = String(fact.keywords || '').trim();
+    const bits = [];
+    if (content) bits.push(content);
+    if (keywords) bits.push(`关键词：${keywords}`);
+    return bits.length ? `${label}（${bits.join('｜')}）` : label;
+  };
+
+  const characterLine = (character, includeUnknown, compact) => {
+    const states = stateByCharacter.get(character.id) || new Map();
+    const groups = { 已知: [], 半知: [], 怀疑: [], 未知: [] };
+    for (const fact of facts) {
+      const state = states.get(fact.id);
+      const label = KNOWLEDGE_STATE_LABEL[state] || '未知';
+      groups[label].push(fact);
+    }
+
+    const segments = [];
+    for (const label of ['已知', '半知', '怀疑', '未知']) {
+      if (label === '未知' && !includeUnknown) continue;
+      const list = groups[label];
+      if (!list.length) continue;
+      // 半知者可以说出「错的部分」，所以半知也要带内容；
+      // 怀疑只是起疑，不能拿到事实内容。
+      const withContent = label === '已知' || label === '半知';
+      segments.push(
+        `${label}：${list.map((fact) => factBrief(fact, withContent, compact)).join('、')}`
+      );
+    }
+    if (!segments.length) return '';
+    return `【${character.name}】${segments.join('｜')}`;
+  };
+
+  // 「本章允许揭示」只从节拍表的 infoGain 与 delta.variable='信息' 中抽取。
+  // 没有节拍表时 reveals 为空，注入块会明确写出「本章未规划揭示点」。
+  const revealByFact = new Map();
+  if (plan && Array.isArray(plan.beats)) {
+    for (const beat of plan.beats) {
+      if (!beat) continue;
+      const hayParts = [];
+      if (beat.infoGain) hayParts.push(String(beat.infoGain));
+      if (beat.delta && beat.delta.variable === '信息') {
+        if (beat.delta.from) hayParts.push(String(beat.delta.from));
+        if (beat.delta.to) hayParts.push(String(beat.delta.to));
+      }
+      if (!hayParts.length) continue;
+      const hay = hayParts.join('\n');
+      for (const fact of facts) {
+        if (revealByFact.has(fact.id)) continue;
+        const label = labels.get(fact.id);
+        const keys = String(fact.keywords || '')
+          .split(/[,，、]/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const hit =
+          hay.includes(fact.id) ||
+          (label && new RegExp(`${label}(?!\\d)`).test(hay)) ||
+          keys.some((key) => hay.includes(key));
+        if (hit) revealByFact.set(fact.id, beat);
+      }
+    }
+  }
+  const reveals = Array.from(revealByFact.entries()).map(([factId, beat]) => ({
+    factId,
+    beat,
+  }));
+
+  const evidenceText = () => {
+    if (!evidenceRows.length) return '';
+    const items = evidenceRows.map((item, index) => {
+      const label = `E${index + 1}`;
+      let holder = '无持有者';
+      if (item.holder_kind === 'character') {
+        holder = `${characterNames.get(item.holder_character_id) || '未知人物'}持有`;
+      } else if (item.holder_kind === 'place') {
+        holder = '置于某处';
+      }
+      let seen = [];
+      try {
+        seen = JSON.parse(item.seen_by || '[]');
+      } catch (e) {
+        seen = [];
+      }
+      const seenNames = Array.isArray(seen)
+        ? seen.map((id) => characterNames.get(id)).filter(Boolean)
+        : [];
+      const seenText = seenNames.length ? `仅${seenNames.join('、')}见过` : '无人见过';
+      return `${label}（${item.title}：${holder}，${seenText}）`;
+    });
+    return `证据：${items.join('｜')}`;
+  };
+
+  const allowedText = (limit) => {
+    const prefix = '本章允许揭示（来自节拍表）：';
+    if (!reveals.length) {
+      return `${prefix}本章未规划揭示点，仅允许已知范围内。`;
+    }
+    const max = Math.max(0, Math.min(limit, reveals.length));
+    if (!max) return `${prefix}（条目过多，已省略）`;
+    const items = reveals.slice(0, max).map(({ factId, beat }) => {
+      const label = labels.get(factId) || '';
+      const id = beat && beat.id ? beat.id : '';
+      const type = beat && beat.type ? ` ${beat.type}` : '';
+      return `${label}（${id}${type}）`;
+    });
+    const omitted = reveals.length - max;
+    return `${prefix}${items.join('、')}${omitted ? `…（另省略 ${omitted} 条）` : ''}`;
+  };
+
+  const render = ({ includeUnknown, includeEvidence, compact, maxCharacters, revealLimit }) => {
+    const lines = chosen
+      .slice(0, maxCharacters)
+      .map((character) => characterLine(character, includeUnknown, compact))
+      .filter(Boolean);
+    const blocks = ['## 本章知情边界（硬约束）'];
+    if (lines.length) blocks.push(...lines);
+    blocks.push('', allowedText(revealLimit));
+    const evidence = includeEvidence ? evidenceText() : '';
+    if (evidence) blocks.push(evidence);
+    blocks.push('', KNOWLEDGE_RULES);
+    return { text: blocks.join('\n'), count: lines.length };
+  };
+
+  const full = chosen.length;
+  const stages = [
+    { includeUnknown: true, includeEvidence: true, compact: false },
+    { includeUnknown: false, includeEvidence: true, compact: false },
+    { includeUnknown: false, includeEvidence: false, compact: false },
+    { includeUnknown: false, includeEvidence: false, compact: true },
+  ];
+  for (const stage of stages) {
+    const built = render({ ...stage, maxCharacters: full, revealLimit: reveals.length });
+    if (built.text.length <= KNOWLEDGE_LIMIT) return built;
+  }
+
+  // 到这一步「未知」和证据都已经让位，仍然超限就减少角色行。
+  for (let count = full - 1; count >= 0; count -= 1) {
+    const built = render({
+      includeUnknown: false,
+      includeEvidence: false,
+      compact: true,
+      maxCharacters: count,
+      revealLimit: reveals.length,
+    });
+    if (built.text.length <= KNOWLEDGE_LIMIT) return built;
+  }
+
+  // 极端情况：允许揭示条目本身就撑破了 700 字。保留这一行，逐条缩减条目数。
+  for (let limit = reveals.length - 1; limit >= 1; limit -= 1) {
+    const built = render({
+      includeUnknown: false,
+      includeEvidence: false,
+      compact: true,
+      maxCharacters: 0,
+      revealLimit: limit,
+    });
+    if (built.text.length <= KNOWLEDGE_LIMIT) return built;
+  }
+
+  const minimal = render({
+    includeUnknown: false,
+    includeEvidence: false,
+    compact: true,
+    maxCharacters: 0,
+    revealLimit: 0,
+  });
+  return minimal.text.length <= KNOWLEDGE_LIMIT ? minimal : { text: '', count: 0 };
 }
 
 module.exports = {
