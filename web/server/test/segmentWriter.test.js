@@ -152,6 +152,8 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
       '只有三种情况允许独立成段'
     );
     assert.match(instruction, /禁止「一个动作一段」的碎片化/);
+    assert.match(instruction, /段内通常 2–4 句/, '一段要装 2–4 句，不是一个动作一段');
+    assert.match(instruction, /一段应有 2–4 句/, '自检也要检查段落粒度');
     assert.match(instruction, /关键交流必须写成直接引语/, '关键对话必须用人物原话');
     assert.match(instruction, /不要用「他说他问我是否……」这类转述代替关键对话/);
     assert.match(instruction, /每次对话都要推动一次变化/);
