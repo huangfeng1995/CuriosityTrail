@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Spin, App as AntApp } from 'antd';
 import { Menu, PanelRight } from 'lucide-react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useWorkspace } from '../store/workspace';
 import { useFocus, ENTER_FOCUS_EVENT, EXIT_FOCUS_EVENT } from '../store/focus';
 import ChapterEditor from '../components/Editor/ChapterEditor';
@@ -20,6 +20,7 @@ import PlotCardPanel from '../components/Sidebar/PlotCardPanel';
 import ProgressPanel from '../components/Sidebar/ProgressPanel';
 import ConsistencyPanel from '../components/Sidebar/ConsistencyPanel';
 import PanelNav from '../components/Sidebar/PanelNav';
+import KnowledgeBoundaryPanel from '../components/Sidebar/KnowledgeBoundaryPanel';
 
 /**
  * 三栏工作区。
@@ -31,6 +32,7 @@ import PanelNav from '../components/Sidebar/PanelNav';
 export default function Workspace() {
   const { workId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { work, chapters, chapter, messages, sending, loadWork, loadChapter } = useWorkspace();
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
@@ -141,13 +143,28 @@ export default function Workspace() {
     };
   }, [workId, loadWork, reloadKey]);
 
+  // 从待确认列表「定位」过来时带 ?chapter=<id>：只认第一次，
+  // 之后作者自己点章节树不能被这个参数拽回去。
+  const deepLinkChapter = searchParams.get('chapter');
+  const deepLinkApplied = useRef(false);
+  useEffect(() => {
+    deepLinkApplied.current = false;
+  }, [workId]);
+
   // 作品加载完自动选中第一章
   useEffect(() => {
     if (!workId) return;
+    if (!deepLinkApplied.current && deepLinkChapter) {
+      if (chapters.some((c) => c.id === deepLinkChapter)) {
+        deepLinkApplied.current = true;
+        if (chapter?.id !== deepLinkChapter) loadChapter(deepLinkChapter);
+        return;
+      }
+    }
     if (!chapter && chapters.length) {
       loadChapter(chapters[0].id);
     }
-  }, [workId, chapters, chapter, loadChapter]);
+  }, [workId, chapters, chapter, loadChapter, deepLinkChapter]);
 
   // 当前面板内容。key 变化时用 key 强制重挂载，配合 CSS 做淡入过渡。
   const panelContent = {
@@ -158,6 +175,13 @@ export default function Workspace() {
       <ProgressPanel workId={work?.id} work={work} onWorkChanged={() => loadWork(work.id)} />
     ),
     check: <ConsistencyPanel workId={work?.id} />,
+    knowledge: (
+      <KnowledgeBoundaryPanel
+        workId={work?.id}
+        chapter={chapter}
+        templateEnabled={work?.template === 'history_thriller'}
+      />
+    ),
     work: <WorkInfoPanel work={work} onSaved={() => loadWork(work.id)} />,
     inspirations: <InspirationPanel />,
   }[panelKey];

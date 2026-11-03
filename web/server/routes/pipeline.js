@@ -16,6 +16,7 @@ const { ownedWork } = require('../services/scope');
 const { isPipelineEnabled } = require('../services/pipeline/gate');
 const anchors = require('../services/pipeline/anchors');
 const knowledgeScan = require('../services/pipeline/knowledgeScan');
+const knowledgeView = require('../services/pipeline/knowledgeView');
 
 const router = express.Router();
 
@@ -276,6 +277,33 @@ router.post('/:workId/knowledge/scan', async (req, res) => {
     }
     console.error('[pipeline] 知情扫描失败:', err);
     return res.json({ applied: [], pending: [], failed: true, knowledgePendingCount: 0 });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 知情边界只读视图（作者核对用）
+// ---------------------------------------------------------------------------
+
+/**
+ * 第 N 章编辑时 AI 看到的边界：谁已知、谁未知。
+ *
+ * 只读接口，不写任何表。与知识扫描/注入共用 knowledgeAt，
+ * 语义统一为「第 N 章开写前」，避免作者看到的和模型看到的对不上。
+ */
+router.get('/:workId/knowledge/boundary', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const chapterId = String(req.query.chapterId || '');
+    if (!chapterId) return res.status(400).json({ error: '缺少 chapterId' });
+
+    const view = await knowledgeView.boundaryForChapter(work.id, chapterId);
+    if (!view) return res.status(404).json({ error: '章节不存在' });
+    return res.json(view);
+  } catch (err) {
+    console.error('[pipeline] 知情边界读取失败:', err);
+    return res.status(500).json({ error: '知情边界读取失败' });
   }
 });
 

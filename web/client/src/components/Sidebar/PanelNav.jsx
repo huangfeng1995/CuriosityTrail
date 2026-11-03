@@ -7,6 +7,7 @@ import {
   SafetyOutlined,
   InfoCircleOutlined,
   BulbOutlined,
+  EyeOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -24,6 +25,7 @@ const PANELS = [
   { key: 'plot', label: '情节', icon: <PartitionOutlined /> },
   { key: 'progress', label: '进度', icon: <LineChartOutlined /> },
   { key: 'check', label: '检查', icon: <SafetyOutlined /> },
+  { key: 'knowledge', label: '知情', icon: <EyeOutlined /> },
   { key: 'work', label: '作品', icon: <InfoCircleOutlined /> },
   { key: 'inspirations', label: '灵感', icon: <BulbOutlined /> },
 ];

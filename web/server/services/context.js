@@ -1354,6 +1354,7 @@ module.exports = {
   nameVariants,
   trimHistory,
   applyBudget,
+  factShortTitle,
   CONTEXT_BUDGET,
   HISTORY_BUDGET,
 };
