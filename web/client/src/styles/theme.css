@@ -512,8 +512,12 @@ body {
 .ct-resizer.is-left::before {
   right: -8px;
 }
+/* 右把手向**右栏**一侧扩，而不是往编辑区扩：
+   编辑区的纵向滚动条就贴在它的右边缘，往左扩会把滚动条整条盖住，
+   作者想拖内容却拖成了列宽。留出 8px 间隔后两者互不干扰。 */
 .ct-resizer.is-right::before {
-  left: -8px;
+  left: 8px;
+  right: -16px;
 }
 /* 悬停高亮 */
 .ct-resizer::after {
@@ -1494,6 +1498,17 @@ body.ct-resizing * {
   overflow-y: auto;
   position: relative;
   padding: 30px 32px 120px;
+}
+/* 正文滚动条：热区加宽到 14px，但透明边框 + background-clip 保持 8px 的视觉宽度。
+   作者不用再把鼠标精准压在细线上；轨道右缘与右侧把手之间留出 8px 空白。 */
+.ct-editor-scroll::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+.ct-editor-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 7px;
 }
 .ct-editor-body {
   max-width: var(--ct-editor-width, 1000px);
