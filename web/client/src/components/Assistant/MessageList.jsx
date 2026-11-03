@@ -55,6 +55,10 @@ export default function MessageList({
   onExcludeMemory,
   onRegenerate,
   onRemember,
+  findingsByMessage,
+  activeFindingKey,
+  onAdoptFinding,
+  onJumpToFinding,
 }) {
   // 占位提示的文案。
   //
@@ -125,6 +129,10 @@ export default function MessageList({
                   applied={msg.applied}
                   onApply={() => onApply?.(msg)}
                   onRevert={() => onRevert?.(msg)}
+                  findings={findingsByMessage?.get(msg.id) || []}
+                  activeFindingKey={activeFindingKey}
+                  onAdoptFinding={onAdoptFinding}
+                  onJumpToFinding={onJumpToFinding}
                 />
               ) : (
                 // 只有空白字符的回复也要当成空：否则气泡画出来是空的，

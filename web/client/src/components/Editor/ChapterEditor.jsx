@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Space, message, Modal, Input, Tooltip } from 'antd';
 import { SaveOutlined, UndoOutlined, RedoOutlined, HistoryOutlined } from '@ant-design/icons';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { useFocus } from '../../store/focus';
 import { createBlock } from './blocks';
+import { collectCriticFindings } from '../Assistant/findings';
 import { countBlockWords, formatWords } from '../../utils/wordCount';
 import Block from './Block';
 import BlockPalette from './BlockPalette';
@@ -32,6 +33,7 @@ export default function ChapterEditor() {
   const {
     chapter,
     blocks,
+    messages,
     selection,
     updateBlock,
     insertBlock,
@@ -47,12 +49,47 @@ export default function ChapterEditor() {
   } = useWorkspace();
 
   const [activeBlockId, setActiveBlockId] = useState(null);
+  const [activeFindingKey, setActiveFindingKey] = useState('');
   const [toolbarPos, setToolbarPos] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const editorRef = useRef(null);
   // 放不下三栏时（工作区改成抽屉布局）没有侧栏可藏，专注模式不成立。
   const isNarrow = useIsNarrow();
   const { focusMode, enterFocus, exitFocus } = useFocus();
+
+  // 审稿意见的锚点每次渲染按当前正文实时算，不落库。
+  // 只把可定位的挂到块上；未定位的留在侧栏标「全章建议」。
+  const findingsByBlock = useMemo(() => {
+    const map = new Map();
+    collectCriticFindings(messages, blocks).forEach((finding) => {
+      if (finding.status !== 'located') return;
+      if (!map.has(finding.blockId)) map.set(finding.blockId, []);
+      map.get(finding.blockId).push(finding);
+    });
+    return map;
+  }, [messages, blocks]);
+
+  // 侧栏点一条意见 → 滚到正文对应块并高亮。
+  useEffect(() => {
+    const onFocusBlock = (e) => {
+      const detail = e.detail || {};
+      setActiveFindingKey(detail.findingKey || '');
+      const el = editorRef.current?.querySelector(`[data-block-id="${detail.blockId}"]`);
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    };
+    window.addEventListener('ct:focus-block', onFocusBlock);
+    return () => window.removeEventListener('ct:focus-block', onFocusBlock);
+  }, []);
+
+  /** 正文沟槽点序号 → 选中该条意见并让侧栏滚过去。 */
+  const focusFinding = useCallback((finding) => {
+    setActiveFindingKey(finding.key);
+    window.dispatchEvent(
+      new CustomEvent('ct:focus-finding', {
+        detail: { messageId: finding.messageId, findingKey: finding.key },
+      })
+    );
+  }, []);
 
   // 选区变化时，计算工具条的浮层位置
   useEffect(() => {
@@ -317,6 +354,9 @@ export default function ChapterEditor() {
               index={index}
               total={blocks.length}
               isActive={activeBlockId === block.id}
+              findings={findingsByBlock.get(block.id) || []}
+              activeFindingKey={activeFindingKey}
+              onFindingClick={focusFinding}
               onFocus={() => setActiveBlockId(block.id)}
               onChange={(patch) => handleBlockChange(block.id, patch)}
               onSelect={(sel) => dispatch({ type: 'selection/set', selection: sel })}

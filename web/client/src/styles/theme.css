@@ -1519,6 +1519,14 @@ body.ct-resizing * {
 .ct-block.is-active {
   background: var(--accent-dim);
 }
+/* 有审稿意见的块：只用背景色标记，不改变行高与块高。
+   选中的那条再叠一层更明显的底色。 */
+.ct-block.has-findings {
+  background: var(--gold-dim);
+}
+.ct-block.is-finding-active {
+  background: var(--mark-bg);
+}
 
 .ct-block-text {
   width: 100%;
@@ -1697,6 +1705,48 @@ body.ct-resizing * {
   justify-content: flex-end;
   padding-top: 4px;
   pointer-events: auto;
+}
+
+/* 审稿意见序号：桌面端左侧预留沟槽里的圆点，绝对定位、不参与流。
+   20px 的高度不会撑高块，34px 格线保持原样；窄屏隐藏，意见只在侧栏。 */
+.ct-block-findings {
+  position: absolute;
+  top: 2px;
+  left: -44px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 2;
+}
+.ct-block-finding {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--gold);
+  background: var(--bg-container);
+  color: var(--gold);
+  font-size: 11px;
+  line-height: 1;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.ct-block-finding:hover,
+.ct-block-finding.is-active {
+  background: var(--gold);
+  color: #fff;
+}
+/* 有意见时块操作按钮整体下移，避免与序号叠在一起 */
+.ct-block.has-findings .ct-block-actions {
+  top: calc(4px + var(--ct-finding-count, 1) * 22px);
+}
+@media (max-width: 768px) {
+  .ct-block-findings {
+    display: none;
+  }
 }
 .ct-block-btn {
   border: 1px solid transparent;
@@ -2205,6 +2255,75 @@ body.ct-resizing * {
   overflow-y: auto;
   font-family: 'Noto Serif SC', 'Songti SC', serif;
   color: var(--text-primary);
+}
+
+/* 审稿意见列表：可定位的点击跳正文，未定位的标全章建议 */
+.ct-finding-list {
+  border-top: 1px solid var(--border-faint);
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ct-finding {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ct-finding:hover {
+  background: var(--bg-hover);
+}
+.ct-finding.is-active {
+  background: var(--accent-dim);
+}
+.ct-finding.is-unlocated {
+  cursor: default;
+}
+.ct-finding.is-unlocated:hover {
+  background: transparent;
+}
+.ct-finding-no {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 1px solid var(--gold);
+  color: var(--gold);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ct-finding.is-unlocated .ct-finding-no {
+  border-color: var(--ink-3);
+  color: var(--ink-3);
+}
+.ct-finding-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ct-finding-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+.ct-finding-quote {
+  padding-left: 6px;
+  border-left: 2px solid var(--border);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-finding-tag {
+  font-size: 12px;
+  color: var(--ink-3);
 }
 
 /* ---------- 长期记忆面板 ---------- */

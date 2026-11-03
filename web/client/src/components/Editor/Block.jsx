@@ -92,6 +92,9 @@ export default function Block({
   index,
   total,
   isActive,
+  findings = [],
+  activeFindingKey = '',
+  onFindingClick,
   onChange,
   onFocus,
   onSelect,
@@ -324,12 +327,41 @@ export default function Block({
     </>
   );
 
+  const hasFindings = findings.length > 0;
+  const hasActiveFinding = findings.some((f) => f.key === activeFindingKey);
+
   return (
     <div
       data-block-id={block.id}
-      className={`ct-block${isActive ? ' is-active' : ''}`}
+      className={`ct-block${isActive ? ' is-active' : ''}${hasFindings ? ' has-findings' : ''}${
+        hasActiveFinding ? ' is-finding-active' : ''
+      }`}
+      style={hasFindings ? { '--ct-finding-count': findings.length } : undefined}
     >
       {renderBody()}
+
+      {/* 审稿意见序号。绝对定位在左侧预留的 44px 沟槽里，
+          不参与文档流，块高与 34px 格线不受影响；窄屏交给侧栏。 */}
+      {hasFindings && (
+        <div className="ct-block-findings">
+          {findings.map((finding) => (
+            <button
+              key={finding.key}
+              type="button"
+              title={finding.text}
+              className={`ct-block-finding${
+                finding.key === activeFindingKey ? ' is-active' : ''
+              }`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onFindingClick?.(finding);
+              }}
+            >
+              {finding.marker}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* 块操作按钮。
           之前浮在正文右侧（right: -76px），会压到字、也会溢出到右栏。

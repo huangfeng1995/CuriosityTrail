@@ -110,7 +110,7 @@ function toText(value) {
  */
 function normalizeAction(payload) {
   if (!payload || typeof payload !== 'object') {
-    return { action: 'none', content: '', reason: '', citations: [] };
+    return { action: 'none', content: '', reason: '', citations: [], findings: [] };
   }
 
   const validActions = ['replace', 'append', 'insert', 'comment', 'none', 'call_tool'];
@@ -161,7 +161,23 @@ function normalizeAction(payload) {
       }))
     : [];
 
-  return { action, target, content, reason, citations, skills };
+  // 审稿意见的结构化锚点。只做最小校验：quote 必填且不少于 6 字，text 必填；
+  // 真实匹配由前端按当前正文实时做，这里不判断块是否存在。
+  const findings = Array.isArray(payload.findings)
+    ? payload.findings
+        .map((f, i) => {
+          if (!f || typeof f !== 'object') return null;
+          const quote = toText(f.quote).trim();
+          const text = toText(f.text || f.content).trim();
+          if (!quote || !text || quote.replace(/\s+/g, '').length < 6) return null;
+          const id = toText(f.id).trim() || `f${i + 1}`;
+          const blockId = toText(f.blockId).trim();
+          return blockId ? { id, quote, text, blockId } : { id, quote, text };
+        })
+        .filter(Boolean)
+    : [];
+
+  return { action, target, content, reason, citations, skills, findings };
 }
 
 /**
@@ -1681,6 +1697,8 @@ router.post('/chat', async (req, res) => {
       reason: payload.reason,
       citations: payload.citations,
       skills: payload.skills,
+      // 审稿意见的结构化锚点（块 ID / 原文片段）。没有时为 []。
+      findings: payload.findings || [],
       // 模型没按 JSON 契约返回、原文被当作正文回退时为 true。
       // 前端可据此提示作者「这是原文，不是模型正常生成的改写」。
       parseFailed: Boolean(payload.parseFailed),
@@ -1931,6 +1949,8 @@ router.get('/conversations/:id/messages', async (req, res) => {
         target: (payload && payload.target) || '',
         reason: (payload && payload.reason) || '',
         citations,
+        // 审稿意见的锚点随消息一起读回；旧消息没有这个字段时为空数组
+        findings: Array.isArray(payload && payload.findings) ? payload.findings : [],
         // 工具过程落库在 payload.skills 里，重载时一并还原：
         // 作者回到旧对话，仍然能核对当时 AI 现查了什么
         toolTrace: Array.isArray(payload && payload.skills)

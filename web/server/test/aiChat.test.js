@@ -913,3 +913,52 @@ test('规划两次都不合格时降级直写，不阻塞这一轮起稿', async
   assert.doesNotMatch(action.reason, /编排自检/, '没有规划时不该挂自检徽标');
 });
 
+// ---------------------------------------------------------------------------
+// 审稿意见的结构化锚点
+// ---------------------------------------------------------------------------
+
+test('审稿 findings 透传到 SSE，并随消息读回', async () => {
+  const review = JSON.stringify({
+    action: 'comment',
+    content: '问题清单：\n1. 开场信息太满。',
+    reason: '开场信息太满',
+    citations: [],
+    findings: [
+      { id: 'f1', blockId: 'b1', quote: '风雪压着庙檐', text: '开场信息太满，建议删一半。' },
+      { id: 'f2', quote: '他把手按在门环上', text: '动作描写可以合并。' },
+      { id: 'f3', quote: '雨落', text: '太短，应被丢弃。' },
+      { id: 'f4', text: '缺 quote，应被丢弃。' },
+      null,
+    ],
+  });
+  fakeModel.setDefault({ content: review });
+
+  const events = await chat('审一下这一章', { roleKey: 'critic' });
+
+  const action = events.find((e) => e.type === 'action');
+  assert.ok(action, '应当下发 action 事件');
+  assert.ok(Array.isArray(action.findings), 'findings 必须是数组');
+  assert.deepStrictEqual(
+    action.findings.map((f) => f.id),
+    ['f1', 'f2'],
+    '少于 6 字或缺 quote 的条目要丢掉'
+  );
+  assert.strictEqual(action.findings[0].blockId, 'b1');
+  assert.strictEqual(action.findings[1].blockId, undefined, '没给块 ID 就不带这个字段');
+
+  const done = events.find((e) => e.type === 'done');
+  assert.ok(done && done.conversationId, '需要会话 id 才能读回消息');
+
+  const res = await server.request(`/api/ai/conversations/${done.conversationId}/messages`);
+  assert.strictEqual(res.status, 200);
+  const body = await res.json();
+  const assistant = body.messages.find((m) => m.role === 'assistant');
+  assert.ok(assistant, '应当能读回审稿人的消息');
+  assert.deepStrictEqual(
+    assistant.findings.map((f) => f.id),
+    ['f1', 'f2'],
+    '落库后读回仍要带 findings'
+  );
+  assert.strictEqual(assistant.findings[0].quote, '风雪压着庙檐');
+});
+

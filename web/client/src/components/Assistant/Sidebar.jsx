@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Input, Button, Spin, Tooltip, App as AntApp } from 'antd';
 import { SendOutlined, ClearOutlined } from '@ant-design/icons';
 import { Square, Brain, EyeOff, History } from 'lucide-react';
@@ -6,6 +6,7 @@ import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
 import { planApply } from './applyPlan';
+import { collectCriticFindings, buildAdoptPrompt } from './findings';
 import { pendingActions } from './pendingActions';
 import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
@@ -96,12 +97,30 @@ export default function AssistantSidebar() {
 
   const activeRole = roles.find((r) => r.key === roleKey);
 
+  const [activeFindingKey, setActiveFindingKey] = useState('');
+
+  // 审稿意见的锚点按当前正文实时算：作者改稿后位置会变，不落库快照。
+  const criticFindings = useMemo(
+    () => collectCriticFindings(messages, blocks),
+    [messages, blocks]
+  );
+
+  const findingsByMessage = useMemo(() => {
+    const map = new Map();
+    criticFindings.forEach((finding) => {
+      if (!map.has(finding.messageId)) map.set(finding.messageId, []);
+      map.get(finding.messageId).push(finding);
+    });
+    return map;
+  }, [criticFindings]);
+
   /**
    * 发起一次对话。
    *
    * options.excludeRefIds   作者剔除的记忆条目（重新生成时带上）
    * options.replaceMessageId 被替换掉的助手消息（服务端 id）
    * options.reuseAssistantId 复用哪条助手气泡（重新生成时不新建气泡）
+   * options.roleKey          本轮强制用的角色（采纳审稿意见时固定为写手）
    */
   const send = useCallback(
     async (text, options = {}) => {
@@ -109,7 +128,9 @@ export default function AssistantSidebar() {
         excludeRefIds = [],
         replaceMessageId = '',
         reuseAssistantId = '',
+        roleKey: sendRoleKey = roleKey,
       } = options;
+      const sendRole = roles.find((r) => r.key === sendRoleKey) || activeRole;
 
       const content = (text ?? input).trim();
       if (!content || sending) return;
@@ -135,11 +156,13 @@ export default function AssistantSidebar() {
       const assistantMsg = {
         id: assistantId,
         role: 'assistant',
+        roleKey: sendRoleKey,
         content: '',
         action: 'none',
         reason: '',
         citations: [],
-        roleLabel: activeRole ? `${activeRole.icon} ${activeRole.name}` : '',
+        findings: [],
+        roleLabel: sendRole ? `${sendRole.icon} ${sendRole.name}` : '',
         applied: false,
         // 记住这次问了什么：重新生成时要拿它重发
         prompt: content,
@@ -179,7 +202,7 @@ export default function AssistantSidebar() {
             message: content,
             workId: work?.id,
             chapterId: chapter?.id,
-            roleKey,
+            roleKey: sendRoleKey,
             conversationId,
             scope: 'chapter',
             blocks,
@@ -271,6 +294,9 @@ export default function AssistantSidebar() {
                   target: event.target,
                   reason: event.reason,
                   citations: event.citations,
+                  // 审稿人的结构化锚点。旧后端没有这个字段时保持空数组，
+                  // 前端照旧按纯文本渲染。
+                  findings: Array.isArray(event.findings) ? event.findings : [],
                   // 工具过程的最终态：以 action 事件里的 skills 为准，
                   // 它是落库的同一份数据，重载消息时也能恢复。
                   //
@@ -372,7 +398,7 @@ export default function AssistantSidebar() {
         abortRef.current = null;
       }
     },
-    [input, sending, dispatch, work, chapter, roleKey, conversationId, blocks, activeRole, useMemory]
+    [input, sending, dispatch, work, chapter, roleKey, conversationId, blocks, activeRole, roles, useMemory]
   );
 
   /**
@@ -471,6 +497,44 @@ export default function AssistantSidebar() {
   );
 
   /**
+   * 采纳一条可定位意见。
+   *
+   * 把意见正文与锚定的原文片段拼成写手的明确指令，走现有 /chat——
+   * 不新造通道，服务端也不解析这段文本。
+   */
+  const adoptFinding = useCallback(
+    (finding) => {
+      if (sending) return;
+      send(buildAdoptPrompt(finding), { roleKey: 'writer' });
+    },
+    [send, sending]
+  );
+
+  /** 侧栏意见 → 正文：滚到对应块并高亮。 */
+  const jumpToFinding = useCallback((finding) => {
+    setActiveFindingKey(finding.key);
+    window.dispatchEvent(
+      new CustomEvent('ct:focus-block', {
+        detail: { blockId: finding.blockId, findingKey: finding.key },
+      })
+    );
+  }, []);
+
+  // 正文沟槽 → 侧栏：滚到那条意见并选中。
+  useEffect(() => {
+    const onFocusFinding = (e) => {
+      const detail = e.detail || {};
+      setActiveFindingKey(detail.findingKey || '');
+      const msgEl = listRef.current?.querySelector(`[data-msg-id="${detail.messageId}"]`);
+      msgEl?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      const row = listRef.current?.querySelector(`[data-finding-key="${detail.findingKey}"]`);
+      row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
+    window.addEventListener('ct:focus-finding', onFocusFinding);
+    return () => window.removeEventListener('ct:focus-finding', onFocusFinding);
+  }, []);
+
+  /**
    * 把一条消息记入长期记忆（手动层）。
    *
    * 手动层是作者明确划的线，权重最高的一层。
@@ -561,11 +625,13 @@ export default function AssistantSidebar() {
           return {
             id: m.id,
             role: 'assistant',
+            roleKey: m.roleKey || '',
             content: m.content,
             action: m.action,
             target: m.target || '',
             reason: m.reason || '',
             citations: m.citations || [],
+            findings: Array.isArray(m.findings) ? m.findings : [],
             roleLabel:
               m.roleLabel || (role ? `${role.icon} ${role.name}` : ''),
             toolTrace: m.toolTrace || [],
@@ -655,6 +721,10 @@ export default function AssistantSidebar() {
           onExcludeMemory={excludeMemory}
           onRegenerate={regenerate}
           onRemember={rememberMessage}
+          findingsByMessage={findingsByMessage}
+          activeFindingKey={activeFindingKey}
+          onAdoptFinding={adoptFinding}
+          onJumpToFinding={jumpToFinding}
         />
       </div>
 
