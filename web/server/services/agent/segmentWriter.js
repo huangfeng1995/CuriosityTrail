@@ -60,6 +60,29 @@ const BOUNDARY_MIN_MARKER_LENGTH = 6;
 /** 整段去重时只处理够长的段落，避免把「陈默没动。」这种有意重复也删掉。 */
 const MIN_DEDUPE_PARAGRAPH_CHARS = 12;
 
+/**
+ * 续写第一段与已有段落的重合阈值。
+ *
+ * 续写是从「上一段末尾」往下写的，第一段如果和已有某段高度相似，说明模型
+ * 在复述而不是接续；这时整段续写直接丢弃，不再靠后续去重补救。
+ */
+const RESTATEMENT_SIMILARITY = 0.8;
+
+/** 场景内合并的上限：合并后含标点不超过这个字数。 */
+const MERGE_MAX_PARAGRAPH_CHARS = 120;
+
+/** 含直接引语的段落一律不参与合并。 */
+const DIRECT_QUOTE_RE = /[「」“”"]/;
+
+/**
+ * 场景切换的保守识别：只认开头的时间/地点提示语。
+ *
+ * 认错方向的代价不对称——漏判最多少合并一处，误判会把两个场景粘在一起。
+ * 所以这里只收明确的转场词，不做语义猜测。
+ */
+const SCENE_SHIFT_RE =
+  /^(?:第二天|次日|翌日|隔天|当晚|当天晚上|当天夜里|夜里|半夜|凌晨|清晨|早晨|早上|上午|中午|午后|下午|傍晚|天黑|入夜|半小时后|一小时后|两小时后|几个小时后|几分钟后|过了一会儿|与此同时|同一时间|另一边|镜头一转|回到)/;
+
 /** 中间组禁止的收尾语气。命中就当作提前收尾，续写一次并清掉尾句。 */
 const CLOSING_RE = /就这样|从此以后|从此|这一天(?:就)?(?:结束|过去)|日子就这样|一切归于平静/;
 
@@ -77,6 +100,62 @@ function tailParagraphs(text, n = 3) {
 
 function normalizedParagraph(text) {
   return String(text || '').replace(/\s+/g, '').trim();
+}
+
+function bigramCounts(normalized) {
+  const counts = new Map();
+  for (let i = 0; i < normalized.length - 1; i += 1) {
+    const gram = normalized.slice(i, i + 2);
+    counts.set(gram, (counts.get(gram) || 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * 两段的字符重合度（按二元组、允许重复计数）。
+ *
+ * 用「重合二元组 / 较短一段的二元组总数」而不是整段是否相等，
+ * 这样改几个字、换标点的复述也能被抓住。
+ */
+function paragraphSimilarity(a, b) {
+  const left = normalizedParagraph(a);
+  const right = normalizedParagraph(b);
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  if (left.length < 2 || right.length < 2) return 0;
+
+  const leftCounts = bigramCounts(left);
+  const rightCounts = bigramCounts(right);
+  let shared = 0;
+  for (const [gram, count] of leftCounts) {
+    const other = rightCounts.get(gram) || 0;
+    if (other) shared += Math.min(count, other);
+  }
+  return shared / Math.min(left.length - 1, right.length - 1);
+}
+
+/** 续写返回的第一段是不是在复述已有段落。 */
+function isRestatement(addedText, existingText) {
+  const first = splitParagraphs(addedText)[0] || '';
+  if (normalizedParagraph(first).length < MIN_DEDUPE_PARAGRAPH_CHARS) return false;
+  return splitParagraphs(existingText).some((paragraph) => {
+    if (normalizedParagraph(paragraph).length < MIN_DEDUPE_PARAGRAPH_CHARS) return false;
+    return paragraphSimilarity(first, paragraph) >= RESTATEMENT_SIMILARITY;
+  });
+}
+
+/**
+ * 续写锚点：只给最后一个完整场景的最后一段；这段太长时取最后两三句。
+ *
+ * 续写调用只看这一小段，不看整组正文，避免模型顺着已写内容重讲一遍。
+ */
+function continuationAnchor(text) {
+  const last = splitParagraphs(text).pop() || '';
+  if (!last) return '';
+  if (countWords(last) <= MERGE_MAX_PARAGRAPH_CHARS) return last;
+
+  const sentences = last.split(/(?<=[。！？!?])/).filter(Boolean);
+  return sentences.slice(-2).join('').trim() || last;
 }
 
 /**
@@ -365,28 +444,40 @@ function buildSegmentInstruction({ plan, group, groups, tail = '' }) {
   return lines.join('\n');
 }
 
-/** 续写指令：明确「接着写，不要重开」，并只带上一组的尾部。 */
-function buildContinuationInstruction({
-  plan,
-  group,
-  groups,
-  tail,
-  remainingChars,
-}) {
+/** 续写上下文隔离：本次只给锚点，不给整组正文，避免模型顺着已写内容重讲。 */
+function buildContinuationIsolation() {
+  return [
+    '## 续写上下文（只给这一段锚点）',
+    '- 本次调用只提供下面这一段，作为上一个场景的最后一段；本组其他已写正文不提供。',
+    '- 不要凭记忆复述、重讲或概括之前写过的报告、对话和场景，也不要重新交代人物和背景。',
+    '- 第一句必须从锚点最后一个动作的下一步开始，直接往下推进。',
+  ].join('\n');
+}
+
+/**
+ * 续写指令。
+ *
+ * 只带最后一个完整场景的最后一段（太长则最后两三句），不带整组正文；
+ * 「不能复述」也由调用后的相似度断言兜底，不指望模型自觉。
+ */
+function buildContinuationInstruction({ plan, group, groups, tail, remainingChars }) {
+  const written = countWords(group.content);
   const lines = [
     `## 续写本组（第 ${group.index + 1}/${groups.length} 组）`,
-    '上一组提前收尾了，但本组还没写完。接着写，不要重开，不要重复前文，不要重新交代人物和场景。',
+    '本组提前收尾了，但还没写够。接着写，不要重开。',
     `仍然只写 ${group.beatIds.join('、')} 这几拍，不要提前写后面的节拍。`,
     '',
-    buildHandoffRules({ from: '本组已写部分' }),
+    buildContinuationIsolation(),
+    '',
+    buildHandoffRules({ from: '上一段的最后一个动作' }),
     '',
     buildBoundaryBlock({ group, groups }),
     '',
-    '## 上一段结尾（从它后面接着写）',
+    '## 锚点：上一个场景的最后一段（只给这一段，其他正文不提供）',
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `再补约 ${remainingChars} 字（含标点）就够；段数不用凑，按小场景自然分段。写到本组目标（约 ${group.targetChars} 字）就停，不要为凑数拉长段落，也不要继续往下写。`,
+    `本组目标约 ${group.targetChars} 字（含标点），已经写了 ${written} 字，再补约 ${remainingChars} 字就够；段数不用凑，按小场景自然分段。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
     '',
     PARAGRAPH_SHAPE_RULES,
   ];
@@ -537,6 +628,66 @@ function stitchGroups(groups, existingBody = '') {
   );
 }
 
+function canMergeParagraphs(previous, next, maxChars) {
+  if (!previous || !next) return false;
+  if (!/[。！？!?…]$/.test(previous)) return false;
+  if (DIRECT_QUOTE_RE.test(previous) || DIRECT_QUOTE_RE.test(next)) return false;
+  if (SCENE_SHIFT_RE.test(next)) return false;
+  return countWords(previous) + countWords(next) <= maxChars;
+}
+
+/**
+ * 受控的段落合并：把同一场景里相邻的无对白短段压成一个小场景。
+ *
+ * 只做三件事：同一场景内、相邻两段都不含直接引语、合并后不超过 maxChars。
+ * 含对白的段落一律不动，场景转场一律不动；不做语义合并，也不为凑段数改阈值。
+ *
+ * @param {string|string[]} paragraphs
+ * @param {{maxChars?: number, enabled?: boolean}} [options]
+ * @returns {string[]}
+ */
+function mergeSceneParagraphs(paragraphs, options = {}) {
+  const { maxChars = MERGE_MAX_PARAGRAPH_CHARS, enabled = true } = options;
+  const rows = (Array.isArray(paragraphs) ? paragraphs : splitParagraphs(paragraphs))
+    .map((paragraph) => String(paragraph || '').trim())
+    .filter(Boolean);
+  if (!enabled) return rows;
+
+  const merged = [];
+  for (const row of rows) {
+    const previous = merged[merged.length - 1];
+    if (previous && canMergeParagraphs(previous, row, maxChars)) {
+      merged[merged.length - 1] = `${previous}${row}`;
+      continue;
+    }
+    merged.push(row);
+  }
+  return merged;
+}
+
+/**
+ * 拼出全章正文，并按组应用段落合并（不跨组，组边界天然算场景边界）。
+ *
+ * 返回合并前后的两份正文，方便直接对比同一份稿子的两种形态。
+ */
+function composeChapterContent({ groups, existingBody = '', mergeScenes = true }) {
+  const stitched = stitchGroups(groups, existingBody);
+  if (!mergeScenes) {
+    return { content: stitched, contentBeforeMerge: stitched, mergedParagraphs: 0 };
+  }
+
+  let mergedParagraphs = 0;
+  const body = groups.reduce((text, group) => {
+    if (!group.content) return text;
+    const rows = splitParagraphs(group.content);
+    const mergedRows = mergeSceneParagraphs(rows);
+    mergedParagraphs += rows.length - mergedRows.length;
+    return appendFresh(text, mergedRows.join('\n\n'));
+  }, String(existingBody || '').trim());
+
+  return { content: body, contentBeforeMerge: stitched, mergedParagraphs };
+}
+
 /**
  * 截到不超过 maxChars 的最后一个完整自然段。只在跑飞（>7000 字）时用，
  * 正常写作不触发；截断只在汇报里说明，不回头改正文切分。
@@ -624,6 +775,7 @@ async function draftInSegments({
   existingBody = '',
   runSegment,
   maxCalls = MAX_SEGMENT_CALLS,
+  mergeScenes = true,
   log = () => {},
   progress = () => {},
 }) {
@@ -634,6 +786,7 @@ async function draftInSegments({
   let finishReason = 'stop';
   let boundaryTrimmed = 0;
   let boundaryConflicts = 0;
+  let continuationDropped = 0;
 
   const invoke = async ({ instruction, group, kind }) => {
     callCount += 1;
@@ -704,7 +857,7 @@ async function draftInSegments({
         plan,
         group,
         groups,
-        tail: tailParagraphs(group.content, 3),
+        tail: continuationAnchor(group.content),
         remainingChars,
       });
 
@@ -716,8 +869,14 @@ async function draftInSegments({
           if (contBounded.boundaryTrimmed) boundaryTrimmed += 1;
           if (contBounded.boundaryConflict) boundaryConflicts += 1;
           if (contBounded.content) {
-            group.content = appendFresh(group.content, contBounded.content);
-            group.continued = true;
+            // 续写第一段如果在复述已有内容，整段续写直接丢弃；
+            // 不把复述拼进来再靠去重补救——那样已经写偏的续写只会污染正文。
+            if (isRestatement(contBounded.content, group.content)) {
+              continuationDropped += 1;
+            } else {
+              group.content = appendFresh(group.content, contBounded.content);
+              group.continued = true;
+            }
           }
         }
       } catch (err) {
@@ -727,21 +886,28 @@ async function draftInSegments({
     }
   }
 
-  const stitched = stitchGroups(groups, existingBody);
-  const normalized = normalizeChapterShape(stitched);
+  const composed = composeChapterContent({ groups, existingBody, mergeScenes });
+  const normalized = normalizeChapterShape(composed.content);
+  const beforeNormalized = normalizeChapterShape(composed.contentBeforeMerge);
   return {
     groups,
     content: normalized.content,
+    // 同一份稿子的合并前形态，用来对比段落呼吸；默认合并开启。
+    contentBeforeMerge: beforeNormalized.content,
+    mergeScenes,
+    mergedParagraphs: composed.mergedParagraphs,
     action: 'append',
     calls,
     callCount,
     degraded,
     continuations: groups.filter((g) => g.continued).length,
+    continuationDropped,
     boundaryTrimmed,
     boundaryConflicts,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
+    charsBeforeMerge: beforeNormalized.chars,
     finishReason,
     usage: usageSum(calls),
   };
@@ -767,6 +933,7 @@ async function rewriteMissingGroups({
   runSegment,
   maxCalls = MAX_SEGMENT_CALLS,
   callCount = 0,
+  mergeScenes = true,
   log = () => {},
   progress = () => {},
 }) {
@@ -847,11 +1014,15 @@ async function rewriteMissingGroups({
     rewroteGroups += 1;
   }
 
-  const stitched = stitchGroups(groups, existingBody);
-  const normalized = normalizeChapterShape(stitched);
+  const composed = composeChapterContent({ groups, existingBody, mergeScenes });
+  const normalized = normalizeChapterShape(composed.content);
+  const beforeNormalized = normalizeChapterShape(composed.contentBeforeMerge);
   return {
     groups,
     content: normalized.content,
+    contentBeforeMerge: beforeNormalized.content,
+    mergeScenes,
+    mergedParagraphs: composed.mergedParagraphs,
     calls,
     callCount: count,
     degraded,
@@ -861,6 +1032,7 @@ async function rewriteMissingGroups({
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
+    charsBeforeMerge: beforeNormalized.chars,
     finishReason,
     usage: usageSum(calls),
   };
@@ -881,10 +1053,18 @@ module.exports = {
   MAX_CHAPTER_CHARS,
   MAX_SEGMENT_CALLS,
   MIN_TARGET_RATIO,
+  RESTATEMENT_SIMILARITY,
+  MERGE_MAX_PARAGRAPH_CHARS,
+  SCENE_SHIFT_RE,
   PARAGRAPH_SHAPE_RULES,
   CLOSING_RE,
   splitParagraphs,
   tailParagraphs,
+  paragraphSimilarity,
+  isRestatement,
+  continuationAnchor,
+  mergeSceneParagraphs,
+  composeChapterContent,
   beatMarkers,
   enforceGroupBoundary,
   buildBoundaryBlock,

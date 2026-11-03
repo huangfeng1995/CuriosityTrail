@@ -359,9 +359,112 @@ test('续写只补差额，不再按 105% 硬线裁剪正文', async () => {
 
   const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
 
-  assert.match(runner.seen[1].instruction, /写到本组目标/);
-  assert.match(runner.seen[1].instruction, /就停/);
+  assert.match(runner.seen[1].instruction, /再补约 \d+ 字/);
+  assert.match(runner.seen[1].instruction, /补到目标就停/);
   assert.match(draft.content, /续第30段/, '续写正文不被代码裁掉，取舍交给写作侧');
+});
+
+test('续写指令只带最后一个场景的最后一段，不给整组正文', () => {
+  const plan = makePlan(4, 10);
+  const groups = segmentWriter.planSegments(plan);
+  const group = groups[0];
+  const first = '第一段写的是老周在工位边上敲缸子，说名单是上面定的。';
+  const middle = '第二段写的是陈默把核对表另存了一份，文件名加了日期。';
+  const last = '最后一段写到他伸手去够手机，屏幕朝下扣在桌面上。';
+  group.content = `${first}\n\n${middle}\n\n${last}`;
+
+  const instruction = segmentWriter.buildContinuationInstruction({
+    plan,
+    group,
+    groups,
+    tail: segmentWriter.continuationAnchor(group.content),
+    remainingChars: 300,
+  });
+
+  assert.match(instruction, new RegExp(last), '锚点要带最后一段');
+  assert.ok(!instruction.includes(first), '不能把第一段带进续写调用');
+  assert.ok(!instruction.includes(middle), '不能把中间段带进续写调用');
+  assert.match(instruction, /本组其他已写正文不提供/, '要明确只给锚点');
+  assert.match(instruction, /不要凭记忆复述/);
+  assert.match(instruction, /已经写了 \d+ 字/, '要写清已经写了多少、还差多少');
+});
+
+test('续写第一段若是复述已有段落，整段续写直接丢弃', async () => {
+  const plan = makePlan(4, 10);
+  const initial = '他在前台签完字，把访客牌挂在脖子上，电梯里只有他一个人。';
+  const runner = makeRunner([
+    `${initial}\n\n他只写了两段。`,
+    `${initial.replace('一个人', '一个人影')}\n\n新的续写段落：他推门进去，殿里只有一盏灯，灯芯爆了一下。`,
+    body('乙', 30),
+  ]);
+
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
+
+  assert.strictEqual(draft.continuationDropped, 1, '复述的续写要整段丢弃并记数');
+  assert.ok(!draft.content.includes('新的续写段落'), '丢弃是整段丢弃，不是删掉重复段后保留后半截');
+  assert.strictEqual(draft.content.split(initial).length - 1, 1, '原有正文保持一份，不被续写污染');
+  assert.strictEqual(draft.continuations, 0);
+});
+
+test('场景内无对白的相邻短段可以合并，含对白和跨场景一律不合并', () => {
+  const first = '他把车票塞进外套内袋，拉上拉链，又按了按。';
+  const second = '站台的风从隧道口灌进来，吹得广告牌边角啪啪响。';
+  const dialogue = '「几点的车？」她问。';
+  const reaction = '他没答，低头看了一眼表。';
+  const nextScene = '第二天清晨，车站里人不多。';
+
+  const merged = segmentWriter.mergeSceneParagraphs([
+    first,
+    second,
+    dialogue,
+    reaction,
+    nextScene,
+  ]);
+
+  assert.strictEqual(merged.length, 4, '只合并了前两段');
+  assert.strictEqual(merged[0], `${first}${second}`, '合并是直接接上，不插空行');
+  assert.deepStrictEqual(merged.slice(1), [dialogue, reaction, nextScene], '含对白段和跨场景段原样保留');
+
+  const long = ['字'.repeat(70) + '。', '字'.repeat(60) + '。'];
+  assert.strictEqual(
+    segmentWriter.mergeSceneParagraphs(long).length,
+    2,
+    '合并后超过 120 字就不合并'
+  );
+
+  assert.deepStrictEqual(
+    segmentWriter.mergeSceneParagraphs([first, second], { enabled: false }),
+    [first, second],
+    '开关关闭时一段都不合并'
+  );
+});
+
+test('起草默认按场景合并段落，同时保留合并前的形态，可关闭', async () => {
+  const runOnce = async (mergeScenes) => {
+    const plan = makePlan(2, 10);
+    const first = '他沿着走廊往东走，路过一间关着门的会议室，又停下来听了听。';
+    const second = '走廊尽头是茶水间，水壶还在保温，指示灯亮着。';
+    const runner = makeRunner([
+      `${first}\n\n${second}\n\n${body('乙', 2)}`,
+    ]);
+    return segmentWriter.draftInSegments({
+      plan,
+      runSegment: runner,
+      maxCalls: 1,
+      mergeScenes,
+    });
+  };
+
+  const merged = await runOnce(true);
+  assert.strictEqual(merged.mergeScenes, true);
+  assert.strictEqual(merged.mergedParagraphs, 1, '前两段短且无对白，合并成一段');
+  assert.strictEqual(segmentWriter.splitParagraphs(merged.contentBeforeMerge).length, 4);
+  assert.strictEqual(segmentWriter.splitParagraphs(merged.content).length, 3);
+
+  const raw = await runOnce(false);
+  assert.strictEqual(raw.mergeScenes, false);
+  assert.strictEqual(raw.mergedParagraphs, 0);
+  assert.strictEqual(raw.content, raw.contentBeforeMerge, '关闭后交付的就是未合并正文');
 });
 
 test('全章超过 7000 字安全上限时截到最后一个完整段并标记', async () => {
