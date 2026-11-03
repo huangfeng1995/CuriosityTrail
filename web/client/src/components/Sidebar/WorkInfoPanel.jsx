@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Input, Button, Form, message, Empty, InputNumber } from 'antd';
+import { Input, Button, Form, message, Empty, InputNumber, Select } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import api from '../../api/client';
 
@@ -22,6 +22,8 @@ export default function WorkInfoPanel({ work, onSaved }) {
       synopsis: work.synopsis || '',
       outline: work.outline || '',
       targetWords: work.target_words || 0,
+      // 未启用一律落成空串，不在新建/编辑时替作者打开流水线。
+      template: work.template || '',
     });
   }, [work, form]);
 
@@ -71,6 +73,18 @@ export default function WorkInfoPanel({ work, onSaved }) {
           help="设了之后「进度」面板会显示完成度。"
         >
           <InputNumber min={0} step={10000} style={{ width: '100%' }} placeholder="未设定" />
+        </Form.Item>
+        <Form.Item
+          name="template"
+          label="创作模板"
+          help="启用后，AI 会遵守锚点库与本章知情边界；关闭时行为与现在完全一致。新建作品默认不启用。"
+        >
+          <Select
+            options={[
+              { value: '', label: '不启用' },
+              { value: 'history_thriller', label: '历史悬疑' },
+            ]}
+          />
         </Form.Item>
         <Button
           type="primary"
