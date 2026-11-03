@@ -28,8 +28,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 4 → 5：用户反馈（feedbacks）。
  * 版本 5 → 6：范文编排锚点（reference_anchors）。
  * 版本 6 → 7：卡片提案（card_proposals）与卡片来源列。
+ * 版本 7 → 8：历史悬疑模板开关（works.template）与锚点三表。
  */
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 /**
  * 版本号之前的老库遗留表。
@@ -85,6 +86,8 @@ CREATE TABLE IF NOT EXISTS works (
   synopsis     TEXT,
   outline      TEXT,
   target_words INTEGER DEFAULT 0,
+  -- 项目级创作模板。'' 表示未启用；白名单见 services/pipeline/gate.js。
+  template     TEXT NOT NULL DEFAULT '',
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
@@ -416,6 +419,67 @@ CREATE TABLE IF NOT EXISTS reference_anchors (
   withdrawn_at TEXT,
   updated_at   TEXT NOT NULL
 );
+
+-- 历史锚点库。
+--
+-- 一条锚点是「不能写错什么」的史实断言，与 reference_anchors（怎么写）
+-- 是两回事。confidence 分三档，其中两条 CHECK 是数据层的硬约束：
+--   * sourced 必须给书名 + 卷次/条目，无出处不得入库；
+--   * blank 天然不可作为不可变校验器，强制 immutable = 0。
+-- 只有 status = 'active' 的锚点参与注入与章末断言。
+CREATE TABLE IF NOT EXISTS work_anchors (
+  id             TEXT PRIMARY KEY,
+  work_id        TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  kind           TEXT NOT NULL CHECK (kind IN ('event','person','time','place','office','custom')),
+  subject        TEXT NOT NULL,
+  claim          TEXT NOT NULL,
+  confidence     TEXT NOT NULL CHECK (confidence IN ('sourced','inferable','blank')),
+  source_title   TEXT,
+  source_locator TEXT,
+  source_quote   TEXT,
+  rules          TEXT NOT NULL DEFAULT '[]',
+  immutable      INTEGER NOT NULL DEFAULT 1,
+  status         TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending','active','rejected')),
+  created_at     TEXT NOT NULL,
+  modified_at    TEXT NOT NULL,
+  CHECK (confidence <> 'sourced'
+         OR (source_title IS NOT NULL AND source_title <> ''
+             AND source_locator IS NOT NULL AND source_locator <> '')),
+  CHECK (confidence <> 'blank' OR immutable = 0)
+);
+CREATE INDEX IF NOT EXISTS idx_work_anchors
+  ON work_anchors (work_id, status, kind);
+
+-- 史料空白区。正史无载、可合法虚构的区间，单独成表，不混进锚点库。
+CREATE TABLE IF NOT EXISTS work_blank_areas (
+  id          TEXT PRIMARY KEY,
+  work_id     TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  topic       TEXT NOT NULL,
+  why_blank   TEXT,
+  usable_for  TEXT,
+  status      TEXT NOT NULL DEFAULT 'active'
+              CHECK (status IN ('active','closed')),
+  created_at  TEXT NOT NULL,
+  modified_at TEXT NOT NULL
+);
+
+-- 章末断言命中记录。作者确认「有意改写」后标记 dismissed，
+-- 同规则同锚点不再重复报；block 级不允许 dismiss。
+CREATE TABLE IF NOT EXISTS anchor_violations (
+  id           TEXT PRIMARY KEY,
+  work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  chapter_id   TEXT REFERENCES chapters(id) ON DELETE CASCADE,
+  anchor_id    TEXT REFERENCES work_anchors(id) ON DELETE CASCADE,
+  rule_type    TEXT NOT NULL,
+  severity     TEXT NOT NULL CHECK (severity IN ('block','warn')),
+  quote        TEXT NOT NULL,
+  offset_start INTEGER,
+  detail       TEXT,
+  dismissed    INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL
+);
+
 `;
 
 /**
@@ -550,6 +614,8 @@ async function migrate(fromVersion) {
   await ensureColumn('settings', 'source_chapter_id', 'TEXT');
   await ensureColumn('settings', 'source_block_id', 'TEXT');
   await ensureColumn('plot_cards', 'source_block_id', 'TEXT');
+  // 7 → 8：模板开关。SCHEMA 已含该列，老库必须单独补。
+  await ensureColumn('works', 'template', "TEXT NOT NULL DEFAULT ''");
 
   // prompt_overrides 需要复合主键，老库要重建一次（数据整体保留）
   await ensurePromptOverridesPk();

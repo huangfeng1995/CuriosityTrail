@@ -22,10 +22,19 @@ const crypto = require('crypto');
 const { all, get, run, transaction } = require('../database');
 const { ownedWork } = require('../services/scope');
 const memory = require('../services/memory/indexer');
+const { TEMPLATES } = require('../services/pipeline/gate');
 
 const router = express.Router();
 
 const now = () => new Date().toISOString();
+
+/**
+ * 创作模板只接受 ''（未启用）或白名单内的模板名。
+ * 不用「任意字符串直写」：拼错一个模板名会让作品静默退回未启用状态。
+ */
+function isValidTemplate(value) {
+  return value === '' || TEMPLATES.has(value);
+}
 
 /**
  * blocks 为权威数据，同时维护 content 纯文本派生快照。
@@ -58,17 +67,20 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { title, genre, synopsis, outline, targetWords } = req.body || {};
+  const { title, genre, synopsis, outline, targetWords, template } = req.body || {};
   if (!title || !String(title).trim()) {
     return res.status(400).json({ error: '作品标题不能为空' });
+  }
+  if (template !== undefined && !isValidTemplate(template)) {
+    return res.status(400).json({ error: '创作模板取值不合法' });
   }
 
   try {
     const id = crypto.randomUUID();
     const ts = now();
     await run(
-      `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, template, created_at, modified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         req.userId,
@@ -77,6 +89,7 @@ router.post('/', async (req, res) => {
         synopsis || '',
         outline || '',
         Number(targetWords) || 0,
+        template || '',
         ts,
         ts,
       ]
@@ -103,14 +116,17 @@ router.get('/:id', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { title, genre, synopsis, outline, targetWords } = req.body || {};
+  const { title, genre, synopsis, outline, targetWords, template } = req.body || {};
+  if (template !== undefined && !isValidTemplate(template)) {
+    return res.status(400).json({ error: '创作模板取值不合法' });
+  }
   try {
     const existing = await ownedWork(req.params.id, req.userId);
     if (!existing) return res.status(404).json({ error: '作品不存在' });
 
     await run(
       `UPDATE works SET title = ?, genre = ?, synopsis = ?, outline = ?, target_words = ?,
-         modified_at = ?
+         template = ?, modified_at = ?
        WHERE id = ? AND user_id = ?`,
       [
         (title !== undefined ? String(title).trim() : existing.title),
@@ -118,6 +134,7 @@ router.put('/:id', async (req, res) => {
         synopsis !== undefined ? synopsis : existing.synopsis,
         outline !== undefined ? outline : existing.outline,
         targetWords !== undefined ? (Number(targetWords) || 0) : existing.target_words,
+        template !== undefined ? template : existing.template,
         now(),
         req.params.id,
         req.userId,
