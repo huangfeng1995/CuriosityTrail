@@ -180,12 +180,17 @@ function nameVariants(character) {
  * @param {Array} characters 全部人物卡
  * @param {string} text 用于匹配的正文
  * @param {boolean} includeAll scope='work' 时为 true
+ * @param {string} [chapterId] 当前章节 id
  */
-function selectCharacters(characters, text, includeAll) {
+function selectCharacters(characters, text, includeAll, chapterId) {
   if (includeAll) return characters;
 
-  return characters.filter((c) =>
-    nameVariants(c).some((variant) => mentions(text, variant))
+  return characters.filter(
+    (c) =>
+      nameVariants(c).some((variant) => mentions(text, variant)) ||
+      // 作者在本章刚确认过的卡，无论名字有没有写进正文都纳入：
+      // 确认动作本身就是「这是本章的事实了」。
+      (chapterId && c.source_chapter_id === chapterId)
   );
 }
 
@@ -195,11 +200,13 @@ function selectCharacters(characters, text, includeAll) {
  * @param {Array} settings 全部设定
  * @param {string} text
  * @param {boolean} includeAll
+ * @param {string} [chapterId] 当前章节 id
  */
-function selectSettings(settings, text, includeAll) {
+function selectSettings(settings, text, includeAll, chapterId) {
   return settings.filter((s) => {
     if (includeAll) return true;
     if ((s.importance ?? 3) >= 3) return true;
+    if (chapterId && s.source_chapter_id === chapterId) return true;
     return mentions(text, s.name);
   });
 }
@@ -478,7 +485,12 @@ async function assembleContext(params = {}) {
       [workId]
     );
     const includeAll = scope === 'work';
-    const selected = selectCharacters(characters, relevanceText, includeAll);
+    const selected = selectCharacters(
+      characters,
+      relevanceText,
+      includeAll,
+      chapter ? chapter.id : ''
+    );
     meta.characters = selected.map((c) => c.name);
 
     if (selected.length) {
@@ -496,7 +508,12 @@ async function assembleContext(params = {}) {
       [workId]
     );
     const includeAll = scope === 'work';
-    const selected = selectSettings(settings, relevanceText, includeAll);
+    const selected = selectSettings(
+      settings,
+      relevanceText,
+      includeAll,
+      chapter ? chapter.id : ''
+    );
     meta.settings = selected.map((s) => s.name);
 
     if (selected.length) {

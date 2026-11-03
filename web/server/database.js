@@ -27,8 +27,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 3 → 4：文风规则卡（style_cards）。
  * 版本 4 → 5：用户反馈（feedbacks）。
  * 版本 5 → 6：范文编排锚点（reference_anchors）。
+ * 版本 6 → 7：卡片提案（card_proposals）与卡片来源列。
  */
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 /**
  * 版本号之前的老库遗留表。
@@ -135,6 +136,7 @@ CREATE TABLE IF NOT EXISTS plot_cards (
   content      TEXT,
   seq          INTEGER DEFAULT 0,
   status       TEXT DEFAULT 'todo',
+  source_block_id TEXT,
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
@@ -154,6 +156,10 @@ CREATE TABLE IF NOT EXISTS writing_events (
 CREATE INDEX IF NOT EXISTS idx_writing_events_work_day ON writing_events(work_id, day);
 
 -- 人物卡
+--
+-- source_chapter_id / source_block_id：这张卡是从哪段正文里沉淀出来的。
+-- 作者手动建卡时为空；由卡片提案确认生成的卡会带上来源，
+-- 上下文装配据此把「当前章确认过的卡」无条件纳入。
 CREATE TABLE IF NOT EXISTS characters (
   id           TEXT PRIMARY KEY,
   work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
@@ -167,6 +173,8 @@ CREATE TABLE IF NOT EXISTS characters (
   arc          TEXT,
   relations    TEXT,
   notes        TEXT,
+  source_chapter_id TEXT,
+  source_block_id   TEXT,
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
@@ -180,10 +188,43 @@ CREATE TABLE IF NOT EXISTS settings (
   name         TEXT NOT NULL,
   content      TEXT NOT NULL,
   importance   INTEGER DEFAULT 3,
+  source_chapter_id TEXT,
+  source_block_id   TEXT,
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_settings_work ON settings(work_id, category);
+
+-- 卡片提案。
+--
+-- 从正文里识别出来的「这里出现了新人物 / 新设定 / 新情节节点」先落在这里，
+-- 作者确认后才写进 characters / settings / plot_cards。
+-- 单独建表而不是直接写卡片表：未确认的提案不能被上下文装配当事实注入，
+-- 也不能在人物/设定列表里出现——那等于模型替作者定了稿。
+--
+-- status 状态机：
+--   pending   → confirmed（card_id 指向新建的卡片，终态）
+--   pending   → dismissed（终态）
+-- 已处理的提案不会被重新扫描复活：去重只针对同 kind + 同标题的 pending 行。
+CREATE TABLE IF NOT EXISTS card_proposals (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  chapter_id   TEXT REFERENCES chapters(id) ON DELETE CASCADE,
+  block_id     TEXT,
+  kind         TEXT NOT NULL CHECK (kind IN ('character','setting','plot')),
+  title        TEXT NOT NULL,
+  content      TEXT,
+  payload      TEXT,
+  source_quote TEXT,
+  status       TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending','confirmed','dismissed')),
+  card_id      TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_card_proposals_work
+  ON card_proposals(work_id, status, created_at);
 
 -- 素材库（每个用户一份）
 CREATE TABLE IF NOT EXISTS materials (
@@ -503,6 +544,12 @@ async function migrate(fromVersion) {
   await ensureColumn('chapters', 'outline', 'TEXT');
   await ensureColumn('chapters', 'word_count', 'INTEGER DEFAULT 0');
   await ensureColumn('works', 'target_words', 'INTEGER DEFAULT 0');
+  // 6 → 7：卡片来源。老库不会因为 SCHEMA 里的新列自动补上，必须单独 ALTER。
+  await ensureColumn('characters', 'source_chapter_id', 'TEXT');
+  await ensureColumn('characters', 'source_block_id', 'TEXT');
+  await ensureColumn('settings', 'source_chapter_id', 'TEXT');
+  await ensureColumn('settings', 'source_block_id', 'TEXT');
+  await ensureColumn('plot_cards', 'source_block_id', 'TEXT');
 
   // prompt_overrides 需要复合主键，老库要重建一次（数据整体保留）
   await ensurePromptOverridesPk();

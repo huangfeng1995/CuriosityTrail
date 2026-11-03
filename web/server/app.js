@@ -42,6 +42,7 @@ const styleRouter = require('./routes/style');
 const insightsRouter = require('./routes/insights');
 const feedbackRouter = require('./routes/feedback');
 const anchorRouter = require('./routes/anchor');
+const cardProposalsRouter = require('./routes/cardProposals');
 
 const app = express();
 
@@ -127,6 +128,7 @@ app.use('/api/style', styleRouter);
 app.use('/api/insights', insightsRouter);
 app.use('/api/feedback', feedbackRouter);
 app.use('/api/anchor', anchorRouter);
+app.use('/api/card-proposals', cardProposalsRouter);
 
 // 图片目录同样纳入鉴权
 app.use('/uploads', requireAuth, express.static(config.uploadsDir));

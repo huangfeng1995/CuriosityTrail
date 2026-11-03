@@ -12,6 +12,7 @@ import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
 import HistoryPanel from './HistoryPanel';
+import CardProposals from './CardProposals';
 import EmptyState from '../EmptyState';
 
 /**
@@ -50,6 +51,8 @@ export default function AssistantSidebar() {
   const toolTraceRef = useRef([]);
   // 长期记忆开关。作者说了算，默认开着。
   const [useMemory, setUseMemory] = useMemoryPref();
+  // 卡片提案刷新信号：正文应用后异步识别完成时递增，通知侧栏重拉列表
+  const [proposalRefresh, setProposalRefresh] = useState(0);
   const { message: toast } = AntApp.useApp();
 
   // 角色列表
@@ -450,7 +453,9 @@ export default function AssistantSidebar() {
         return;
       }
 
+      let appliedBlockId = '';
       if (plan.kind === 'replace' || plan.kind === 'append') {
+        appliedBlockId = plan.blockId;
         const before = blocks.find((b) => b.id === plan.blockId);
         dispatch({
           type: 'message/update',
@@ -463,6 +468,7 @@ export default function AssistantSidebar() {
         updateBlock(plan.blockId, { content: plan.text });
       } else if (plan.kind === 'insert') {
         const block = createBlock('paragraph', { content: plan.text });
+        appliedBlockId = block.id;
         insertBlock(plan.index, block);
         // 记下新块的 id：撤销时要把整块删掉，而不是只清空内容
         dispatch({
@@ -473,8 +479,29 @@ export default function AssistantSidebar() {
       }
 
       toast.success('已写入正文');
+
+      // 卡片沉淀：正文落地后异步识别这一段里的新人物/新设定/新情节。
+      // 不 await、不报错——识别失败绝不能打断写作。
+      if (work?.id && chapter?.id && plan.text) {
+        fetch('/api/card-proposals/scan', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workId: work.id,
+            chapterId: chapter.id,
+            blockId: appliedBlockId,
+            text: plan.text,
+          }),
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (data?.proposals?.length) setProposalRefresh((n) => n + 1);
+          })
+          .catch(() => {});
+      }
     },
-    [blocks, updateBlock, insertBlock, dispatch, toast]
+    [blocks, updateBlock, insertBlock, dispatch, toast, work, chapter]
   );
 
   /**
@@ -710,6 +737,12 @@ export default function AssistantSidebar() {
       )}
 
       {notice && <div className="ct-ai-notice">{notice}</div>}
+
+      <CardProposals
+        workId={work?.id}
+        chapterId={chapter?.id}
+        refreshToken={proposalRefresh}
+      />
 
       <div ref={listRef} className="ct-ai-scroll">
         <MessageList
