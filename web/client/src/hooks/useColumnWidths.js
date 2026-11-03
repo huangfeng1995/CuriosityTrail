@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 
-const STORAGE_KEY = 'ct.workspace.columns';
+// 2026-11-03 栏宽默认值下调（左 288→240、右 352→288），
+// 键名升到 v2：旧的 ct.workspace.columns 记的是老默认值，
+// 直接沿用会让老用户永远看不到新默认，所以旧键只读一次做迁移后即删除。
+const STORAGE_KEY = 'ct.workspace.columns.v2';
+const LEGACY_STORAGE_KEY = 'ct.workspace.columns';
 const COLLAPSE_KEY = 'ct.workspace.collapsed';
 
 /**
@@ -11,16 +15,57 @@ const COLLAPSE_KEY = 'ct.workspace.collapsed';
  */
 export const LIMITS = {
   left: { min: 220, max: 520 },
-  right: { min: 300, max: 620 },
+  right: { min: 280, max: 620 },
 };
 
-const DEFAULTS = { left: 288, right: 352 };
+const DEFAULTS = { left: 240, right: 288 };
+/** v1 时代的默认宽度。用来判断旧值到底是"没动过"还是"手动拖过"。 */
+const LEGACY_DEFAULTS = { left: 288, right: 352 };
 const COLLAPSED_DEFAULTS = { left: false, right: false };
 
 /** 中间编辑区的最小宽度。左右两栏加起来不能把正文挤没。 */
 const CENTER_MIN = 420;
 
 const clamp = (v, { min, max }) => Math.min(Math.max(v, min), max);
+
+/**
+ * 读初始宽度。
+ *
+ * 先读 v2；没有 v2 再看 v1 旧键做一次性迁移：
+ * - 旧值和旧默认（288/352）完全一样 → 用户没拖过，换成新默认；
+ * - 任何一栏和旧默认不同 → 视为手动拖过，保留手动值。
+ * 旧键在挂载后即删除，迁移只发生一次。
+ */
+function readStoredWidths() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      return {
+        left: clamp(Number(saved.left) || DEFAULTS.left, LIMITS.left),
+        right: clamp(Number(saved.right) || DEFAULTS.right, LIMITS.right),
+      };
+    }
+  } catch {
+    // 存储不可用（隐私模式）就往下走默认值
+  }
+
+  try {
+    const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacyRaw) {
+      const old = JSON.parse(legacyRaw);
+      const left = clamp(Number(old.left) || LEGACY_DEFAULTS.left, LIMITS.left);
+      const right = clamp(Number(old.right) || LEGACY_DEFAULTS.right, LIMITS.right);
+      if (left !== LEGACY_DEFAULTS.left || right !== LEGACY_DEFAULTS.right) {
+        return { left, right };
+      }
+    }
+  } catch {
+    // 旧值坏了就当没有
+  }
+
+  return DEFAULTS;
+}
 
 /**
  * 工作区栏宽 + 折叠状态。
@@ -30,21 +75,7 @@ const clamp = (v, { min, max }) => Math.min(Math.max(v, min), max);
  * 拖动时左右两栏互相让位，中间永远留够正文的位置。
  */
 export default function useColumnWidths() {
-  const [widths, setWidths] = useState(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        return {
-          left: clamp(Number(saved.left) || DEFAULTS.left, LIMITS.left),
-          right: clamp(Number(saved.right) || DEFAULTS.right, LIMITS.right),
-        };
-      }
-    } catch {
-      // 存储不可用（隐私模式）就用默认值
-    }
-    return DEFAULTS;
-  });
+  const [widths, setWidths] = useState(readStoredWidths);
 
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -74,6 +105,16 @@ export default function useColumnWidths() {
       // 存不下就算了
     }
   }, [collapsed]);
+
+  // 旧键读完就删：迁移只做一次，之后改默认值不会再被老数据盖住。
+  // 新宽度由上面的 effect 写进 v2；用户手拖的值也记在 v2，不受影响。
+  useEffect(() => {
+    try {
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+    } catch {
+      // 存储不可用就算了
+    }
+  }, []);
 
   /**
    * 改某栏宽度。
