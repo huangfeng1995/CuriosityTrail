@@ -612,7 +612,9 @@ function buildGroupRewriteInstruction({
         (shape.has(b.id)
           ? ` 本拍段落形态不合规（${describeShapeViolations(shape.get(b.id))}）：` +
             `按 ${b.paragraphs}±2 段落段，每段 80–140 字（含标点），合并碎片段、拆开超长段，` +
-            '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。'
+            '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
+            ` 重写后本组段数必须落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段：` +
+            '拆超长段时不许把「太长」翻成「太少」，也不许为了凑段数把对白拆成独段。'
           : '')
       );
     });
@@ -644,7 +646,8 @@ function buildGroupRewriteInstruction({
     buildBoundaryBlock({ group, groups }),
     '',
     '## 篇幅（硬约束）',
-    `本组大致写 ${group.targetChars} 字（含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。`,
+    `本组大致写 ${group.targetChars} 字（含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。` +
+      `本组段数必须落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段（双向约束：不能超，也不能为了拆段反而写少）。`,
     '',
     PARAGRAPH_SHAPE_RULES,
     '',

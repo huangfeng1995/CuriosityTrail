@@ -212,6 +212,8 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
     );
   }
   assert.match(continuation, /按各拍计划段数（±2 段）落段/, '续写也要按拍段落数收口');
+  // 分组重写加双向约束：既不许超段数，也不许从「太长」翻成「太少」。
+  assert.match(rewrite, /本组段数必须落在 \d+–\d+ 段（双向约束：不能超，也不能为了拆段反而写少）/);
 });
 
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
@@ -687,5 +689,7 @@ test('段落形态违规只重写违规拍所在组，指令给出段数与合�
   assert.match(rewriteRunner.seen[0].instruction, /B4：.*段落形态不合规/);
   assert.match(rewriteRunner.seen[0].instruction, /实际 9 段，目标是 3±2 段/);
   assert.match(rewriteRunner.seen[0].instruction, /每段 80–140 字（含标点）/);
+  assert.match(rewriteRunner.seen[0].instruction, /重写后本组段数必须落在 \d+–\d+ 段/);
+  assert.match(rewriteRunner.seen[0].instruction, /不许把「太长」翻成「太少」/);
   assert.strictEqual(rewritten.groups[0].content, beforeGroup, '违规拍之外的组不能被改写');
 });
