@@ -31,7 +31,7 @@ const RULE_LABELS = {
  */
 export default function PendingQueue({ workId }) {
   const navigate = useNavigate();
-  const [data, setData] = useState({ knowledge: [], violations: [] });
+  const [data, setData] = useState({ knowledge: [], violations: [], anchors: [] });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
 
@@ -43,6 +43,7 @@ export default function PendingQueue({ workId }) {
       setData({
         knowledge: res.data?.knowledge || [],
         violations: res.data?.violations || [],
+        anchors: res.data?.anchors || [],
       });
     } catch (e) {
       message.error(e.response?.data?.error || '待确认列表加载失败');
@@ -120,7 +121,25 @@ export default function PendingQueue({ workId }) {
     }
   };
 
-  const total = data.knowledge.length + data.violations.length;
+  const confirmAnchors = async (rows) => {
+    const ids = rows.map((row) => row.id);
+    if (!ids.length) return;
+    setBusy('anchors');
+    try {
+      const res = await api.post(`/pipeline/${workId}/anchors/activate-batch`, { ids });
+      const skipped = res.data?.skipped?.length || 0;
+      message.success(
+        `已启用 ${res.data?.activated ?? 0} 条锚点${skipped ? `，${skipped} 条已跳过` : ''}`
+      );
+      await load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '批量启用失败');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const total = data.knowledge.length + data.violations.length + data.anchors.length;
   const confirmable = data.knowledge.filter((row) => row.characterId && row.factId);
 
   return (
@@ -144,6 +163,65 @@ export default function PendingQueue({ workId }) {
         <p className="ct-hint">
           没有待确认的条目。正文写完后，知情变化与锚点冲突会出现在这里。
         </p>
+      )}
+
+      {!loading && data.anchors.length > 0 && (
+        <section className="ct-pending-section">
+          <div className="ct-pending-head">
+            <span className="ct-pending-title">锚点草稿</span>
+            <span className="ct-pending-count">{data.anchors.length} 条</span>
+            <span className="ct-pending-hint">
+              由素材升格而来；启用后才进入写作上下文，驳回则丢弃
+            </span>
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              icon={<CheckOutlined />}
+              loading={busy === 'anchors'}
+              onClick={() => confirmAnchors(data.anchors)}
+              style={{ marginLeft: 'auto' }}
+            >
+              全部启用（{data.anchors.length}）
+            </Button>
+          </div>
+          {data.anchors.map((row) => (
+            <div key={row.id} className="ct-pending-row">
+              <div className="ct-pending-main">
+                <div className="ct-pending-line">
+                  <span className="ct-pending-subject">{row.subject}</span>
+                  <span className="ct-anchor-tier-hint">
+                    {row.kind} · {row.confidence === 'sourced' ? '有出处' : '可推定'}
+                  </span>
+                  {row.rules?.length ? (
+                    <span className="ct-anchor-tier-hint">
+                      {row.rules.map((rule) => RULE_LABELS[rule.ruleType || rule.rule_type] || rule.rule_type).join(' / ')}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="ct-pending-reason">{row.claim}</p>
+                {row.sourceTitle ? (
+                  <p className="ct-anchor-quote">
+                    出处：{row.sourceTitle}
+                    {row.sourceLocator ? ` · ${row.sourceLocator}` : ''}
+                  </p>
+                ) : null}
+              </div>
+              <div className="ct-anchor-row-actions">
+                <Button
+                  size="small"
+                  type="primary"
+                  ghost
+                  icon={<CheckOutlined />}
+                  loading={busy === row.id}
+                  onClick={() => confirmAnchors([row])}
+                >
+                  启用
+                </Button>
+              </div>
+            </div>
+          ))}
+        </section>
       )}
 
       {!loading && data.knowledge.length > 0 && (

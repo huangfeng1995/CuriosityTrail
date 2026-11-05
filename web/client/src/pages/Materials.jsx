@@ -273,6 +273,60 @@ export default function Materials() {
     }
   };
 
+  // ---- 素材 → 锚点：显式升格（一次调用，不做表单式录入） ----
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [upgradeWorks, setUpgradeWorks] = useState([]);
+  const [upgradeWorkId, setUpgradeWorkId] = useState('');
+  const [upgrading, setUpgrading] = useState(false);
+
+  const upgradeEligible = selected.filter((id) => {
+    const item = items.find((i) => i.id === id);
+    return item && item.confidence !== 'missing' && item.status !== 'pending';
+  });
+
+  const openUpgrade = async () => {
+    if (!upgradeEligible.length) return;
+    try {
+      const res = await api.get('/works');
+      const list = (res.data || []).filter((w) => w.template === 'history_thriller');
+      if (!list.length) {
+        message.warning('还没有启用历史悬疑模板的作品，先去「作品」面板开启');
+        return;
+      }
+      setUpgradeWorks(list);
+      // 素材若已绑定某部作品，默认选它
+      const bound = items.find((i) => upgradeEligible.includes(i.id) && i.work_id)?.work_id;
+      setUpgradeWorkId(list.some((w) => w.id === bound) ? bound : list[0].id);
+      setUpgradeOpen(true);
+    } catch (e) {
+      message.error('作品列表加载失败');
+    }
+  };
+
+  const doUpgrade = async () => {
+    if (!upgradeWorkId) return;
+    setUpgrading(true);
+    try {
+      const res = await api.post(`/pipeline/${upgradeWorkId}/anchors/upgrade`, {
+        materialIds: upgradeEligible,
+      });
+      const created = res.data?.created || [];
+      const skipped = res.data?.skipped || [];
+      message.success(
+        `已生成 ${created.length} 条锚点草稿，确认前不会进入写作上下文`
+      );
+      if (skipped.length) {
+        message.info(`${skipped.length} 条跳过：${skipped[0].reason}`);
+      }
+      setUpgradeOpen(false);
+      setSelected([]);
+    } catch (e) {
+      message.error(e.response?.data?.error || '升格失败');
+    } finally {
+      setUpgrading(false);
+    }
+  };
+
   const toggle = (id) => {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
@@ -404,9 +458,40 @@ export default function Materials() {
             >
               撤回（{activeSelected.length}）
             </Button>
+            <Button
+              size="small"
+              icon={<SafetyCertificateOutlined />}
+              disabled={!upgradeEligible.length}
+              onClick={openUpgrade}
+            >
+              升格为史实锚点（{upgradeEligible.length}）
+            </Button>
           </div>
         )}
       </div>
+
+      <Modal
+        open={upgradeOpen}
+        title="升格为史实锚点"
+        okText="生成锚点草稿"
+        cancelText="取消"
+        confirmLoading={upgrading}
+        onOk={doUpgrade}
+        onCancel={() => setUpgradeOpen(false)}
+      >
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          生成的是待确认草稿，确认前不会进入写作上下文；素材之后修改也不会自动回写锚点。
+        </Text>
+        <div style={{ marginTop: 12 }}>
+          <Text style={{ fontSize: 12, marginRight: 8 }}>归到作品</Text>
+          <Select
+            value={upgradeWorkId}
+            onChange={setUpgradeWorkId}
+            options={upgradeWorks.map((w) => ({ value: w.id, label: w.title }))}
+            style={{ minWidth: 220 }}
+          />
+        </div>
+      </Modal>
 
       {visible.length === 0 ? (
         <EmptyState
