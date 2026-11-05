@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Input, Button, Spin, Tooltip, App as AntApp } from 'antd';
+import { Input, Button, Spin, Dropdown, App as AntApp } from 'antd';
 import { SendOutlined, ClearOutlined } from '@ant-design/icons';
-import { Square, Brain, EyeOff, History } from 'lucide-react';
+import { Square, History, MoreHorizontal } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
@@ -49,8 +49,9 @@ export default function AssistantSidebar() {
   // 工具过程累积器。事件回调闭包里的 msg 永远是旧快照，
   // 直接读 msg.toolTrace 会丢掉前面几次调用——必须用 ref 累。
   const toolTraceRef = useRef([]);
-  // 长期记忆开关。作者说了算，默认开着。
-  const [useMemory, setUseMemory] = useMemoryPref();
+  // 长期记忆的开关在设置页「长期记忆」里，写作页只读这个值。
+  // 同一个开关在写作页再放一遍，只会让作者怀疑两处是不是同一件事。
+  const [useMemory] = useMemoryPref();
   // 卡片提案刷新信号：正文应用后异步识别完成时递增，通知侧栏重拉列表
   const [proposalRefresh, setProposalRefresh] = useState(0);
   const { message: toast } = AntApp.useApp();
@@ -853,40 +854,38 @@ export default function AssistantSidebar() {
           className="ct-ai-textarea"
         />
         <div className="ct-ai-actions">
-          <Tooltip title="历史对话">
-            <Button
-              size="small"
-              type="text"
-              icon={<History size={14} />}
-              onClick={() => setHistoryOpen(true)}
-              disabled={sending}
-            />
-          </Tooltip>
-          <Tooltip title="清空当前对话">
-            <Button
-              size="small"
-              type="text"
-              icon={<ClearOutlined />}
-              onClick={clearChat}
-              disabled={sending || !messages.length}
-            />
-          </Tooltip>
-          <Tooltip
-            title={
-              useMemory
-                ? '长期记忆已开启：AI 会自动回忆前情'
-                : '长期记忆已关闭：AI 不会自动回忆前情'
-            }
+          {/* 历史对话与清空都是偶尔用一次的动作，收进「⋯」；
+              输入区只留「发送」这一件事常驻可见。 */}
+          <Dropdown
+            trigger={['click']}
+            placement="topLeft"
+            menu={{
+              items: [
+                {
+                  key: 'history',
+                  icon: <History size={13} />,
+                  label: '历史对话',
+                  disabled: sending,
+                  onClick: () => setHistoryOpen(true),
+                },
+                {
+                  key: 'clear',
+                  icon: <ClearOutlined />,
+                  label: '清空当前对话',
+                  disabled: sending || !messages.length,
+                  onClick: clearChat,
+                },
+              ],
+            }}
           >
             <Button
               size="small"
               type="text"
-              icon={useMemory ? <Brain size={14} /> : <EyeOff size={14} />}
-              onClick={() => setUseMemory(!useMemory)}
-              disabled={sending}
-              className={`ct-ai-memory-toggle${useMemory ? ' is-on' : ''}`}
+              icon={<MoreHorizontal size={15} />}
+              title="更多"
+              aria-label="更多对话操作"
             />
-          </Tooltip>
+          </Dropdown>
           <span style={{ flex: 1 }} />
           {sending ? (
             <Button

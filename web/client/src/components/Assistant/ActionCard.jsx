@@ -144,34 +144,50 @@ export default function ActionCard({
 
       {hasMeta && (
         <div className="ct-action-meta">
-          {planDegraded && (
-            <span className="ct-badge is-warn">
-              规划降级（{PLAN_DEGRADED_LABEL[planDegraded] || planDegraded}）
-            </span>
-          )}
-          {totalBeats > 0 && (
-            <span className={`ct-badge ${missingBeats.length ? 'is-warn' : 'is-ok'}`}>
-              节拍 {coveredBeats}/{totalBeats}
-              {missingBeats.length > 0 && ` · 缺拍 ${missingBeats.join('、')}`}
-            </span>
-          )}
-          {anchorViolations.length > 0 && (
-            <Popover
-              trigger="click"
-              placement="top"
-              title="史实冲突"
-              content={
-                <AnchorViolationList
-                  violations={anchorViolations}
-                  chapterSeq={chapterSeq}
-                />
-              }
+          {/* 规划降级 / 节拍覆盖 / 史实冲突都是核对用的元信息，
+              平时不该占卡片一行；收进「详情」，颜色保留原来的警示级别。 */}
+          <Popover
+            trigger="click"
+            placement="topRight"
+            title="生成详情"
+            content={
+              <div className="ct-action-detail">
+                {planDegraded && (
+                  <div>
+                    规划降级：{PLAN_DEGRADED_LABEL[planDegraded] || planDegraded}
+                  </div>
+                )}
+                {totalBeats > 0 && (
+                  <div>
+                    节拍覆盖：{coveredBeats}/{totalBeats}
+                    {missingBeats.length > 0 && `（缺拍 ${missingBeats.join('、')}）`}
+                  </div>
+                )}
+                {anchorViolations.length > 0 && (
+                  <div>
+                    <div>史实冲突 {anchorViolations.length} 条</div>
+                    <AnchorViolationList
+                      violations={anchorViolations}
+                      chapterSeq={chapterSeq}
+                    />
+                  </div>
+                )}
+              </div>
+            }
+          >
+            <button
+              type="button"
+              className={`ct-badge${
+                anchorViolations.length
+                  ? ' is-bad'
+                  : missingBeats.length || planDegraded
+                    ? ' is-warn'
+                    : ' is-ok'
+              }`}
             >
-              <button type="button" className="ct-badge is-bad">
-                史实冲突 {anchorViolations.length}
-              </button>
-            </Popover>
-          )}
+              详情
+            </button>
+          </Popover>
         </div>
       )}
 

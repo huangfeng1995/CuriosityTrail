@@ -2687,11 +2687,6 @@ body.ct-resizing * {
   word-break: break-word;
 }
 
-/* 记忆开关按钮：开着的时候点亮，关掉的时候灰着 */
-.ct-ai-memory-toggle.is-on {
-  color: var(--accent);
-}
-
 /* ---------- 输入区 ---------- */
 .ct-ai-input {
   border-top: 1px solid var(--border);
@@ -3896,6 +3891,18 @@ body.ct-resizing * {
 
 .ct-badge.is-bad:hover {
   border-color: var(--cinnabar-bright);
+}
+
+/* 「详情」Popover 里的元信息：规划降级 / 节拍覆盖 / 史实冲突 */
+.ct-action-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+  max-width: 420px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
 }
 
 .ct-violation-list {

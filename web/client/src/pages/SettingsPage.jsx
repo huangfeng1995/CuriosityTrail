@@ -129,7 +129,7 @@ function MemoryConfig() {
         <div>
           <div style={{ fontSize: 14 }}>在对话中使用长期记忆</div>
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-            关掉后 AI 不再自动回忆前情。也可以随时在 AI 侧边栏的输入框旁临时关闭。
+            关掉后 AI 不再自动回忆前情。
           </div>
         </div>
         <Switch checked={enabled} onChange={setEnabled} />

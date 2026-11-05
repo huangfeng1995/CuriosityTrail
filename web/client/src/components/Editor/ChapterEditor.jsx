@@ -6,8 +6,15 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { Button, Space, message, Modal, Input, Tooltip } from 'antd';
-import { SaveOutlined, UndoOutlined, RedoOutlined, HistoryOutlined } from '@ant-design/icons';
+import { Button, Space, message, Modal, Input, Tooltip, Dropdown } from 'antd';
+import {
+  SaveOutlined,
+  UndoOutlined,
+  RedoOutlined,
+  HistoryOutlined,
+  DownloadOutlined,
+  MoreOutlined,
+} from '@ant-design/icons';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { useFocus } from '../../store/focus';
@@ -19,7 +26,6 @@ import Block from './Block';
 import BlockPalette from './BlockPalette';
 import BlockToolbar from './BlockToolbar';
 import VersionHistoryPanel from './VersionHistoryPanel';
-import ExportButton from '../ExportButton';
 import EmptyState from '../EmptyState';
 import { useIsNarrow } from '../../hooks/useMediaQuery';
 
@@ -31,6 +37,13 @@ const SAVE_LABEL = {
   saved: '已保存',
   error: '保存失败',
 };
+
+// 导出格式。章节头的「⋯」里按作品 / 本章两个范围各列一遍。
+const EXPORT_FORMATS = [
+  { ext: 'docx', label: 'Word 文档（.docx）' },
+  { ext: 'md', label: 'Markdown（.md）' },
+  { ext: 'txt', label: '纯文本（.txt）' },
+];
 
 // 位置没变就不要 setState，否则滚动时每一帧都重渲染整段正文。
 function sameToolbarPos(a, b) {
@@ -421,6 +434,26 @@ export default function ChapterEditor() {
     }
   }, [blocks, chapter]);
 
+  // 导出范围：整部作品 + 本章。放在「⋯」的子菜单里，章节头只留一个入口。
+  const exportMenuItems = useMemo(() => {
+    if (!chapter) return [];
+    return [
+      { scope: 'work', id: chapter.work_id, prefix: '整部作品' },
+      { scope: 'chapter', id: chapter.id, prefix: '本章' },
+    ]
+      .filter((s) => s.id)
+      .map((s) => ({
+        key: s.scope,
+        label: s.prefix,
+        children: EXPORT_FORMATS.map((f) => ({
+          key: `${s.scope}:${f.ext}`,
+          label: f.label,
+          onClick: () =>
+            window.open(`/api/export/${s.scope}/${s.id}/${f.ext}`, '_blank'),
+        })),
+      }));
+  }, [chapter]);
+
   if (!chapter) {
     return (
       <EmptyState className="ct-empty-fill" text="从左侧选择一个章节开始写作" />
@@ -479,18 +512,43 @@ export default function ChapterEditor() {
                 onClick={redo}
               />
             </Tooltip>
-            <Tooltip title="历史版本">
+
+            {/* 历史版本、保存、导出都是偶尔用一次的动作，收进「⋯」；
+                章节头只留「保存态」这行文字常驻，作者随时知道稿子落没落库。 */}
+            <Dropdown
+              trigger={['click']}
+              placement="bottomRight"
+              menu={{
+                items: [
+                  {
+                    key: 'history',
+                    icon: <HistoryOutlined />,
+                    label: '历史版本',
+                    onClick: () => setHistoryOpen(true),
+                  },
+                  {
+                    key: 'save',
+                    icon: <SaveOutlined />,
+                    label: '立即保存',
+                    onClick: handleSaveNow,
+                  },
+                  {
+                    key: 'export',
+                    icon: <DownloadOutlined />,
+                    label: '导出',
+                    children: exportMenuItems,
+                  },
+                ],
+              }}
+            >
               <Button
                 size="small"
                 type="text"
-                icon={<HistoryOutlined />}
-                onClick={() => setHistoryOpen(true)}
+                icon={<MoreOutlined />}
+                title="更多（历史版本 / 保存 / 导出）"
+                aria-label="更多章节操作"
               />
-            </Tooltip>
-            <Button size="small" icon={<SaveOutlined />} onClick={handleSaveNow}>
-              保存
-            </Button>
-            <ExportButton scope="chapter" id={chapter.id} size="small" />
+            </Dropdown>
 
             {/* 专注模式入口。
                 放在最右：它属于「视图」类动作，跟「编辑」类动作

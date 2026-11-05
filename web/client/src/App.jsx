@@ -6,9 +6,10 @@ import {
   ConfigProvider,
   Spin,
   Badge,
+  Dropdown,
   App as AntApp,
 } from 'antd';
-import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather, Palette, BarChart, BookOpen, MessageSquare, Minimize2 } from 'lucide-react';
+import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather, Palette, BarChart, BookOpen, MessageSquare, Minimize2, MoreHorizontal } from 'lucide-react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './store/auth';
 import { WorkspaceProvider } from './store/workspace';
@@ -212,6 +213,45 @@ function AppShell({ isDark, setIsDark }) {
               onClick={exitFocus}
               title="退出专注模式（Esc）"
             />
+          ) : isWorkspace ? (
+            // 写作页顶栏收成一个「⋯」：主题 / 设置 / 退出。
+            // 三项都是偶尔用一次的，常驻在顶栏只会分走正文的注意力。
+            // 写作页没有顶部导航，所以设置入口只能从这里进。
+            <Dropdown
+              trigger={['click']}
+              placement="bottomRight"
+              menu={{
+                items: [
+                  {
+                    key: 'theme',
+                    icon: isDark ? <Sun size={14} /> : <Moon size={14} />,
+                    label: isDark ? '日间模式' : '夜间模式',
+                    onClick: () => setIsDark(!isDark),
+                  },
+                  {
+                    key: 'settings',
+                    icon: <SettingsIcon size={14} />,
+                    label: '设置',
+                    onClick: () => navigate('/settings'),
+                  },
+                  { type: 'divider' },
+                  {
+                    key: 'logout',
+                    icon: <LogOut size={14} />,
+                    label: '退出登录',
+                    onClick: logout,
+                  },
+                ],
+              }}
+            >
+              <Button
+                type="text"
+                className="ct-icon-btn"
+                icon={<MoreHorizontal size={16} />}
+                title="更多"
+                aria-label="更多"
+              />
+            </Dropdown>
           ) : (
             <>
               <Button
