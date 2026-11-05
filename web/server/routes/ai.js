@@ -691,7 +691,9 @@ router.post('/chat', async (req, res) => {
       scope: 'chat',
     });
 
-    const { messages, meta } = await assembleContext({
+    // 上下文参数留一份：规划成功后要用同一份快照 + 节拍表重建，
+    // 让本章知情边界看到「本章计划揭示的事实」。
+    const contextParams = {
       workId,
       chapterId,
       roleKey,
@@ -700,7 +702,8 @@ router.post('/chat', async (req, res) => {
       memoryRefs: memoryResult.refs,
       blocks,
       userId: req.userId,
-    });
+    };
+    const { messages, meta } = await assembleContext(contextParams);
 
     conversation = await ensureConversation(conversationId, workId, undefined, req.userId);
     const now = new Date().toISOString();
@@ -792,8 +795,13 @@ router.post('/chat', async (req, res) => {
 
     // 省掉的历史要明说：不说的话模型会以为对话刚刚开始，
     // 作者谈过的事它一概装作没听过。
-    if (historyTrim.omitted > 0 && messages.length) {
-      messages[0].content += `\n\n（说明：更早的 ${historyTrim.omitted} 条历史消息因长度限制已省略。）`;
+    // 重建上下文时这段说明要补回去（见节拍规划成功后的 refresh）。
+    const historyOmittedNote =
+      historyTrim.omitted > 0 && messages.length
+        ? `\n\n（说明：更早的 ${historyTrim.omitted} 条历史消息因长度限制已省略。）`
+        : '';
+    if (historyOmittedNote) {
+      messages[0].content += historyOmittedNote;
     }
 
     const aiCfg = aiConfig.getConfig();
@@ -894,6 +902,23 @@ router.post('/chat', async (req, res) => {
         const planMs = Date.now() - planStartedAt;
         if (planOut.plan) {
           beatPlan = planOut.plan;
+
+          // 把「本章计划揭示的事实」真正接进知情边界。
+          //
+          // 初版上下文是在规划之前装配的，那时没有 beatPlan，边界只能按
+          // 「未规划模式」限 1 条。规划成功后用同一份快照 + beatPlan 重建一次，
+          // 规划命中的 facts 才会进入「本章允许揭示」。
+          //
+          // 重建失败只回落到初版（保守上限），绝不能因此丢掉已经成功的节拍表。
+          try {
+            const plannedContext = await assembleContext({ ...contextParams, beatPlan });
+            chatMessages[0].content = plannedContext.messages[0].content;
+            meta.knowledgeCount = plannedContext.meta.knowledgeCount;
+            if (historyOmittedNote) chatMessages[0].content += historyOmittedNote;
+          } catch (err) {
+            console.error('[ai] 节拍表接入知情边界失败，沿用未规划边界:', err.message);
+          }
+
           // 拼进写手请求：system 末尾、技能清单之前。
           chatMessages[0].content += `\n\n---\n\n${formatBeatPlan(beatPlan)}`;
         } else {

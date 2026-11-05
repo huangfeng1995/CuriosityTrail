@@ -24,7 +24,7 @@ const { startFakeModel } = require('./fakeModel');
 const env = setupTempEnv();
 
 const app = require('../app');
-const { ready, all, get } = require('../database');
+const { ready, all, get, run } = require('../database');
 const aiConfig = require('../services/aiConfig');
 
 let server;
@@ -147,6 +147,49 @@ function segmentBody(label, extraParagraph = '') {
   );
   if (extraParagraph) rows.push(extraParagraph);
   return rows.join('\n\n');
+}
+
+/**
+ * 一轮「规划 → 两组正文 → 覆盖自检」的假模型响应。
+ * 规划测试只需要盯 system 里的边界，正文与自检沿用同一套合格响应。
+ */
+function planningQueue() {
+  return [
+    { content: validPlanJson(), finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '庙门半掩，主角在门槛外停了停。\n\n' + segmentBody('第一组'),
+        reason: '按节拍表写第一组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第二组', '县衙后门当晚抬出一口箱子。'),
+        reason: '按节拍表写第二组并收束',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        covered: [
+          { id: 'B1', evidence: '庙门半掩，主角在门槛外停了停' },
+          { id: 'B2', evidence: '他问庙祝照片上是谁，庙祝不答' },
+          { id: 'B3', evidence: '旧档中间缺了几页，断口很新' },
+          { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+        ],
+        missing: [],
+        weak: [],
+        hookPresent: true,
+        chapterGoalMet: true,
+      }),
+      finishReason: 'stop',
+    },
+  ];
 }
 
 /**
@@ -960,5 +1003,185 @@ test('审稿 findings 透传到 SSE，并随消息读回', async () => {
     '落库后读回仍要带 findings'
   );
   assert.strictEqual(assistant.findings[0].quote, '风雪压着庙檐');
+});
+
+// ---------------------------------------------------------------------------
+// 节拍表 → 知情边界：规划命中的事实必须进入「本章允许揭示」
+// ---------------------------------------------------------------------------
+
+/**
+ * 等后台的记忆索引 / 事实抽取把假模型调用排空，
+ * 避免它们抢走本轮 setQueue 的响应（会表现为规划莫名降级）。
+ *
+ * 不能用固定 sleep：后台任务可能在 sleep 之后才发请求。
+ * 连续两次采样调用数不变才算排空。
+ */
+async function settleBackground() {
+  let prev = -1;
+  for (let i = 0; i < 12; i += 1) {
+    if (fakeModel.calls.length === prev) return;
+    prev = fakeModel.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+}
+
+/** 从本轮新增调用里找写手请求（带节拍表的 system）。 */
+function writerSystemFrom(before) {
+  const call = fakeModel.calls
+    .slice(before)
+    .find((item) =>
+      String(item.messages?.[0]?.content || '').includes('## 本章节拍表')
+    );
+  assert.ok(
+    call,
+    `本轮应当有一次带节拍表的写手请求；实际 ${fakeModel.calls
+      .slice(before)
+      .map(
+        (item) =>
+          `[len=${String(item.messages?.[0]?.content || '').length},hasBeat=${
+            String(item.messages?.[0]?.content || '').includes('本章节拍表')
+          },tail=${String(item.messages?.[0]?.content || '').slice(-50)}]`
+      )
+      .join(' || ')}`
+  );
+  return String(call.messages[0].content || '');
+}
+
+let knowledgeSeedSeq = 0;
+
+async function seedKnowledgeChapter() {
+  knowledgeSeedSeq += 1;
+  const prefix = `kb${knowledgeSeedSeq}`;
+  const { workId, chapterId } = await seedChapter({
+    seq: 2,
+    outline: 'MAGIC-大纲：主角进庙查旧案。',
+  });
+  await run("UPDATE works SET template = 'history_thriller' WHERE id = ?", [workId]);
+  const now = new Date().toISOString();
+  await run(
+    `INSERT INTO characters (id, work_id, name, aliases, created_at, modified_at)
+     VALUES (?, ?, ?, '', ?, ?)`,
+    [`${prefix}-char`, workId, `甲${knowledgeSeedSeq}`, now, now]
+  );
+  return { workId, chapterId, now, prefix };
+}
+
+async function markKnown(workId, now, prefix) {
+  await run(
+    `INSERT INTO knowledge_matrix (id, work_id, character_id, fact_id, chapter_seq, state, created_at)
+     VALUES (?, ?, ?, ?, 1, 'knows', ?)`,
+    [`${prefix}-k1`, workId, `${prefix}-char`, `${prefix}-f1`, now]
+  );
+}
+
+test('规划命中的事实进入知情边界，解除未规划 1 条上限', async () => {
+  const { workId, chapterId, now, prefix } = await seedKnowledgeChapter();
+  await run(
+    `INSERT INTO story_facts (id, work_id, secret_id, part_no, content, keywords, created_at, modified_at)
+     VALUES (?, ?, NULL, 1, ?, ?, ?, ?)`,
+    [
+      `${prefix}-f1`,
+      workId,
+      '庙里供着的不是城隍像，而是一张旧照片，照片背面有模糊的字。',
+      '旧照片',
+      now,
+      now,
+    ]
+  );
+  await markKnown(workId, now, prefix);
+
+  await settleBackground();
+  fakeModel.setQueue(planningQueue());
+  const before = fakeModel.calls.length;
+  const events = await chat('按大纲写这一章', { workId, chapterId });
+
+  // 规划成功后用 beatPlan 重建过上下文：写手请求带节拍表
+  const writerSystem = writerSystemFrom(before);
+  assert.match(writerSystem, /本章允许揭示（来自节拍表）/, '规划命中时应走计划模式');
+  assert.match(writerSystem, /F1（B1/, '计划揭示的事实要带编号与拍号');
+  assert.ok(
+    !writerSystem.includes('本章未规划揭示点'),
+    '规划命中时不能再出现未规划文案'
+  );
+
+  const action = events.find((e) => e.type === 'action');
+  assert.strictEqual(action.planDegraded, '', '规划成功不应打降级标记');
+});
+
+test('infoGain 无法唯一匹配事实：回落 1 条上限并写明原因', async () => {
+  const { workId, chapterId, now, prefix } = await seedKnowledgeChapter();
+  // 两条事实共用同一个关键词：B1 的 infoGain 会同时命中两条，不能猜
+  for (const id of [`${prefix}-f1`, `${prefix}-f2`]) {
+    await run(
+      `INSERT INTO story_facts (id, work_id, secret_id, part_no, content, keywords, created_at, modified_at)
+       VALUES (?, ?, NULL, 1, ?, ?, ?, ?)`,
+      [id, workId, `旧照片相关的秘密：${id}`, '旧照片', now, now]
+    );
+  }
+  await markKnown(workId, now, prefix);
+
+  await settleBackground();
+  fakeModel.setQueue(planningQueue());
+  const before = fakeModel.calls.length;
+  await chat('按大纲写这一章', { workId, chapterId });
+
+  const writerSystem = writerSystemFrom(before);
+  assert.match(writerSystem, /本章允许揭示（未规划模式）/, '匹配不唯一时必须回落');
+  assert.match(
+    writerSystem,
+    /规划中的揭示点无法唯一匹配到事实，本章维持保守上限/,
+    '回落原因要明确写进注入块，不能静默'
+  );
+  assert.doesNotMatch(writerSystem, /来自节拍表/);
+  assert.doesNotMatch(writerSystem, /F1（B1|F2（B1/, '歧义时一条都不能放行');
+});
+
+test('规划失败降级：知情边界回到未规划 1 条，system 不出现节拍表', async () => {
+  const { workId, chapterId, now, prefix } = await seedKnowledgeChapter();
+  await run(
+    `INSERT INTO story_facts (id, work_id, secret_id, part_no, content, keywords, created_at, modified_at)
+     VALUES (?, ?, NULL, 1, ?, ?, ?, ?)`,
+    [
+      `${prefix}-f1`,
+      workId,
+      '庙里供着的不是城隍像，而是一张旧照片，照片背面有模糊的字。',
+      '旧照片',
+      now,
+      now,
+    ]
+  );
+  await markKnown(workId, now, prefix);
+
+  await settleBackground();
+  fakeModel.setQueue([
+    { content: '{"beats":[]}', finishReason: 'stop' },
+    { content: '{"beats":[]}', finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '他推门进庙，先看见供桌上的一层灰。',
+        reason: '规划失败，按直写处理',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const events = await chat('直接写这一段', { workId, chapterId });
+
+  const writerCall = fakeModel.calls
+    .slice(before)
+    .find((item) =>
+      String(item.messages?.[0]?.content || '').includes('本章允许揭示（未规划模式）')
+    );
+  assert.ok(writerCall, '规划失败后写手仍应拿到知情边界');
+  const writerSystem = String(writerCall.messages[0].content || '');
+  assert.match(writerSystem, /本章未规划揭示点/, '降级后维持保守上限');
+  assert.doesNotMatch(writerSystem, /来自节拍表/);
+  assert.doesNotMatch(writerSystem, /## 本章节拍表/);
+
+  const action = events.find((e) => e.type === 'action');
+  assert.strictEqual(action.planDegraded, 'invalid', '降级标记要如实上报');
 });
 

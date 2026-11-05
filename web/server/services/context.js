@@ -1192,33 +1192,34 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
     return `【${character.name}】${segments.join('｜')}`;
   };
 
-  // 「本章允许揭示」只从节拍表的 infoGain 与 delta.variable='信息' 中抽取。
-  // 没有节拍表时 reveals 为空，注入块会明确写出「本章未规划揭示点」。
+  // 「本章允许揭示」只从节拍表的 infoGain 中抽取。
+  // 匹配必须**唯一**：一个 infoGain 同时对上两条事实时，无法判断作者想揭示哪一条，
+  // 一律不放行，回落到 1 条上限。宁可少放行，也不能让边界按猜测放宽。
   const revealByFact = new Map();
+  let unmatchedPlanned = 0;
   if (plan && Array.isArray(plan.beats)) {
     for (const beat of plan.beats) {
       if (!beat) continue;
-      const hayParts = [];
-      if (beat.infoGain) hayParts.push(String(beat.infoGain));
-      if (beat.delta && beat.delta.variable === '信息') {
-        if (beat.delta.from) hayParts.push(String(beat.delta.from));
-        if (beat.delta.to) hayParts.push(String(beat.delta.to));
-      }
-      if (!hayParts.length) continue;
-      const hay = hayParts.join('\n');
-      for (const fact of facts) {
-        if (revealByFact.has(fact.id)) continue;
+      const gain = String(beat.infoGain || '').trim();
+      if (!gain) continue;
+      const matched = facts.filter((fact) => {
         const label = labels.get(fact.id);
         const keys = String(fact.keywords || '')
           .split(/[,，、]/)
           .map((s) => s.trim())
           .filter(Boolean);
-        const hit =
-          hay.includes(fact.id) ||
-          (label && new RegExp(`${label}(?!\\d)`).test(hay)) ||
-          keys.some((key) => hay.includes(key));
-        if (hit) revealByFact.set(fact.id, beat);
+        return (
+          gain.includes(fact.id) ||
+          (label && new RegExp(`${label}(?!\\d)`).test(gain)) ||
+          keys.some((key) => gain.includes(key))
+        );
+      });
+      if (matched.length !== 1) {
+        unmatchedPlanned += 1;
+        continue;
       }
+      const fact = matched[0];
+      if (!revealByFact.has(fact.id)) revealByFact.set(fact.id, beat);
     }
   }
   const reveals = Array.from(revealByFact.entries()).map(([factId, beat]) => ({
@@ -1252,7 +1253,17 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
   };
 
   const allowedText = (limit) => {
+    const unmatchedText = unmatchedPlanned
+      ? '规划中的揭示点无法唯一匹配到事实，本章维持保守上限。'
+      : '';
     if (!reveals.length) {
+      if (unmatchedText) {
+        return (
+          '本章允许揭示（未规划模式）：' +
+          `${unmatchedText}最多允许揭示 1 条新事实（${KNOWLEDGE_TOTAL_NOTE}），` +
+          '且必须写出触发契机与代价；不得本章连开多条。'
+        );
+      }
       // 没有节拍表时不能把故事锁死：允许本章自行推进 1 条，但要求写清契机与代价。
       return (
         '本章允许揭示（未规划模式）：本章未规划揭示点。' +
@@ -1271,9 +1282,11 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
       return `${label}（${id}${type}）`;
     });
     const omitted = reveals.length - max;
+    const unmatchedExtra = unmatchedText ? `另有 ${unmatchedPlanned} 个${unmatchedText}` : '';
     return (
       `${prefix}${items.join('、')}${omitted ? `…（另省略 ${omitted} 条）` : ''}。` +
-      `规划外新事实本章合计仍限 1 条（${KNOWLEDGE_TOTAL_NOTE}）。`
+      `规划外新事实本章合计仍限 1 条（${KNOWLEDGE_TOTAL_NOTE}）。` +
+      (unmatchedExtra ? ` ${unmatchedExtra}` : '')
     );
   };
 
