@@ -308,12 +308,13 @@ function validateCoverage(candidate, plan) {
  *
  * @param {Object} plan
  * @param {{missing: string[], weak: Array}} coverage
+ * @param {string[]} [mustReveal] 首次出场章仍缺的背景事实
  * @returns {string}
  */
-function buildRewriteInstruction(plan, coverage) {
+function buildRewriteInstruction(plan, coverage, mustReveal = []) {
   const byId = new Map((plan && plan.beats ? plan.beats : []).map((b) => [b.id, b]));
   const lines = [
-    `（覆盖自检结果：正文没有完整覆盖节拍表。缺失：${coverage.missing.join('、') || '无'}。）`,
+    `（覆盖自检结果：正文没有完整覆盖节拍表。缺失：${(coverage.missing || []).join('、') || '无'}。）`,
     '请重写全文，按 B1→Bn 顺序补足下面这些节拍，不要局部插入，不要解释：',
   ];
 
@@ -334,6 +335,13 @@ function buildRewriteInstruction(plan, coverage) {
     lines.push(
       `- ${item.id}（写了事件但没写出变化）：必须写出「${beat.delta.from}」到「${beat.delta.to}」的变化。`
     );
+  }
+
+  if (mustReveal.length) {
+    lines.push(
+      '同时必须交代以下背景事实（主角首次出场章，每项至少一句，写进对话或叙述，不得一句话带过）：'
+    );
+    for (const content of mustReveal) lines.push(`- ${content}`);
   }
 
   lines.push('保持已经合格的节拍，不要删掉它们。章末要留下 hook。');

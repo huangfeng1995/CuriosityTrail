@@ -14,12 +14,12 @@
 - [x] 提交 2
 
 ## T5 背景事实
-- [ ] `database.js`：`fact_type` 列 + `SCHEMA_VERSION=13`
-- [ ] 新建 `services/pipeline/backgroundFacts.js`：素材/agent 抽取入库、幂等、`checkMustReveal`、首次出场判定
-- [ ] `routes/pipeline.js`：`POST /:workId/facts/background`
-- [ ] `routes/ai.js`：brief 并入 background mustReveal；首次出场缺项触发一次重写；仍缺打徽标；`beatCheck.mustRevealMissing`
-- [ ] `test/backgroundFacts.test.js`：缺失/补齐两态、幂等、首次出场
-- [ ] 提交 3
+- [x] `database.js`：`fact_type` 列 + `SCHEMA_VERSION=13`
+- [x] 新建 `services/pipeline/backgroundFacts.js`：素材/agent 抽取入库、幂等、`checkMustReveal`、首次出场判定
+- [x] `routes/pipeline.js`：`POST /:workId/facts/background`
+- [x] `routes/ai.js`：brief 并入 background mustReveal；首次出场缺项触发一次重写；仍缺打徽标；`beatCheck.mustRevealMissing`
+- [x] `test/backgroundFacts.test.js`：缺失/补齐两态、幂等、首次出场
+- [x] 提交 3
 
 ## 收尾样本
 - [ ] `/tmp` 真实模型脚本：新测试作品 + 锚点/素材 + 完整 L0

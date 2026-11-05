@@ -16,6 +16,7 @@ const { ownedWork } = require('../services/scope');
 const { isPipelineEnabled } = require('../services/pipeline/gate');
 const anchors = require('../services/pipeline/anchors');
 const upgrade = require('../services/pipeline/upgrade');
+const backgroundFacts = require('../services/pipeline/backgroundFacts');
 const knowledgeScan = require('../services/pipeline/knowledgeScan');
 const knowledgeView = require('../services/pipeline/knowledgeView');
 
@@ -233,6 +234,33 @@ router.post('/:workId/anchors/upgrade', async (req, res) => {
       })),
       skipped: result.skipped,
     });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 背景事实（mustReveal）：素材升格或 agent 抽取，一次显式动作
+// ---------------------------------------------------------------------------
+
+router.post('/:workId/facts/background', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const materialIds = Array.isArray(req.body?.materialIds) ? req.body.materialIds : [];
+    const facts = Array.isArray(req.body?.facts) ? req.body.facts : [];
+    if (!materialIds.length && !facts.length) {
+      return res.status(400).json({ error: '至少提供 materialIds 或 facts' });
+    }
+
+    const result = await backgroundFacts.upgradeBackgroundFacts({
+      userId: req.userId,
+      workId: work.id,
+      materialIds,
+      facts,
+    });
+    return res.json(result);
   } catch (err) {
     return fail(res, err);
   }

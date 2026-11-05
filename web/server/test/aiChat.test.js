@@ -1390,3 +1390,86 @@ test('规划失败/降级/无节拍表：写手 system 与未规划基线逐字�
   );
 });
 
+// ---------------------------------------------------------------------------
+// 主角首次出场：背景事实缺项 → beatCheck 标出 → 重写一次 → 仍缺打徽标
+// ---------------------------------------------------------------------------
+
+test('首次出场缺少背景事实：beatCheck 标出、重写指令带事实、仍缺打徽标', async () => {
+  const { workId, chapterId } = await seedChapter({ outline: '主角进庙查旧案。' });
+  const db = require('../database');
+
+  await db.run(
+    `INSERT INTO characters (id, work_id, name, aliases, role, created_at, modified_at)
+     VALUES (?, ?, '主角', '', '主角', ?, ?)`,
+    [`char-reveal-${workId}`, workId, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z']
+  );
+  await db.run(
+    `INSERT INTO story_facts
+       (id, work_id, secret_id, part_no, content, keywords, fact_type, created_at, modified_at)
+     VALUES (?, ?, NULL, 1, '主角今年十四岁', '十四岁', 'background', ?, ?)`,
+    [`fact-reveal-${workId}`, workId, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z']
+  );
+
+  const coveredCheck = JSON.stringify({
+    covered: [
+      { id: 'B1', evidence: '庙门半掩' },
+      { id: 'B2', evidence: '庙祝不答' },
+      { id: 'B3', evidence: '旧档中间缺了几页' },
+      { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+    ],
+    missing: [],
+    weak: [],
+    hookPresent: true,
+    chapterGoalMet: true,
+  });
+
+  fakeModel.setQueue([
+    { content: validPlanJson(), finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第一组'),
+        reason: '第一组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第二组', '县衙后门当晚抬出一口箱子。'),
+        reason: '第二组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    { content: coveredCheck, finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '他进庙时只说了一句“庙祝昨夜不在”，便再无别话。',
+        reason: '补背景',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    { content: coveredCheck, finishReason: 'stop' },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const events = await chat('按大纲写这一章', { workId, chapterId });
+  const action = events.find((e) => e.type === 'action');
+
+  assert.strictEqual(action.beatCheck.mustRevealMissing.length, 1, 'beatCheck 必须标出缺的背景事实');
+  assert.match(action.beatCheck.mustRevealMissing[0].content, /十四岁/);
+  assert.match(action.reason, /【背景自检：未交代 主角今年十四岁】/);
+  assert.strictEqual(action.mustReveal.applicable, true);
+  assert.strictEqual(action.mustReveal.protagonist, '主角');
+
+  const rewriteCall = fakeModel.calls[before + 4];
+  const instruction = String(rewriteCall.messages[rewriteCall.messages.length - 1].content || '');
+  assert.match(instruction, /必须交代的背景事实/);
+  assert.match(instruction, /主角今年十四岁/);
+});
+
+

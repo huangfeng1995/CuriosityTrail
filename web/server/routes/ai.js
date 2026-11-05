@@ -40,6 +40,7 @@ const {
   beatBadge,
 } = require('../services/agent/beatPlan');
 const planBrief = require('../services/agent/planBrief');
+const backgroundFacts = require('../services/pipeline/backgroundFacts');
 const referenceAnchor = require('../services/agent/referenceAnchor');
 const segmentWriter = require('../services/agent/segmentWriter');
 const { checkAnchors } = require('../services/pipeline/anchorCheck');
@@ -870,6 +871,7 @@ router.post('/chat', async (req, res) => {
     let planDegraded = '';
     let brief = null;
     let briefCoverageResult = null;
+    let backgroundFactRows = [];
 
     if (planningEnabled) {
       send({ type: 'agent_thinking', label: '正在规划本章节拍' });
@@ -910,6 +912,19 @@ router.post('/chat', async (req, res) => {
               missingMaterials.map((row) => `- ${row.title}`).join('\n');
           }
 
+          backgroundFactRows = await all(
+            `SELECT * FROM story_facts
+             WHERE work_id = ? AND fact_type = 'background'
+             ORDER BY created_at ASC, id ASC`,
+            [workId]
+          ).catch(() => []);
+
+          if (backgroundFactRows.length) {
+            briefSystemPrompt +=
+              `\n\n---\n\n## 已入库的主角背景事实（首次出场章必须交代，每项至少一句）\n` +
+              backgroundFactRows.map((row) => `- ${row.content}`).join('\n');
+          }
+
           send({ type: 'agent_thinking', label: '正在整理本章必须发生的动作' });
           const briefOut = await planBrief.generatePlanBrief({
             provider,
@@ -925,8 +940,9 @@ router.post('/chat', async (req, res) => {
             },
           });
 
-          if (briefOut.brief && briefOut.brief.items.length) {
-            brief = briefOut.brief;
+          // 背景事实是确定性 mustReveal：模型没给、漏给，也不能从 brief 里漏掉。
+          brief = backgroundFacts.mergeIntoBrief(briefOut.brief, backgroundFactRows);
+          if (brief && brief.items.length) {
             briefSystemPrompt = `${briefSystemPrompt}\n\n---\n\n${planBrief.formatPlanBrief(brief)}`;
           }
 
@@ -1433,6 +1449,44 @@ router.post('/chat', async (req, res) => {
       }
     }
 
+    // ---- 背景事实自检（主角首次出场章）----
+    //
+    // 背景事实（年龄/籍贯/寄养原因）不在正文里，写手不会凭空写。
+    // 首次出场章逐项核对；缺项触发一次重写，仍缺只打徽标，不拦交付。
+    let revealCheck = { applicable: false, total: 0, covered: 0, missing: [], protagonist: null };
+
+    const loadRevealCheck = async (body) => {
+      if (!beatPlan || !isProse || !String(body || '').trim()) return revealCheck;
+      try {
+        const chapterRow = await get(
+          'SELECT seq, outline FROM chapters WHERE id = ? AND work_id = ?',
+          [chapterId, workId]
+        );
+        if (!chapterRow) return revealCheck;
+        const characterRows = await all(
+          'SELECT name, aliases, role FROM characters WHERE work_id = ? ORDER BY created_at ASC, id ASC',
+          [workId]
+        );
+        const prior = await all(
+          'SELECT content FROM chapters WHERE work_id = ? AND seq < ? ORDER BY seq ASC',
+          [workId, chapterRow.seq]
+        );
+        revealCheck = backgroundFacts.mustRevealForChapter({
+          facts: backgroundFactRows,
+          characters: characterRows,
+          chapterText: `${chapterRow.outline || ''}\n${String(message)}`,
+          priorBodies: prior.map((row) => row.content || ''),
+          body,
+        });
+      } catch (err) {
+        console.error('背景事实自检失败：', err.message);
+      }
+      return revealCheck;
+    };
+
+    await loadRevealCheck(payload.content);
+    const revealMissing = revealCheck.applicable ? revealCheck.missing : [];
+
     // 缺拍重写：最多一次。
     //
     // 重写失败、超时或客户已断开都不丢第一版——作者已经有一份能用的稿子，
@@ -1449,13 +1503,17 @@ router.post('/chat', async (req, res) => {
       segmented &&
       beatPlan &&
       beatCheck &&
-      segmentedMissingIds.length &&
+      (segmentedMissingIds.length || revealMissing.length) &&
       !roundSignal.aborted
     ) {
       // 分段起稿的缺拍重写：只换掉缺拍所在的组，其他组原样保留。
       // 整章重来等于把已经合格的部分再洗一遍，调用次数也会立刻顶到上限。
+      // 只为补背景事实时没有「缺拍组」，强制重写第一组并带上本组原有节拍。
+      const factsOnly = !segmentedMissingIds.length && Boolean(revealMissing.length);
       const missingIds = segmentedMissingIds;
-      const affected = segmentWriter.groupsForIds(segmented.groups, missingIds);
+      const affected = factsOnly
+        ? segmented.groups.slice(0, 1)
+        : segmentWriter.groupsForIds(segmented.groups, missingIds);
       const remainingMs = ROUND_BUDGET_MS - (Date.now() - startedAt);
       const neededMs = affected.length * SEGMENT_CALL_TIMEOUT_MS + CHECK_TIMEOUT_MS;
 
@@ -1493,6 +1551,8 @@ router.post('/chat', async (req, res) => {
             plan: beatPlan,
             groups: segmented.groups,
             coverage: beatCheck,
+            brief,
+            mustReveal: revealMissing.map((fact) => fact.content),
             runSegment: segmentRun,
             maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
             callCount: segmented.callCount,
@@ -1573,6 +1633,7 @@ router.post('/chat', async (req, res) => {
             } else {
               beatCheckError = 'recheck';
             }
+            await loadRevealCheck(payload.content);
 
             console.log(
               JSON.stringify({
@@ -1602,21 +1663,26 @@ router.post('/chat', async (req, res) => {
     } else if (
       beatPlan &&
       beatCheck &&
-      beatCheck.missing.length &&
+      (beatCheck.missing.length || revealMissing.length) &&
       !roundSignal.aborted &&
       ROUND_BUDGET_MS - (Date.now() - startedAt) >= WRITE_TIMEOUT_MS + CHECK_TIMEOUT_MS
     ) {
       send({
         type: 'agent_thinking',
-        label: `正在补写缺少的节拍：${beatCheck.missing.join('、')}`,
+        label: `正在补写缺少的节拍：${beatCheck.missing.join('、') || revealMissing.map((x) => x.content).join('、')}`,
       });
 
       try {
         const rewriteStartedAt = Date.now();
+        const rewriteInstruction = buildRewriteInstruction(
+          beatPlan,
+          beatCheck,
+          revealMissing.map((fact) => fact.content)
+        );
         const rewriteResult = await runChat(
           [
             ...chatMessages,
-            { role: 'user', content: buildRewriteInstruction(beatPlan, beatCheck) },
+            { role: 'user', content: rewriteInstruction },
           ],
           { signal: writeSignal() }
         );
@@ -1658,6 +1724,7 @@ router.post('/chat', async (req, res) => {
           } else {
             beatCheckError = 'recheck';
           }
+          await loadRevealCheck(payload.content);
 
           console.log(
             JSON.stringify({
@@ -1688,6 +1755,24 @@ router.post('/chat', async (req, res) => {
     // 前端不用改也能显示；日志里另有 ai_beat_check 供复盘。
     // 没有规划就没有「编排」可言，此时不能挂「未自检」——那会让作者
     // 以为检查跑过且失败了，而真相是这一轮根本没规划。
+    const revealBadge = revealCheck.applicable
+      ? backgroundFacts.mustRevealBadge(revealCheck.missing)
+      : '';
+    if (revealCheck.applicable) {
+      console.log(
+        JSON.stringify({
+          event: 'ai_must_reveal',
+          traceId,
+          userId: req.userId,
+          protagonist: revealCheck.protagonist ? revealCheck.protagonist.name : '',
+          total: revealCheck.total,
+          covered: revealCheck.covered,
+          missing: revealCheck.missing.map((item) => item.content),
+          rewrote: beatRewrite,
+        })
+      );
+    }
+
     const badge = beatPlan
       ? beatBadge({
           coverage: beatCheck,
@@ -1702,10 +1787,24 @@ router.post('/chat', async (req, res) => {
       segmented && segmented.truncated
         ? `【字数安全上限 ${segmentWriter.MAX_CHAPTER_CHARS}：已截到最后一个完整段】`
         : '';
-    if (segmentBadge || truncationBadge || badge) {
-      payload.reason = [segmentBadge, truncationBadge, badge, payload.reason].filter(Boolean).join(' ');
+    if (segmentBadge || truncationBadge || badge || revealBadge) {
+      payload.reason = [segmentBadge, truncationBadge, badge, revealBadge, payload.reason]
+        .filter(Boolean)
+        .join(' ');
     }
-    payload.beatCheck = beatCheck;
+    payload.beatCheck = beatCheck
+      ? {
+          ...beatCheck,
+          mustRevealMissing: revealCheck.applicable ? revealCheck.missing : [],
+        }
+      : null;
+    payload.mustReveal = {
+      applicable: revealCheck.applicable,
+      protagonist: revealCheck.protagonist ? revealCheck.protagonist.name : null,
+      total: revealCheck.total,
+      covered: revealCheck.covered,
+      missing: revealCheck.missing,
+    };
     // 分场 brief 与硬覆盖结果：给前端复盘用，不改变正文。
     payload.planBrief = brief
       ? { items: brief.items.slice(0, 12), dropped: (brief.dropped || []).slice(0, 5) }
@@ -1967,6 +2066,7 @@ router.post('/chat', async (req, res) => {
       planDegraded: payload.planDegraded || '',
       planBrief: payload.planBrief || null,
       briefCoverage: payload.briefCoverage || null,
+      mustReveal: payload.mustReveal || null,
       segmentInfo: payload.segmentInfo || null,
     });
     send({

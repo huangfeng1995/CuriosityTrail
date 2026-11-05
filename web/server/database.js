@@ -33,8 +33,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 9 → 10：知情扫描待确认表（knowledge_pending）。
  * 版本 10 → 11：素材出处/置信/来源/状态列（agent 整理素材的机械约束）。
  * 版本 11 → 12：锚点记录来源素材 id（素材显式升格用，不建外键、不双向同步）。
+ * 版本 12 → 13：故事事实增加 fact_type（secret/background），背景事实用于 mustReveal。
  */
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 /**
  * 版本号之前的老库遗留表。
@@ -529,6 +530,9 @@ CREATE TABLE IF NOT EXISTS story_facts (
   part_no     INTEGER NOT NULL DEFAULT 1,
   content     TEXT NOT NULL,
   keywords    TEXT,
+  -- secret：需要 withhold 的秘密；background：主角首次出场必须交代的背景事实
+  -- （年龄/籍贯/寄养原因），对应分场 brief 的 mustReveal。
+  fact_type   TEXT NOT NULL DEFAULT 'secret',
   created_at  TEXT NOT NULL,
   modified_at TEXT NOT NULL
 );
@@ -734,6 +738,8 @@ async function migrate(fromVersion) {
   await ensureColumn('materials', 'search_log', "TEXT NOT NULL DEFAULT ''");
   // 11 → 12：锚点记录来源素材 id。老锚点留空串，仍按原状态工作。
   await ensureColumn('work_anchors', 'source_material_id', "TEXT NOT NULL DEFAULT ''");
+  // 12 → 13：事实类型。老事实都是秘密，默认 secret，不会误当背景事实。
+  await ensureColumn('story_facts', 'fact_type', "TEXT NOT NULL DEFAULT 'secret'");
   await ensureColumn('prompt_overrides', 'model', 'TEXT');
   await ensureColumn('prompt_overrides', 'thinking', 'INTEGER');
   await ensureColumn('chapters', 'outline', 'TEXT');
