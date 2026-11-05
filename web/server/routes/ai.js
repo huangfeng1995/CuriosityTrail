@@ -1036,6 +1036,8 @@ router.post('/chat', async (req, res) => {
               beatPlan = placed.plan;
               coverage = planBrief.briefCoverage(brief, beatPlan);
             }
+            // 交付拍号写回 brief：写手指令和重复自检都要具体到第几拍。
+            brief.handoverBeat = planBrief.handoverBeatId(brief, beatPlan);
             briefCoverageResult = coverage;
             if (coverage.missing.length) {
               planDegraded = `brief_missing:${coverage.missing
@@ -1479,6 +1481,7 @@ router.post('/chat', async (req, res) => {
               weak: beatCheck ? beatCheck.weak.map((w) => w.id) : [],
               hookPresent: beatCheck ? beatCheck.hookPresent : null,
               chapterGoalMet: beatCheck ? beatCheck.chapterGoalMet : null,
+              handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
               rewrote: false,
               usage: checkOut.usage || null,
             })
@@ -1523,6 +1526,9 @@ router.post('/chat', async (req, res) => {
     };
 
     await loadRevealCheck(payload.content);
+    // 交付只允许一次：确定性扫正文，不依赖模型自检。
+    const handoverDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
+    if (beatCheck) beatCheck.handoverDuplicated = handoverDup.beatIds;
     const revealAllMissing = revealCheck.applicable ? revealCheck.missing : [];
     // 「背景事实尚未入库」不是写手能补的：只报给作者（beatCheck + 徽标），
     // 不发起重写，否则等于逼写手编造年龄/籍贯。
@@ -1538,7 +1544,11 @@ router.post('/chat', async (req, res) => {
     // 只有覆盖报告真的指出缺拍/weak 才进重写；全覆盖时不打 skip 日志，
     // 否则每一轮成功起稿都会多一条无意义的 ai_segment_rewrite_skip。
     const segmentedMissingIds = beatCheck
-      ? [...beatCheck.missing, ...beatCheck.weak.map((w) => w.id)]
+      ? [
+          ...beatCheck.missing,
+          ...beatCheck.weak.map((w) => w.id),
+          ...(beatCheck.handoverDuplicated || []),
+        ]
       : [];
     if (
       segmented &&
@@ -1675,6 +1685,8 @@ router.post('/chat', async (req, res) => {
               beatCheckError = 'recheck';
             }
             await loadRevealCheck(payload.content);
+            const recheckDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
+            if (beatCheck) beatCheck.handoverDuplicated = recheckDup.beatIds;
 
             console.log(
               JSON.stringify({
@@ -1689,6 +1701,7 @@ router.post('/chat', async (req, res) => {
                 weak: recheckOut.coverage ? recheckOut.coverage.weak.map((w) => w.id) : [],
                 hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
                 chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
+                handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
                 rewrote: true,
                 usage: recheckOut.usage || null,
               })
@@ -1704,7 +1717,7 @@ router.post('/chat', async (req, res) => {
     } else if (
       beatPlan &&
       beatCheck &&
-      (beatCheck.missing.length || revealMissing.length) &&
+      (beatCheck.missing.length || (beatCheck.handoverDuplicated || []).length || revealMissing.length) &&
       !roundSignal.aborted &&
       ROUND_BUDGET_MS - (Date.now() - startedAt) >= WRITE_TIMEOUT_MS + CHECK_TIMEOUT_MS
     ) {
@@ -1718,7 +1731,8 @@ router.post('/chat', async (req, res) => {
         const rewriteInstruction = buildRewriteInstruction(
           beatPlan,
           beatCheck,
-          revealMissing.map((fact) => fact.content)
+          revealMissing.map((fact) => fact.content),
+          { handoverBeat: brief && brief.handoverBeat ? brief.handoverBeat : '' }
         );
         const rewriteResult = await runChat(
           [
@@ -1766,6 +1780,8 @@ router.post('/chat', async (req, res) => {
             beatCheckError = 'recheck';
           }
           await loadRevealCheck(payload.content);
+          const recheckDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
+          if (beatCheck) beatCheck.handoverDuplicated = recheckDup.beatIds;
 
           console.log(
             JSON.stringify({
@@ -1780,6 +1796,7 @@ router.post('/chat', async (req, res) => {
               weak: recheckOut.coverage ? recheckOut.coverage.weak.map((w) => w.id) : [],
               hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
               chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
+              handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
               rewrote: true,
               usage: recheckOut.usage || null,
             })

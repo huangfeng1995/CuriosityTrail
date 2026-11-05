@@ -107,6 +107,44 @@ test('每组指令都带完整节拍表引用、已写尾部与目标篇幅', ()
   assert.match(last, /章末钩子/);
 });
 
+test('交付只写一次：组指令给具体拍号，重复拍在重写里被点名', () => {
+  const plan = makePlan(8);
+  const groups = segmentWriter.planSegments(plan);
+  const brief = { items: [], handoverBeat: 'B6' };
+
+  const inGroup = segmentWriter.buildSegmentInstruction({
+    plan,
+    group: groups.find((g) => g.beatIds.includes('B6')),
+    groups,
+    tail: '上一组最后一段原文。',
+    brief,
+  });
+  assert.match(inGroup, /本章交付只发生一次，就落在本组的 B6 拍/);
+
+  const other = segmentWriter.buildSegmentInstruction({
+    plan,
+    group: groups.find((g) => !g.beatIds.includes('B6')),
+    groups,
+    tail: '上一组最后一段原文。',
+    brief,
+  });
+  assert.match(other, /本章交付只发生一次，已在第 B6 拍完成/);
+
+  const dupGroup = groups.find((g) => g.beatIds.includes('B4'));
+  const rewrite = segmentWriter.buildGroupRewriteInstruction({
+    plan,
+    group: dupGroup,
+    groups,
+    problemIds: ['B4'],
+    handoverDupIds: ['B4'],
+    brief,
+    tail: '上一组最后一段原文。',
+    nextHead: '',
+  });
+  assert.match(rewrite, /B4：本章交付只发生一次，已在第 B6 拍完成/);
+  assert.match(rewrite, /只保留递、接、握住手这类预备动作/);
+});
+
 test('编排与可读性要求写进起稿、续写与重写指令，不再有数字门槛', () => {
   const plan = makePlan(4);
   const groups = segmentWriter.planSegments(plan);

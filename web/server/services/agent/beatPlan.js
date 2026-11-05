@@ -311,12 +311,26 @@ function validateCoverage(candidate, plan) {
  * @param {string[]} [mustReveal] 首次出场章仍缺的背景事实
  * @returns {string}
  */
-function buildRewriteInstruction(plan, coverage, mustReveal = []) {
+function buildRewriteInstruction(plan, coverage, mustReveal = [], handover = {}) {
   const byId = new Map((plan && plan.beats ? plan.beats : []).map((b) => [b.id, b]));
   const lines = [
     `（覆盖自检结果：正文没有完整覆盖节拍表。缺失：${(coverage.missing || []).join('、') || '无'}。）`,
     '请重写全文，按 B1→Bn 顺序补足下面这些节拍，不要局部插入，不要解释：',
   ];
+
+  const handoverBeat = handover && handover.handoverBeat ? `第 ${handover.handoverBeat} 拍` : '';
+  const dupIds = (coverage && coverage.handoverDuplicated) || [];
+  if (handoverBeat) {
+    lines.push(
+      `本章交付只发生一次，${handoverBeat} 完成；其余拍不要重复托付话或重复交割，` +
+        '最多保留递、接、握住手这类预备动作。'
+    );
+  }
+  if (dupIds.length) {
+    lines.push(
+      `以下拍已经重复交付，必须删掉完整形态，只保留预备动作：${dupIds.join('、')}。`
+    );
+  }
 
   for (const id of coverage.missing) {
     const beat = byId.get(id);

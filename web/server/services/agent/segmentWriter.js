@@ -385,6 +385,21 @@ function buildSelfCheck(group) {
 }
 
 /**
+ * 交付只发生一次的硬约束。
+ *
+ * 不写抽象句：直接给拍号。包含该拍的组负责交付一次，其他组只保留预备动作。
+ */
+function handoverOnceRule(brief, group) {
+  const beat = brief && typeof brief.handoverBeat === 'string' ? brief.handoverBeat.trim() : '';
+  if (!beat) return '';
+  const contains = Boolean(group && (group.beatIds || []).includes(beat));
+  if (contains) {
+    return `本章交付只发生一次，就落在本组的 ${beat} 拍；本组其他拍和后面各组不得重复托付话或重复交割，最多保留递、接、握住手这类预备动作。`;
+  }
+  return `本章交付只发生一次，已在第 ${beat} 拍完成；本组不要重复托付或重复交割，最多保留递、接、握住手这类预备动作。`;
+}
+
+/**
  * 某一组的起稿指令。
  *
  * 完整节拍表已经在 system 里（每次调用都会带上），所以这里不再重贴 JSON，
@@ -419,6 +434,8 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     '',
     briefBlock,
     briefBlock ? '' : null,
+    handoverOnceRule(brief, group),
+    handoverOnceRule(brief, group) ? '' : null,
     '## 本组节拍',
     beatSummary(group.beats),
     '',
@@ -488,6 +505,8 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
     '',
     briefBlock,
     briefBlock ? '' : null,
+    handoverOnceRule(brief, group),
+    handoverOnceRule(brief, group) ? '' : null,
   ];
 
   if (group.isLast) {
@@ -511,6 +530,7 @@ function buildGroupRewriteInstruction({
   groups,
   problemIds,
   weakIds = [],
+  handoverDupIds = [],
   tail,
   nextHead,
   brief = null,
@@ -518,17 +538,26 @@ function buildGroupRewriteInstruction({
 }) {
   const wanted = new Set(problemIds || []);
   const weak = new Set(weakIds || []);
+  const dup = new Set(handoverDupIds || []);
+  const handoverBeat = brief && typeof brief.handoverBeat === 'string' ? brief.handoverBeat.trim() : '';
   const briefBlock = briefWriterBlock(brief);
   const revealLines = (mustReveal || []).map((fact) => `- ${fact}`);
   const problems = group.beats
-    .filter((b) => wanted.has(b.id) || weak.has(b.id))
-    .map(
-      (b) =>
+    .filter((b) => wanted.has(b.id) || weak.has(b.id) || dup.has(b.id))
+    .map((b) => {
+      if (dup.has(b.id)) {
+        return (
+          `- ${b.id}：本章交付只发生一次，已在第 ${handoverBeat || '指定'} 拍完成；` +
+          '本拍删掉完整托付/交割和托付话，只保留递、接、握住手这类预备动作。'
+        );
+      }
+      return (
         `- ${b.id}：必须写出目标「${b.goal}」、阻碍「${b.obstacle}」、代价「${b.cost}」，` +
         `以及「${b.delta.variable}」从「${b.delta.from}」到「${b.delta.to}」的变化，` +
         `收在「${b.endHook}」。` +
         (weak.has(b.id) ? '写到了事件但没写出变化，这一遍要把变化写实。' : '')
-    );
+      );
+    });
 
   return [
     `## 重写第 ${group.index + 1}/${groups.length} 组（${group.beatIds.join('、')}）`,
@@ -544,6 +573,8 @@ function buildGroupRewriteInstruction({
     revealLines.length ? '' : null,
     briefBlock,
     briefBlock ? '' : null,
+    handoverOnceRule(brief, group),
+    handoverOnceRule(brief, group) ? '' : null,
     '## 上一组结尾（仅供衔接，不要重抄）',
     tail || '（本章从这里开始）',
     '',
@@ -968,7 +999,8 @@ async function rewriteMissingGroups({
   const failedGroups = [];
 
   const weakIds = (coverage?.weak || []).map((w) => w.id);
-  const missingIds = [...(coverage?.missing || []), ...weakIds];
+  const dupIds = coverage?.handoverDuplicated || [];
+  const missingIds = [...(coverage?.missing || []), ...weakIds, ...dupIds];
   const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
   const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
 
@@ -994,6 +1026,7 @@ async function rewriteMissingGroups({
       // 只为补背景事实强制重写时，把本组原有节拍一并列出来，避免补一句身世却丢掉本组动作。
       problemIds: factsOnly ? group.beatIds : (coverage?.missing || []),
       weakIds: factsOnly ? [] : weakIds,
+      handoverDupIds: factsOnly ? [] : (coverage?.handoverDuplicated || []),
       tail: tailParagraphs(before || existingBody, 3),
       nextHead,
       brief,

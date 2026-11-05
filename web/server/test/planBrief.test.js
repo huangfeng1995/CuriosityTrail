@@ -22,6 +22,8 @@ const {
   buildReplanInstruction,
   mergeHandoverIntoBrief,
   placeHandoverInPlan,
+  handoverBeatId,
+  findHandoverDuplicates,
   generatePlanBrief,
 } = require('../services/agent/planBrief');
 const { validateBeatPlan } = require('../services/agent/beatPlan');
@@ -828,12 +830,12 @@ test('格式与写手块：对手和托付都有独立段落', () => {
 
   const formatted = formatPlanBrief(brief);
   assert.match(formatted, /外部对手（开场拍必须由它施加阻碍/);
-  assert.match(formatted, /托付（告别\/离场拍由托付人本人把主角交给登记对象/);
-  assert.match(formatted, /交付给：杨俊；形式：话/);
+  assert.match(formatted, /托付（全章只允许一次完整交付，告别\/离场拍由托付人本人/);
+  assert.match(formatted, /交付给：杨俊；形式：话；全章只交付一次/);
 
   const writerBlock = briefWriterBlock(brief);
   assert.match(writerBlock, /开场的外部对手/);
-  assert.match(writerBlock, /托付（告别\/离场拍由托付人本人/);
+  assert.match(writerBlock, /托付（全章只允许一次完整交付/);
   assert.match(writerBlock, /交给：杨俊；形式：话/);
   // 托付项不再重复出现在「必须到场」行。
   assert.strictEqual((writerBlock.match(/司马防在告别时把杨平交给杨俊/g) || []).length, 1);
@@ -846,4 +848,180 @@ test('格式：opponent 标了 none 时写明原因，不硬编', () => {
   const formatted = formatPlanBrief(brief);
   assert.match(formatted, /本章没有明确的外部对手（本章没有外部势力出场）/);
   assert.ok(!formatted.includes('外部对手（开场拍必须由它施加阻碍）'));
+});
+
+/** 六拍：B3 门前交接，B6 正式告别交付。 */
+function sixBeatHandoverPlan() {
+  return validateBeatPlan({
+    chapterGoal: '杨平随父离城',
+    protagonistIntent: '跟父亲走',
+    obstacle: '司马防不肯放人',
+    cost: '交出犀角弓',
+    hook: '车队出城',
+    avoidRepeat: [],
+    mainType: '决定',
+    beats: [
+      { id: 'B1', type: '行动', goal: '进司马府见父亲', obstacle: '门禁核对符传', cost: '在门外等了一个时辰', delta: { variable: '处境', from: '门外', to: '堂上' }, infoGain: '符传的形制与寻常不同', paragraphs:  4, endHook: '堂内有人咳了一声' },
+      { id: 'B2', type: '冲突', goal: '问寄养旧事', obstacle: '司马防避而不答', cost: '话说重了', delta: { variable: '关系', from: '客气', to: '顶撞' }, infoGain: '司马防提到寄养旧约', paragraphs: 4, endHook: '司马防沉默' },
+      { id: 'B3', type: '转折', goal: '回到司马府门前', obstacle: '管家催着上车', cost: '没来得及追问', delta: { variable: '处境', from: '院里', to: '门口' }, infoGain: '箱笼只剩一只旧弓', paragraphs: 4, endHook: '长匣扣上了' },
+      { id: 'B4', type: '行动', goal: '随传车出城', obstacle: '城门核验符传', cost: '被多扣了一刻', delta: { variable: '处境', from: '城里', to: '城外' }, infoGain: '传车上封着司空府印', paragraphs: 4, endHook: '车帘外有人追来' },
+      { id: 'B5', type: '揭示', goal: '在驿馆落脚', obstacle: '杨俊不肯说许都', cost: '一夜没睡', delta: { variable: '信息', from: '以为只是随行', to: '知道有人在等' }, infoGain: '杨俊提到获嘉旧案', paragraphs: 4, endHook: '司马防只说了半句' },
+      { id: 'B6', type: '决定', goal: '在门前与司马家众人告别', obstacle: '司马防不肯松手', cost: '把杨平的手交给杨俊', delta: { variable: '关系', from: '还能托付', to: '交出去了' }, infoGain: '司马防说「保他平安」', paragraphs: 4, endHook: '车队动了' },
+    ],
+  }).plan;
+}
+
+function handoverBrief() {
+  return validatePlanBrief({
+    items: [
+      {
+        kind: 'mustPresent',
+        text: '司马防在告别拍把杨平交给杨俊',
+        keywords: ['司马防'],
+        source: '人物卡',
+        handover: true,
+        to: '杨俊',
+        handoverKind: '话',
+      },
+    ],
+  }).brief;
+}
+
+test('交付重复：B3 与 B6 都完整交付 → 标出 B3，重写后只剩 B6', () => {
+  const brief = handoverBrief();
+  brief.handoverBeat = 'B6';
+  const plan = sixBeatHandoverPlan();
+
+  const before = [
+    '杨平进了司马府，堂上有人咳了一声。',
+    '符传核验比寻常更慢。',
+    '司马防问起杨平这些年的日子。',
+    '杨平答得越来越轻。',
+    '司马防当着杨俊的面把杨平的手交到杨俊手里。',
+    '司马防说：「保他平安。」',
+    '传车出了城门。',
+    '车帘外有人追了两步。',
+    '驿馆的灯点到半夜。',
+    '杨俊没有提许都。',
+    '司马防把杨平的手递到杨俊手里。',
+    '司马防说：「这孩子在我家养了十年，今日完璧归赵。」',
+  ].join('\n');
+
+  const dup = findHandoverDuplicates(brief, before, plan);
+  assert.strictEqual(dup.handoverBeat, 'B6');
+  assert.deepStrictEqual(dup.beatIds, ['B3'], 'B3 是重复的完整交付，必须标出');
+
+  const after = [
+    '杨平进了司马府，堂上有人咳了一声。',
+    '符传核验比寻常更慢。',
+    '司马防问起杨平这些年的日子。',
+    '杨平答得越来越轻。',
+    '司马防把杨平的手往杨俊那边送了送。',
+    '杨俊伸手接住，没有多话。',
+    '传车出了城门。',
+    '车帘外有人追了两步。',
+    '驿馆的灯点到半夜。',
+    '杨俊没有提许都。',
+    '司马防把杨平的手递到杨俊手里。',
+    '司马防说：「这孩子在我家养了十年，今日完璧归赵。」',
+  ].join('\n');
+
+  const fixed = findHandoverDuplicates(brief, after, plan);
+  assert.deepStrictEqual(fixed.beatIds, [], '重写后只剩 B6 一次完整交付');
+  assert.strictEqual(fixed.handoverBeat, 'B6');
+});
+
+test('交付不重复：只有 B6 完整交付 → 不标', () => {
+  const brief = handoverBrief();
+  brief.handoverBeat = 'B6';
+  const plan = sixBeatHandoverPlan();
+  const body = [
+    '杨平进了司马府，堂上有人咳了一声。',
+    '符传核验比寻常更慢。',
+    '司马防问起杨平这些年的日子。',
+    '杨平答得越来越轻。',
+    '司马防把杨平的手往杨俊那边送了送。',
+    '杨俊伸手接住，没有多话。',
+    '传车出了城门。',
+    '车帘外有人追了两步。',
+    '驿馆的灯点到半夜。',
+    '杨俊没有提许都。',
+    '司马防把杨平的手递到杨俊手里。',
+    '司马防说：「这孩子在我家养了十年，今日完璧归赵。」',
+  ].join('\n');
+
+  const dup = findHandoverDuplicates(brief, body, plan);
+  assert.strictEqual(dup.handoverBeat, 'B6');
+  assert.deepStrictEqual(dup.beatIds, [], '只有一次交付就不标');
+});
+
+test('交付重复：同段各提一次名字，不算完整交付', () => {
+  const brief = handoverBrief();
+  brief.handoverBeat = 'B6';
+  const plan = sixBeatHandoverPlan();
+  // B3 那一段里司马防与杨俊都出现了，但只是「话是说给杨俊听的」，
+  // 没有任何人真的把杨平交出去——这不能算第二次完整交付。
+  const body = [
+    '杨平进了司马府，堂上有人咳了一声。',
+    '符传核验比寻常更慢。',
+    '司马防问起杨平这些年的日子。',
+    '杨平答得越来越轻。',
+    '司马朗说这话时眼睛看着杨平，可每个字都是给杨俊的。司马防前天还在院里操练，腰都没弯一下。',
+    '“父亲说，车马已经备好。”司马朗说完，把手往袖子里一拢。',
+    '传车出了城门。',
+    '车帘外有人追了两步。',
+    '驿馆的灯点到半夜。',
+    '杨俊没有提许都。',
+    '司马防把杨平的手递到杨俊手里。',
+    '司马防说：「这孩子在我家养了十年，今日完璧归赵。」',
+  ].join('\n');
+
+  const dup = findHandoverDuplicates(brief, body, plan);
+  assert.strictEqual(dup.handoverBeat, 'B6');
+  assert.deepStrictEqual(dup.beatIds, [], '只是同段提到名字，不能当成第二次交付');
+});
+
+test('handover 拍号：告别/送行拍优先于门口交接拍', () => {
+  const brief = handoverBrief();
+  const plan = sixBeatHandoverPlan();
+  assert.strictEqual(handoverBeatId(brief, plan), 'B6');
+});
+
+/** 七拍：B6 只是门前交接，B7 才上车离开。 */
+function departurePlan() {
+  const beat = (id, goal, obstacle, cost, infoGain, endHook, type = '行动') => ({
+    id,
+    type,
+    goal,
+    obstacle,
+    cost,
+    delta: { variable: '处境', from: `${id}起点`, to: `${id}终点` },
+    infoGain,
+    paragraphs: 3,
+    endHook,
+  });
+  return validateBeatPlan({
+    chapterGoal: '杨平随父离城',
+    protagonistIntent: '跟父亲走',
+    obstacle: '司马防不肯放人',
+    cost: '交出犀角弓',
+    hook: '车队出城',
+    avoidRepeat: [],
+    mainType: '决定',
+    beats: [
+      beat('B1', '进司马府见父亲', '门禁核对符传', '在门外等了一个时辰', '符传形制与寻常不同，尾部多出一颗星', '堂内有人咳了一声'),
+      beat('B2', '问寄养旧事', '司马防避而不答', '话说重了', '司马防提到寄养旧约，话只说了半句', '司马防沉默'),
+      beat('B3', '回到司马府门前', '管家催着上车', '没来得及追问', '箱笼只剩一只旧弓，弓弭上还有族记', '长匣扣上了'),
+      beat('B4', '随传车出城', '城门核验符传', '被多扣了一刻', '传车上封着司空府印，印泥尚未干透', '车帘外有人追来'),
+      beat('B5', '在驿馆落脚', '杨俊不肯说许都', '一夜没睡', '杨俊提到获嘉旧案，随即闭口不再说', '司马防只说了半句'),
+      beat('B6', '在司马府门前把杨平交给杨俊', '家兵核对符传迟迟不放', '在阶下多站了一刻', '符传尾部的星纹被看清，多出一颗', '门里有人喊住手'),
+      beat('B7', '杨平上车，跟父亲离开温县', '司马防隔帘交代，杨俊在阶下应声', '被父亲交给传车', '司马防说保他平安，只说了这一句', '车轮压过石槛', '决定'),
+    ],
+  }).plan;
+}
+
+test('handover 拍号：门口交接拍不抢离场拍，交付落在 B7', () => {
+  const brief = handoverBrief();
+  const plan = departurePlan();
+  assert.strictEqual(handoverBeatId(brief, plan), 'B7');
 });

@@ -51,6 +51,14 @@ const FAREWELL_RE = /告别|辞行|拜别|离别|离场|送行|送别|启程|出
 const STRONG_FAREWELL_RE = /告别|辞行|拜别|离别|送行|送别|门前|门口|门外|分别/;
 
 /**
+ * 真正离场的那一拍：启程、上车、离开。
+ *
+ * 门口那一拍常只是「进府/等示下」，人还站在阶下；交付要落在
+ * 人已经往车边走、话说得出口的那一拍，否则写手会被指到错拍。
+ */
+const DEPARTURE_ACTION_RE = /告别|辞行|拜别|离别|离场|送行|送别|分别|启程|出城|离开|上路|动身|登车|上车/;
+
+/**
  * 托付条目本身的交付语义：条目文字里必须写明「托付/交给/递/塞/赠/留下」这类动作。
  *
  * 「某人到场」「父亲接走主角」不带这些动作，即使模型标了 handover 也不认。
@@ -251,7 +259,7 @@ function normalizeItem(raw, index, dropped) {
     source: inferred && !source ? 'inferred' : source,
     inferred,
     handover,
-    ...(handover ? { to: handoverTo, handoverKind } : {}),
+    ...(handover ? { to: handoverTo, handoverKind, once: true } : {}),
   };
 }
 
@@ -320,7 +328,7 @@ function itemLine(item) {
     ? `（关键词：${item.keywords.join('、')}）`
     : '';
   const handover = item.handover === true
-    ? `（交付给：${item.to || '未登记'}；形式：${item.handoverKind || '话或物'}）`
+    ? `（交付给：${item.to || '未登记'}；形式：${item.handoverKind || '话或物'}；全章只交付一次）`
     : '';
   return `- [${item.kind}] ${item.text}${handover}${source}${keywords}`;
 }
@@ -354,7 +362,7 @@ function formatPlanBrief(brief) {
     ['不可逆损失/交出物/决定', hard],
     ['外部对手（开场拍必须由它施加阻碍，不能写成主角自我克服）', opponent],
     ['必须到场的人物', present],
-    ['托付（告别/离场拍由托付人本人把主角交给登记对象，并交付话或物；交付对象必须在场）', handover],
+    ['托付（全章只允许一次完整交付，告别/离场拍由托付人本人把主角交给登记对象并交付话或物；交付对象必须在场）', handover],
     ['必须 withhold、不得解释的信息', withhold],
     ['必须交代的背景信息', reveal],
     ['物证/制度异常', evidence],
@@ -440,7 +448,7 @@ function farewellBeats(beats) {
  *
  * 排序依据可解释：
  *   1. goal 里已经出现托付人 → 就是他那一拍；
- *   2. goal 是「告别/门前/送行」而非「启程/出城」→ 优先；
+ *   2. goal 是「启程/上车/离开/告别」而非「门口等待」→ 优先；
  *   3. 再退到叙述里出现托付人的候选，最后才是第一个告别候选。
  *
  * @param {Array} candidates
@@ -448,14 +456,51 @@ function farewellBeats(beats) {
  * @returns {Object|null}
  */
 function pickHandoverBeat(candidates, trustee) {
-  if (!Array.isArray(candidates) || !candidates.length) return null;
-  const inGoal = candidates.find((beat) => trustee && text(beat.goal).includes(trustee));
-  if (inGoal) return inGoal;
-  const strong = candidates.find((beat) => STRONG_FAREWELL_RE.test(text(beat.goal)));
-  if (strong) return strong;
-  const inNarrative = candidates.find((beat) => trustee && beatNarrative(beat).includes(trustee));
-  if (inNarrative) return inNarrative;
-  return candidates[0];
+  return orderHandoverCandidates(candidates, trustee)[0] || null;
+}
+
+/**
+ * 按交付语义排序告别候选。
+ *
+ * 离场拍（启程/上车/离开）排在门口交接之前；门口那一拍常常只是
+ * 「等示下」，托付话留在那里会被写手误当成已完成。
+ */
+function orderHandoverCandidates(candidates, trustee) {
+  if (!Array.isArray(candidates) || !candidates.length) return [];
+  const rest = candidates.slice();
+  const ordered = [];
+  const take = (test) => {
+    for (let i = 0; i < rest.length; ) {
+      if (test(rest[i])) {
+        ordered.push(rest[i]);
+        rest.splice(i, 1);
+      } else {
+        i += 1;
+      }
+    }
+  };
+  take((beat) => DEPARTURE_ACTION_RE.test(text(beat.goal)));
+  take((beat) => trustee && text(beat.goal).includes(trustee));
+  take((beat) => STRONG_FAREWELL_RE.test(text(beat.goal)));
+  take((beat) => trustee && beatNarrative(beat).includes(trustee));
+  take(() => true);
+  return ordered;
+}
+
+/**
+ * 三条硬条件在同一拍里同时成立才算交付落点。
+ *
+ * @param {Object} item handover 项
+ * @param {Array<Object>} candidates 告别/离场候选拍
+ * @returns {Object|null}
+ */
+function handoverTarget(item, candidates) {
+  const terms = item.keywords && item.keywords.length ? item.keywords : [item.text];
+  const ordered = orderHandoverCandidates(candidates, text(terms[0]));
+  return (
+    ordered.find((beat) => handoverMissingParts(item, beatNarrative(beat), terms).length === 0) ||
+    null
+  );
 }
 
 /**
@@ -524,14 +569,14 @@ function briefCoverage(brief, plan) {
     const candidates = farewellBeats(beats);
     for (const item of handovers) {
       const terms = item.keywords && item.keywords.length ? item.keywords : [item.text];
-      // 落点按语义选（告别优先于出城），三条必须在这同一拍里同时成立。
-      const target = pickHandoverBeat(candidates, text(terms[0]));
-      const hit = target ? handoverMissingParts(item, beatNarrative(target), terms).length === 0 : false;
-      if (hit) {
+      // 落点按语义选（离场拍优先于出城），三条必须在这同一拍里同时成立。
+      const target = handoverTarget(item, candidates);
+      if (target) {
         covered.push(item.id);
       } else {
-        const partsForReport = target
-          ? handoverMissingParts(item, beatNarrative(target), terms)
+        const fallback = pickHandoverBeat(candidates, text(terms[0]));
+        const partsForReport = fallback
+          ? handoverMissingParts(item, beatNarrative(fallback), terms)
           : ['没有告别/离场拍'];
         missing.push({
           id: item.id,
@@ -589,7 +634,11 @@ function briefWriterBlock(brief) {
     const detail = handover
       .map((x) => `${x.text}（交给：${x.to || '未登记'}；形式：${x.handoverKind || '话或物'}）`)
       .join('；');
-    lines.push(`- 托付（告别/离场拍由托付人本人把主角当场交给登记对象，并交付话或物；交付对象必须同处该拍）：${detail}`);
+    const beat = text(brief.handoverBeat);
+    const onceLine = beat
+      ? `全章只允许一次完整交付，已经在第 ${beat} 拍完成；其他拍不得重复托付话或重复交割，最多保留递、接、握住手这类预备动作。`
+      : '全章只允许一次完整交付；其他拍不得重复托付话或重复交割，最多保留递、接、握住手这类预备动作。';
+    lines.push(`- 托付（${onceLine}交付对象必须同处该拍）：${detail}`);
   }
   if (withhold.length) lines.push(`- 不得解释（必须 withhold）：${withhold.map((x) => x.text).join('；')}`);
   if (reveal.length) lines.push(`- 必须交代（每项至少一句）：${reveal.map((x) => x.text).join('；')}`);
@@ -679,6 +728,124 @@ function partitionCoverage(plan, coverage) {
   });
 }
 
+/** handover 项（非 inferred）。 */
+function handoverItems(brief) {
+  return groupByKind(brief, ['mustPresent']).filter(
+    (item) => item.handover === true && item.inferred !== true
+  );
+}
+
+/**
+ * brief 的 handover 项落进哪一拍：与覆盖校验共用同一套语义选点。
+ *
+ * @param {{items: Array}|null} brief
+ * @param {Object|null} plan
+ * @returns {string} 拍 id；找不到返回空串
+ */
+function handoverBeatId(brief, plan) {
+  const handovers = handoverItems(brief);
+  const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
+  const candidates = farewellBeats(beats);
+  for (const item of handovers) {
+    const target = handoverTarget(item, candidates);
+    if (target) return target.id;
+  }
+  return '';
+}
+
+function splitBodyParagraphs(body) {
+  return String(body || '')
+    .split(/\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/** 完成态的交付动作：递到/交到/塞进…手里；「往…送了送」这类预备动作不算。 */
+const HANDOVER_GIVE_RE = /交(?:给|到|进)|递(?:给|到|进)|塞(?:给|到|进)|放进|送到|托付|嘱托/;
+
+/** 按句切分：交付要在一句里同时点名托付人与交付对象。 */
+function splitSentences(text) {
+  return String(text || '')
+    .split(/(?<=[。！？；!?;])/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/** 按拍计划里声明的 paragraphs 数，把正文段落顺序切给各拍。 */
+function paragraphRanges(beats, count) {
+  const weights = beats.map((beat) => Math.max(1, Number(beat.paragraphs) || 1));
+  const total = weights.reduce((sum, weight) => sum + weight, 0) || beats.length || 1;
+  let cursor = 0;
+  return beats.map((beat, index) => {
+    const remainingBeats = beats.length - index;
+    const remaining = count - cursor;
+    let take =
+      index === beats.length - 1
+        ? remaining
+        : Math.round((weights[index] / total) * count);
+    take = Math.max(0, Math.min(take, remaining - (remainingBeats - 1)));
+    const range = [cursor, cursor + take];
+    cursor += take;
+    return range;
+  });
+}
+
+/**
+ * 全章扫描完整交付形态。
+ *
+ * 完整形态 = 托付人与交付对象在同一句里 + 这一句有完成态的交付动作
+ * （交到/递到/塞进/放进/托付…）。
+ *
+ * 同段各提一次名字、或「某人把符传往前一递」这种只有一方在场的动作
+ * 都不算：前者常是「司马朗的话是说给杨俊听的」这类旁白，后者往往
+ * 只是出示符传、递东西，并没有把主角交出去。
+ *
+ * 只扫正文，不依赖模型自检；大于一次时返回除指定拍以外的拍 id。
+ *
+ * @param {{items: Array}|null} brief
+ * @param {string} body
+ * @param {Object|null} plan
+ * @returns {{beatIds: string[], handoverBeat: string, evidence: Array<{id, text}>}}
+ */
+function findHandoverDuplicates(brief, body, plan) {
+  const items = handoverItems(brief);
+  const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
+  if (!items.length || !beats.length) return { beatIds: [], handoverBeat: '', evidence: [] };
+
+  const item = items[0];
+  const trustee = text((item.keywords || [])[0]);
+  const to = text(item.to);
+  if (!trustee || !to) return { beatIds: [], handoverBeat: '', evidence: [] };
+
+  const paragraphs = splitBodyParagraphs(body);
+  const ranges = paragraphRanges(beats, paragraphs.length);
+  const evidence = [];
+
+  for (const [index, beat] of beats.entries()) {
+    const range = ranges[index];
+    const texts = paragraphs.slice(range[0], range[1]);
+    const sentences = splitSentences(texts.join(''));
+    const delivered = sentences.some(
+      (sentence) =>
+        sentence.includes(trustee) &&
+        sentence.includes(to) &&
+        HANDOVER_GIVE_RE.test(sentence)
+    );
+    if (delivered) {
+      evidence.push({ id: beat.id, text: texts.join('') });
+    }
+  }
+
+  const designated = text(brief && brief.handoverBeat) || handoverBeatId(brief, plan);
+  const delivering = evidence.map((x) => x.id);
+  const canonical = designated && delivering.includes(designated) ? designated : delivering[0] || '';
+  return {
+    beatIds: delivering.filter((id) => id !== canonical),
+    handoverBeat: canonical || designated,
+    evidence,
+  };
+}
+
 /**
  * 把 handover 缺项确定性落进告别/离场拍。
  *
@@ -714,7 +881,7 @@ function placeHandoverInPlan(plan, coverage) {
       unplaced.push(item);
       continue;
     }
-    const target = pickHandoverBeat(candidates, trustee);
+    const target = handoverTarget(item, candidates) || pickHandoverBeat(candidates, trustee);
     if (!target) {
       unplaced.push(item);
       continue;
@@ -905,6 +1072,7 @@ function mergeHandoverIntoBrief(brief, { characters = [], settings = [] } = {}) 
           ...item,
           to: resolveHandoverTarget(protagonistName, owner, cards),
           handoverKind: resolveHandoverKind(owner, cards, configs),
+          once: true,
         };
       }
       return item;
@@ -916,6 +1084,7 @@ function mergeHandoverIntoBrief(brief, { characters = [], settings = [] } = {}) 
       handover: true,
       to: resolveHandoverTarget(protagonistName, trustee, cards),
       handoverKind: resolveHandoverKind(trustee, cards, configs),
+      once: true,
     };
   });
 
@@ -940,6 +1109,7 @@ function mergeHandoverIntoBrief(brief, { characters = [], settings = [] } = {}) 
       handover: true,
       to,
       handoverKind,
+      once: true,
     });
   }
 
@@ -1025,5 +1195,7 @@ module.exports = {
   buildReplanInstruction,
   mergeHandoverIntoBrief,
   placeHandoverInPlan,
+  handoverBeatId,
+  findHandoverDuplicates,
   generatePlanBrief,
 };
