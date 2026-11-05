@@ -33,7 +33,8 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 9 → 10：知情扫描待确认表（knowledge_pending）。
  * 版本 10 → 11：素材出处/置信/来源/状态列（agent 整理素材的机械约束）。
  * 版本 11 → 12：锚点记录来源素材 id（素材显式升格用，不建外键、不双向同步）。
- * 版本 12 → 13：故事事实增加 fact_type（secret/background），背景事实用于 mustReveal。
+ * 版本 12 → 13：故事事实增加 fact_type（secret/background），背景事实用于 mustReveal；
+ *              知情待确认增加 source（candidate/model_only/rule），区分来路与低可信条目。
  */
 const SCHEMA_VERSION = 13;
 
@@ -477,8 +478,6 @@ CREATE TABLE IF NOT EXISTS work_anchors (
 );
 CREATE INDEX IF NOT EXISTS idx_work_anchors
   ON work_anchors (work_id, status, kind);
-CREATE INDEX IF NOT EXISTS idx_work_anchors_material
-  ON work_anchors (work_id, source_material_id);
 
 -- 史料空白区。正史无载、可合法虚构的区间，单独成表，不混进锚点库。
 CREATE TABLE IF NOT EXISTS work_blank_areas (
@@ -595,6 +594,9 @@ CREATE TABLE IF NOT EXISTS knowledge_pending (
   to_state      TEXT NOT NULL,
   evidence      TEXT NOT NULL,
   reason        TEXT NOT NULL,
+  -- 来路：candidate=规则层候选命中；model_only=模型自报（低可信，必须人工确认）
+  source        TEXT NOT NULL DEFAULT 'candidate'
+                CHECK (source IN ('candidate','model_only','rule')),
   status        TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending','confirmed','dismissed')),
   created_at    TEXT NOT NULL,
@@ -617,6 +619,18 @@ CREATE INDEX IF NOT EXISTS idx_materials_user ON materials(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_materials_user_status ON materials(user_id, status, modified_at);
 CREATE INDEX IF NOT EXISTS idx_inspirations_user ON inspirations(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at);
+`;
+
+/**
+ * 依赖 ensureColumn 新列的索引。
+ *
+ * 老库的表可能已存在但还没有这一列（线上 v11 的 work_anchors 就没有
+ * source_material_id）。这类索引必须等补列之后再建，否则整次迁移会在
+ * CREATE INDEX 处中止。以后新增「索引引用后补列」时一律放这里。
+ */
+const LATE_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_work_anchors_material
+  ON work_anchors (work_id, source_material_id);
 `;
 
 /** 需要 user_id 的业务表。 */
@@ -671,33 +685,28 @@ async function ensurePromptOverridesPk() {
   const pkColumns = columns.filter((c) => c.pk > 0);
   if (pkColumns.length >= 2) return;
 
-  await run('BEGIN');
-  try {
-    await run(`
-      CREATE TABLE prompt_overrides_v2 (
-        user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        id             TEXT NOT NULL,
-        system_prompt  TEXT NOT NULL,
-        temperature    REAL,
-        model          TEXT,
-        thinking       INTEGER,
-        updated_at     TEXT NOT NULL,
-        PRIMARY KEY (user_id, id)
-      )
-    `);
-    await run(`
-      INSERT INTO prompt_overrides_v2
-        (user_id, id, system_prompt, temperature, model, thinking, updated_at)
-      SELECT COALESCE(user_id, ''), id, system_prompt, temperature, model, thinking, updated_at
-      FROM prompt_overrides
-    `);
-    await run('DROP TABLE prompt_overrides');
-    await run('ALTER TABLE prompt_overrides_v2 RENAME TO prompt_overrides');
-    await run('COMMIT');
-  } catch (err) {
-    await run('ROLLBACK').catch(() => {});
-    throw err;
-  }
+  // 事务由 migrate() 统一开启：这里只做重建，失败交给外层 ROLLBACK，
+  // 保证重建到一半失败时整次迁移零写入。
+  await run(`
+    CREATE TABLE prompt_overrides_v2 (
+      user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      id             TEXT NOT NULL,
+      system_prompt  TEXT NOT NULL,
+      temperature    REAL,
+      model          TEXT,
+      thinking       INTEGER,
+      updated_at     TEXT NOT NULL,
+      PRIMARY KEY (user_id, id)
+    )
+  `);
+  await run(`
+    INSERT INTO prompt_overrides_v2
+      (user_id, id, system_prompt, temperature, model, thinking, updated_at)
+    SELECT COALESCE(user_id, ''), id, system_prompt, temperature, model, thinking, updated_at
+    FROM prompt_overrides
+  `);
+  await run('DROP TABLE prompt_overrides');
+  await run('ALTER TABLE prompt_overrides_v2 RENAME TO prompt_overrides');
 }
 
 /**
@@ -709,63 +718,81 @@ async function migrate(fromVersion) {
     // 首次运行（或版本号之前的老库）：清掉没有保留价值的老表
     console.log('数据库首次初始化');
     await exec('PRAGMA foreign_keys = OFF');
-    for (const table of LEGACY_TABLES) {
-      await run(`DROP TABLE IF EXISTS ${table}`);
-    }
   } else if (fromVersion < SCHEMA_VERSION) {
     console.log(
       `数据库 schema 版本 ${fromVersion} → ${SCHEMA_VERSION}，执行增量迁移（保留全部数据）`
     );
   }
 
-  // 建缺失的表（IF NOT EXISTS，不会动已有表的数据）
-  await exec(SCHEMA);
+  // 整次迁移放进一个事务：任一步失败就 ROLLBACK，
+  // user_version 与所有 ALTER 都不会落地，老库保持原样。
+  await run('BEGIN IMMEDIATE');
+  try {
+    if (fromVersion === 0) {
+      for (const table of LEGACY_TABLES) {
+        await run(`DROP TABLE IF EXISTS ${table}`);
+      }
+    }
 
-  // 老表补新列
-  for (const table of USER_SCOPED_TABLES) {
-    await ensureColumn(table, 'user_id', 'TEXT REFERENCES users(id) ON DELETE CASCADE');
+    // 建缺失的表（IF NOT EXISTS，不会动已有表的数据）
+    await exec(SCHEMA);
+
+    // 老表补新列
+    for (const table of USER_SCOPED_TABLES) {
+      await ensureColumn(table, 'user_id', 'TEXT REFERENCES users(id) ON DELETE CASCADE');
+    }
+    await ensureColumn('users', 'role', "TEXT DEFAULT 'user'");
+    await ensureColumn('materials', 'page_count', 'INTEGER DEFAULT 0');
+    // 10 → 11：素材的出处/置信/来源/状态。老行没有可核出处，
+    // confidence 默认 inferable（可推定），绝不默认成 sourced。
+    await ensureColumn('materials', 'work_id', 'TEXT');
+    await ensureColumn('materials', 'provenance', "TEXT NOT NULL DEFAULT ''");
+    await ensureColumn('materials', 'confidence', "TEXT NOT NULL DEFAULT 'inferable'");
+    await ensureColumn('materials', 'origin', "TEXT NOT NULL DEFAULT 'user'");
+    await ensureColumn('materials', 'status', "TEXT NOT NULL DEFAULT 'active'");
+    await ensureColumn('materials', 'created_by', "TEXT NOT NULL DEFAULT 'user'");
+    await ensureColumn('materials', 'search_log', "TEXT NOT NULL DEFAULT ''");
+    // 11 → 12：锚点记录来源素材 id。老锚点留空串，仍按原状态工作。
+    await ensureColumn('work_anchors', 'source_material_id', "TEXT NOT NULL DEFAULT ''");
+    // 12 → 13：事实类型。老事实都是秘密，默认 secret，不会误当背景事实。
+    await ensureColumn('story_facts', 'fact_type', "TEXT NOT NULL DEFAULT 'secret'");
+    // 13：知情待确认的来路。老行都来自候选/规则层，默认 candidate。
+    await ensureColumn('knowledge_pending', 'source', "TEXT NOT NULL DEFAULT 'candidate'");
+    await ensureColumn('prompt_overrides', 'model', 'TEXT');
+    await ensureColumn('prompt_overrides', 'thinking', 'INTEGER');
+    await ensureColumn('chapters', 'outline', 'TEXT');
+    await ensureColumn('chapters', 'word_count', 'INTEGER DEFAULT 0');
+    await ensureColumn('works', 'target_words', 'INTEGER DEFAULT 0');
+    // 6 → 7：卡片来源。老库不会因为 SCHEMA 里的新列自动补上，必须单独 ALTER。
+    await ensureColumn('characters', 'source_chapter_id', 'TEXT');
+    await ensureColumn('characters', 'source_block_id', 'TEXT');
+    await ensureColumn('settings', 'source_chapter_id', 'TEXT');
+    await ensureColumn('settings', 'source_block_id', 'TEXT');
+    await ensureColumn('plot_cards', 'source_block_id', 'TEXT');
+    // 7 → 8：模板开关。SCHEMA 已含该列，老库必须单独补。
+    await ensureColumn('works', 'template', "TEXT NOT NULL DEFAULT ''");
+    // 8 → 9：人物卡四列。老行保持 NULL，formatCharacter 不会输出空标签。
+    await ensureColumn('characters', 'canon', 'TEXT');
+    await ensureColumn('characters', 'stance', 'TEXT');
+    await ensureColumn('characters', 'bottom_line', 'TEXT');
+    await ensureColumn('characters', 'weakness', 'TEXT');
+
+    // prompt_overrides 需要复合主键，老库要重建一次（数据整体保留）
+    await ensurePromptOverridesPk();
+
+    // 依赖补列的索引必须放在 ensureColumn 之后：
+    // 老库的 work_anchors 可能已有表、没有 source_material_id。
+    await exec(LATE_INDEXES);
+
+    // 依赖 user_id 的索引要等补列完成
+    await exec(USER_INDEXES);
+
+    await run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    await run('COMMIT');
+  } catch (err) {
+    await run('ROLLBACK').catch(() => {});
+    throw err;
   }
-  await ensureColumn('users', 'role', "TEXT DEFAULT 'user'");
-  await ensureColumn('materials', 'page_count', 'INTEGER DEFAULT 0');
-  // 10 → 11：素材的出处/置信/来源/状态。老行没有可核出处，
-  // confidence 默认 inferable（可推定），绝不默认成 sourced。
-  await ensureColumn('materials', 'work_id', 'TEXT');
-  await ensureColumn('materials', 'provenance', "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn('materials', 'confidence', "TEXT NOT NULL DEFAULT 'inferable'");
-  await ensureColumn('materials', 'origin', "TEXT NOT NULL DEFAULT 'user'");
-  await ensureColumn('materials', 'status', "TEXT NOT NULL DEFAULT 'active'");
-  await ensureColumn('materials', 'created_by', "TEXT NOT NULL DEFAULT 'user'");
-  await ensureColumn('materials', 'search_log', "TEXT NOT NULL DEFAULT ''");
-  // 11 → 12：锚点记录来源素材 id。老锚点留空串，仍按原状态工作。
-  await ensureColumn('work_anchors', 'source_material_id', "TEXT NOT NULL DEFAULT ''");
-  // 12 → 13：事实类型。老事实都是秘密，默认 secret，不会误当背景事实。
-  await ensureColumn('story_facts', 'fact_type', "TEXT NOT NULL DEFAULT 'secret'");
-  await ensureColumn('prompt_overrides', 'model', 'TEXT');
-  await ensureColumn('prompt_overrides', 'thinking', 'INTEGER');
-  await ensureColumn('chapters', 'outline', 'TEXT');
-  await ensureColumn('chapters', 'word_count', 'INTEGER DEFAULT 0');
-  await ensureColumn('works', 'target_words', 'INTEGER DEFAULT 0');
-  // 6 → 7：卡片来源。老库不会因为 SCHEMA 里的新列自动补上，必须单独 ALTER。
-  await ensureColumn('characters', 'source_chapter_id', 'TEXT');
-  await ensureColumn('characters', 'source_block_id', 'TEXT');
-  await ensureColumn('settings', 'source_chapter_id', 'TEXT');
-  await ensureColumn('settings', 'source_block_id', 'TEXT');
-  await ensureColumn('plot_cards', 'source_block_id', 'TEXT');
-  // 7 → 8：模板开关。SCHEMA 已含该列，老库必须单独补。
-  await ensureColumn('works', 'template', "TEXT NOT NULL DEFAULT ''");
-  // 8 → 9：人物卡四列。老行保持 NULL，formatCharacter 不会输出空标签。
-  await ensureColumn('characters', 'canon', 'TEXT');
-  await ensureColumn('characters', 'stance', 'TEXT');
-  await ensureColumn('characters', 'bottom_line', 'TEXT');
-  await ensureColumn('characters', 'weakness', 'TEXT');
-
-  // prompt_overrides 需要复合主键，老库要重建一次（数据整体保留）
-  await ensurePromptOverridesPk();
-
-  // 依赖 user_id 的索引要等补列完成
-  await exec(USER_INDEXES);
-
-  await run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 
   // 老库重建时外键曾被关掉，建完新表再开启，否则 ON DELETE CASCADE 不生效
   if (fromVersion === 0) {
