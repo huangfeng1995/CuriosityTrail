@@ -1571,12 +1571,17 @@ function checkMustWithhold(brief, body, plan) {
     const conclusionSentences = splitSentences(beatText).filter((sentence) =>
       WITHHOLD_CONCLUSION_RE.test(sentence)
     );
-    if (!conclusionSentences.length) continue;
+    // 证据句必须自己带制度词：拍内两个制度词散在不同段落、结论句只说
+    // 「静得不对」「不该问」，不是在解释制度，不能算解释掉悬念。
+    const evidenceSentences = conclusionSentences.filter((sentence) =>
+      WITHHOLD_TERMS.some((term) => sentence.includes(term))
+    );
+    if (!evidenceSentences.length) continue;
 
     const best =
-      conclusionSentences.find(
+      evidenceSentences.find(
         (sentence) => WITHHOLD_TERMS.filter((term) => sentence.includes(term)).length >= 2
-      ) || conclusionSentences[0];
+      ) || evidenceSentences[0];
 
     const mapped = items
       .filter((item) => (itemBeats[item.id] || []).includes(beat.id))

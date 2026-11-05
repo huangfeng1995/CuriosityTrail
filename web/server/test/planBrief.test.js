@@ -1148,6 +1148,22 @@ test('悬念自检：同一拍两个制度词但没有结论词，不判违规',
   assert.strictEqual(result.violations.length, 0, '两个制度词但无结论词不能误杀');
 });
 
+test('悬念自检：制度词与结论词不在同一句，不拿「不对」「不该问」当证据', () => {
+  // 取自 v21-p3-b 的真实误报：B3 拍内另有「符传/司空」，结论句只是
+  // 「院里静得不对」；B4 拍内有「符传/印玺」，结论句只是「不该问」。
+  const body = [
+    '杨平把箱笼从车上搬下来，箱角磕在石阶上。',
+    '堂里点着两盏灯，灯芯剪得很短。',
+    '杨平进了院子，院里静得不对，连灶房那边的响动都没有。符传与司空府的印信都收在案上。',
+    '“十八岁了，”杨俊说，“该知道什么时候不该问。”符传和印玺压在他手边。',
+    '司马防让他先坐下，又让人把门合上。',
+    '车帘外的风把灯焰压下去一截。',
+  ].join('\n');
+
+  const result = checkMustWithhold(withholdBrief(), body, withholdPlan());
+  assert.strictEqual(result.violations.length, 0, '证据句必须同时带制度词和结论词');
+});
+
 test('悬念自检：没有 mustWithhold 项时不适用，也不扫正文', () => {
   const brief = { items: [{ id: 'L1', kind: 'loss', text: '交出犀角弓' }] };
   const result = checkMustWithhold(
