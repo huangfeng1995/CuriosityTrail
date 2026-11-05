@@ -974,6 +974,10 @@ router.post('/chat', async (req, res) => {
       }
     }
 
+    // 本轮检索台账：webSearch 每查一次记一条，saveMaterials 据此判断
+    // origin='web' 的素材有没有可核的来源。只活在这一次请求里。
+    const searchLedger = [];
+
     const runChat = (messagesForRound = chatMessages, overrides = {}, hooks = {}) =>
       runAgentLoop({
         provider,
@@ -1003,6 +1007,10 @@ router.post('/chat', async (req, res) => {
           degraded,
           role: roleKey,
           signal: roundSignal,
+          // 作者这一轮的原始问句，联网检索用它理解意图
+          originalQuestion: String(message || ''),
+          // 素材工具的检索台账（数组引用，技能往里追加）
+          searchLedger,
         },
         onToken: (token) => {
           // 分段起稿时不往外推 token：各段的正文要等全部写完再拼成整章，
