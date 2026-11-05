@@ -1394,6 +1394,66 @@ test('规划失败/降级/无节拍表：写手 system 与未规划基线逐字�
 // 主角首次出场：背景事实缺项 → beatCheck 标出 → 重写一次 → 仍缺打徽标
 // ---------------------------------------------------------------------------
 
+test('没有任何背景事实：首次出场章 beatCheck 标出尚未入库，且不逼写手编造', async () => {
+  const { workId, chapterId } = await seedChapter({ outline: '主角进庙查旧案。' });
+  const db = require('../database');
+
+  await db.run(
+    `INSERT INTO characters (id, work_id, name, aliases, role, created_at, modified_at)
+     VALUES (?, ?, '主角', '', '主角', ?, ?)`,
+    [`char-missing-${workId}`, workId, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z']
+  );
+
+  const coveredCheck = JSON.stringify({
+    covered: [
+      { id: 'B1', evidence: '庙门半掩' },
+      { id: 'B2', evidence: '庙祝不答' },
+      { id: 'B3', evidence: '旧档中间缺了几页' },
+      { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+    ],
+    missing: [],
+    weak: [],
+    hookPresent: true,
+    chapterGoalMet: true,
+  });
+
+  // 没有重写调用：只有规划 + 两组正文 + 覆盖自检。
+  fakeModel.setQueue([
+    { content: validPlanJson(), finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第一组'),
+        reason: '第一组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第二组', '县衙后门当晚抬出一口箱子。'),
+        reason: '第二组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    { content: coveredCheck, finishReason: 'stop' },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const events = await chat('按大纲写这一章', { workId, chapterId });
+  const action = events.find((e) => e.type === 'action');
+
+  assert.strictEqual(action.beatCheck.mustRevealMissing.length, 1);
+  assert.strictEqual(action.beatCheck.mustRevealMissing[0].notIngested, true);
+  assert.match(action.beatCheck.mustRevealMissing[0].content, /尚未入库/);
+  assert.match(action.reason, /【背景自检：未交代 主角背景事实/);
+  assert.strictEqual(action.mustReveal.applicable, true);
+  assert.strictEqual(fakeModel.calls.length - before, 4, '未入库不是写手能补的，不应触发重写');
+});
+
+
 test('首次出场缺少背景事实：beatCheck 标出、重写指令带事实、仍缺打徽标', async () => {
   const { workId, chapterId } = await seedChapter({ outline: '主角进庙查旧案。' });
   const db = require('../database');
