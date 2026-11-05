@@ -22,6 +22,6 @@
 - [x] 提交 3
 
 ## 收尾样本
-- [ ] `/tmp` 真实模型脚本：新测试作品 + 锚点/素材 + 完整 L0
-- [ ] 正文落 `docs/superpowers/baseline/runs/2026-11-05-v12-brief-real.md`（不提交）
-- [ ] 改前 vs 改后逐拍对比表 + 三项断言 + 判断
+- [x] `/tmp` 真实模型脚本：新测试作品 + 锚点/素材 + 完整 L0（粗提纲与同 v11 提纲各跑一次）
+- [x] 正文落 `docs/superpowers/baseline/runs/2026-11-05-v12-brief-real.md`（不提交）
+- [x] 改前 vs 改后逐拍对比表 + 三项断言 + 判断
