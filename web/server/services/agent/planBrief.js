@@ -16,6 +16,18 @@ const { parseModelJson } = require('./parse');
 const KINDS = ['loss', 'mustPresent', 'mustWithhold', 'mustReveal', 'evidence'];
 
 /**
+ * 每类用自己的 id 前缀。不能用 kind 首字母：mustPresent / mustWithhold / mustReveal
+ * 都会变成 M1，覆盖结果里出现三个 M1，作者根本分不清缺的是哪一类。
+ */
+const KIND_ID_PREFIX = {
+  loss: 'L',
+  mustPresent: 'MP',
+  mustWithhold: 'MW',
+  mustReveal: 'MR',
+  evidence: 'E',
+};
+
+/**
  * 硬约束类别：规划器必须把它们落到某一拍。
  * mustReveal 不在这里——它由首次出场章另行校验，不参与节拍硬覆盖。
  */
@@ -134,7 +146,7 @@ function validatePlanBrief(candidate) {
       continue;
     }
     byKind.set(item.kind, count + 1);
-    limited.push({ ...item, id: `${item.kind[0].toUpperCase()}${count + 1}` });
+    limited.push({ ...item, id: `${KIND_ID_PREFIX[item.kind]}${count + 1}` });
   }
 
   return {
