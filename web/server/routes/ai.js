@@ -1565,6 +1565,7 @@ router.post('/chat', async (req, res) => {
       const wordShares = checkWordShares(beatPlan, payload.content);
       beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
       beatCheck.wordShareOutOfRange = wordShares.outOfRange;
+      beatCheck.wordShareMissing = wordShares.shareMissing || [];
     }
     const revealAllMissing = revealCheck.applicable ? revealCheck.missing : [];
     // 「背景事实尚未入库」不是写手能补的：只报给作者（beatCheck + 徽标），
@@ -1746,6 +1747,7 @@ router.post('/chat', async (req, res) => {
               const wordShares = checkWordShares(beatPlan, payload.content);
               beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
               beatCheck.wordShareOutOfRange = wordShares.outOfRange;
+              beatCheck.wordShareMissing = wordShares.shareMissing || [];
             }
 
             console.log(

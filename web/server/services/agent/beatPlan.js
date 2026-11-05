@@ -649,7 +649,8 @@ function shareParagraphRanges(beats, paragraphCount) {
  * @param {Object} plan 已校验节拍表
  * @param {string} body 正文
  * @param {number} [tolerance=5] 允许偏离的百分点
- * @returns {{applicable: boolean, total: number, beats: Array, outOfRange: string[]}}
+ * @returns {{applicable: boolean, total: number, beats: Array, outOfRange: string[],
+ *           shareMissing: string[], reason?: string}}
  */
 function checkWordShares(plan, body, tolerance = 5) {
   const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
@@ -658,7 +659,7 @@ function checkWordShares(plan, body, tolerance = 5) {
     .map((row) => row.trim())
     .filter(Boolean);
   if (!beats.length || !paragraphs.length) {
-    return { applicable: false, total: 0, beats: [], outOfRange: [] };
+    return { applicable: false, total: 0, beats: [], outOfRange: [], shareMissing: [] };
   }
 
   const ranges = shareParagraphRanges(beats, paragraphs.length);
@@ -676,10 +677,24 @@ function checkWordShares(plan, body, tolerance = 5) {
       delta: Number.isFinite(target) ? Math.round((share - target) * 10) / 10 : null,
     });
   }
+  const shareMissing = Array.isArray(plan?.shareMissing) ? plan.shareMissing : [];
+  // 六段功能拍没排齐时，剩余目标份额合计不到 100：再按绝对配比逐个判越界，
+  // 等于把「计划缺拍」伪装成「正文每一拍都写错」。这里只报缺哪类功能拍，
+  // 不产出逐拍越界清单；结构问题归规划层，不赖在写手身上。
+  if (shareMissing.length) {
+    return {
+      applicable: false,
+      reason: 'share_missing',
+      shareMissing,
+      total,
+      beats: rows,
+      outOfRange: [],
+    };
+  }
   const outOfRange = rows
     .filter((row) => row.target !== null && Math.abs(row.delta) > tolerance)
     .map((row) => row.id);
-  return { applicable: true, total, beats: rows, outOfRange };
+  return { applicable: true, total, beats: rows, outOfRange, shareMissing };
 }
 
 module.exports = {

@@ -544,6 +544,8 @@ test('计划校验拒绝：两拍都写完整交付', () => {
 
 test('篇幅配比自检：正文纯汉字份额超出 ±5pp 的拍被列出', () => {
   const plan = validateBeatPlan(makePlan()).plan;
+  // 这组用例只验证份额计算，不验证六段功能是否排齐。
+  plan.shareMissing = [];
   const body = [
     '甲乙丙丁戊己庚辛壬癸',
     '子丑寅卯辰巳午未申酉',
@@ -561,6 +563,20 @@ test('篇幅配比自检：正文纯汉字份额超出 ±5pp 的拍被列出', (
   assert.ok(shares.outOfRange.includes('B1'));
   assert.ok(shares.outOfRange.includes('B3'));
   assert.ok(shares.outOfRange.includes('B4'));
+});
+
+test('篇幅配比自检：缺功能拍时不拿绝对配比逐拍判越界，只报缺哪类拍', () => {
+  const plan = validateBeatPlan(makePlan()).plan;
+  // 本章没有「回城/身世」功能拍：目标份额合计不到 100，
+  // 此时逐拍越界没有可比性，只能报告结构缺拍。
+  plan.shareMissing = ['identity'];
+  const body = ['甲乙丙丁戊己庚辛壬癸', '子丑寅卯辰巳午未申酉'].join('\n\n');
+
+  const shares = checkWordShares(plan, body);
+  assert.strictEqual(shares.applicable, false);
+  assert.strictEqual(shares.reason, 'share_missing');
+  assert.deepStrictEqual(shares.shareMissing, ['identity']);
+  assert.deepStrictEqual(shares.outOfRange, [], '缺功能拍时不能把每一拍都判成越界');
 });
 
 test('自检：超时返回 null 与 timeout，正文留空不发起请求', async () => {
