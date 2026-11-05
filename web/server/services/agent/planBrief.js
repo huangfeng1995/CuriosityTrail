@@ -34,8 +34,21 @@ const KIND_ID_PREFIX = {
  */
 const INTERNAL_STATE_RE = /心软|犹豫|内心|挣扎|动摇|怯懦|恐惧|自责|纠结|矛盾|不忍|舍不得/;
 
-/** 告别/离场拍的识别词。 */
-const FAREWELL_RE = /告别|辞行|拜别|离场|送行|送别|启程|出城|离开|上路|动身|托付|嘱托/;
+/**
+ * 告别/离场拍的识别词。
+ *
+ * 只认「拍目标/信息增量」里的离场语义：告别、门前、登车、出城这类可指认的
+ * 场景动作，不按拍序硬编码「倒数第二拍」。
+ */
+const FAREWELL_RE = /告别|辞行|拜别|离别|离场|送行|送别|启程|出城|离开|上路|动身|登车|上车|门前|门口|门外|城门口|分别/;
+
+/**
+ * 「告别」语义优先于「启程」语义。
+ *
+ * 一章里常有两拍都带离场词：先「在门前告别」，再「随车出城」。
+ * 托付发生在人还站在门前、话还说得出口的那一拍；推到「出城」就只剩钩子了。
+ */
+const STRONG_FAREWELL_RE = /告别|辞行|拜别|离别|送行|送别|门前|门口|门外|分别/;
 
 /**
  * 托付条目本身的交付语义：条目文字里必须写明「托付/交给/递/塞/赠/留下」这类动作。
@@ -55,8 +68,42 @@ function handoverDelivered(narrative) {
   return /(说|讲|道|开口)[^。；;]{0,8}(话|句)/.test(narrative);
 }
 
+/**
+ * 托付拍的三条硬条件：托付人本人在场、当场交付话或物、交付对象在场。
+ *
+ * @param {Object} item handover 的 mustPresent 项
+ * @param {string} narrative 某一拍的叙述字段
+ * @param {Array<string>} terms 托付人关键词
+ * @returns {Array<string>} 缺哪几条，空数组表示三条都满足
+ */
+function handoverMissingParts(item, narrative, terms) {
+  const parts = [];
+  const personHit = terms.some((term) => text(term).length >= 2 && narrative.includes(text(term)));
+  if (!personHit) parts.push('托付人不在场');
+  if (!handoverDelivered(narrative)) parts.push('没有可引用的托付话或物');
+  const to = text(item.to);
+  if (!to) {
+    parts.push('交付对象未登记');
+  } else if (!narrative.includes(to)) {
+    parts.push(`交付对象${to}不在场`);
+  }
+  return parts;
+}
+
 /** 人物卡/设定里的托付关系词。 */
 const HANDOVER_RELATION_RE = /寄养|托付|拜师|代养|养父|养母|义父|义母|收养|监护人|师父/;
+
+/**
+ * 交付对象的关系词：托付人把主角当面交给谁。
+ *
+ * 只认「父子/父女/生父/母亲」这类直系登记，不能拿「养父」反推——
+ * 养父是托付人本人，不是接收方。
+ */
+const HANDOVER_TARGET_RELATION_RE = /父子|父女|母子|母女|生父|亲父|生母|亲母|父亲|母亲/;
+
+/** 托付内容的语义：话（可引用的嘱咐）或物（可交付的器物）。 */
+const HANDOVER_PROMISE_RE = /保[^。；;，,]{0,8}平安|照看|照应|看顾|平安|照顾好/;
+const HANDOVER_OBJECT_RE = /赠|送给|交给|留给|塞给|递|带上|收着/;
 
 /**
  * 硬约束类别：规划器必须把它们落到某一拍。
@@ -191,6 +238,10 @@ function normalizeItem(raw, index, dropped) {
     kind === 'mustPresent' &&
     raw.handover === true &&
     HANDOVER_ITEM_RE.test(itemText);
+  const handoverTo = text(raw.to);
+  const handoverKind = ['话', '物', '话或物'].includes(text(raw.handoverKind))
+    ? text(raw.handoverKind)
+    : '';
 
   return {
     id: `${kind[0].toUpperCase()}${index + 1}`,
@@ -200,6 +251,7 @@ function normalizeItem(raw, index, dropped) {
     source: inferred && !source ? 'inferred' : source,
     inferred,
     handover,
+    ...(handover ? { to: handoverTo, handoverKind } : {}),
   };
 }
 
@@ -267,7 +319,10 @@ function itemLine(item) {
   const keywords = item.keywords && item.keywords.length
     ? `（关键词：${item.keywords.join('、')}）`
     : '';
-  return `- [${item.kind}] ${item.text}${source}${keywords}`;
+  const handover = item.handover === true
+    ? `（交付给：${item.to || '未登记'}；形式：${item.handoverKind || '话或物'}）`
+    : '';
+  return `- [${item.kind}] ${item.text}${handover}${source}${keywords}`;
 }
 
 /**
@@ -299,7 +354,7 @@ function formatPlanBrief(brief) {
     ['不可逆损失/交出物/决定', hard],
     ['外部对手（开场拍必须由它施加阻碍，不能写成主角自我克服）', opponent],
     ['必须到场的人物', present],
-    ['托付（告别/离场拍必须由托付人当场交付一句可引用的话或一件物）', handover],
+    ['托付（告别/离场拍由托付人本人把主角交给登记对象，并交付话或物；交付对象必须在场）', handover],
     ['必须 withhold、不得解释的信息', withhold],
     ['必须交代的背景信息', reveal],
     ['物证/制度异常', evidence],
@@ -364,18 +419,43 @@ function beatNarrative(beat) {
 }
 
 /**
- * 告别/离场拍：所有命中告别词的拍；一个都没有就退到末拍。
+ * 告别/离场拍：所有在 goal / infoGain 里带离场语义的拍。
  *
- * 一章里可能既有「与司马朗告别」也有「司马防院中送行」，两个都要认，
- * 否则托付项会被错判到不相干的那一拍。
+ * 只认这两个字段，是因为它们回答「这一拍要做什么、会得到什么」；
+ * 不再回落到末拍——末拍通常是章末钩子，把托付塞进去正是之前的问题。
  *
  * @param {Array} beats
  * @returns {Array<Object>}
  */
 function farewellBeats(beats) {
   if (!Array.isArray(beats) || !beats.length) return [];
-  const hits = beats.filter((beat) => FAREWELL_RE.test(beatNarrative(beat)));
-  return hits.length ? hits : [beats[beats.length - 1]];
+  return beats.filter((beat) => {
+    if (!beat || typeof beat !== 'object') return false;
+    return FAREWELL_RE.test(text(beat.goal)) || FAREWELL_RE.test(text(beat.infoGain));
+  });
+}
+
+/**
+ * 从告别候选里选托付落点。
+ *
+ * 排序依据可解释：
+ *   1. goal 里已经出现托付人 → 就是他那一拍；
+ *   2. goal 是「告别/门前/送行」而非「启程/出城」→ 优先；
+ *   3. 再退到叙述里出现托付人的候选，最后才是第一个告别候选。
+ *
+ * @param {Array} candidates
+ * @param {string} trustee
+ * @returns {Object|null}
+ */
+function pickHandoverBeat(candidates, trustee) {
+  if (!Array.isArray(candidates) || !candidates.length) return null;
+  const inGoal = candidates.find((beat) => trustee && text(beat.goal).includes(trustee));
+  if (inGoal) return inGoal;
+  const strong = candidates.find((beat) => STRONG_FAREWELL_RE.test(text(beat.goal)));
+  if (strong) return strong;
+  const inNarrative = candidates.find((beat) => trustee && beatNarrative(beat).includes(trustee));
+  if (inNarrative) return inNarrative;
+  return candidates[0];
 }
 
 /**
@@ -435,7 +515,7 @@ function briefCoverage(brief, plan) {
     });
   }
 
-  // ---- 告别托付：人物必须在该拍出现，且同拍有交付语义 ----
+  // ---- 告别托付：托付人、交付动作、交付对象必须同处告别/离场拍 ----
   const handovers = groupByKind(brief, ['mustPresent']).filter(
     (item) => item.handover === true && item.inferred !== true
   );
@@ -444,14 +524,26 @@ function briefCoverage(brief, plan) {
     const candidates = farewellBeats(beats);
     for (const item of handovers) {
       const terms = item.keywords && item.keywords.length ? item.keywords : [item.text];
-      // 人物必须和交付动作出现在同一拍：只说「要托付」而没有落成话或物，不算覆盖。
-      const hit = candidates.find((beat) => {
-        const narrative = beatNarrative(beat);
-        const personHit = terms.some((term) => term.length >= 2 && narrative.includes(term));
-        return personHit && handoverDelivered(narrative);
-      });
-      if (hit) covered.push(item.id);
-      else missing.push({ id: item.id, kind: 'mustPresent', text: item.text, slot: 'handover' });
+      // 落点按语义选（告别优先于出城），三条必须在这同一拍里同时成立。
+      const target = pickHandoverBeat(candidates, text(terms[0]));
+      const hit = target ? handoverMissingParts(item, beatNarrative(target), terms).length === 0 : false;
+      if (hit) {
+        covered.push(item.id);
+      } else {
+        const partsForReport = target
+          ? handoverMissingParts(item, beatNarrative(target), terms)
+          : ['没有告别/离场拍'];
+        missing.push({
+          id: item.id,
+          kind: 'mustPresent',
+          text: item.text,
+          slot: 'handover',
+          keywords: item.keywords,
+          to: item.to,
+          handoverKind: item.handoverKind,
+          missingParts: partsForReport,
+        });
+      }
     }
     handoverStatus = handovers.every((item) => covered.includes(item.id)) ? 'covered' : 'missing';
   }
@@ -494,7 +586,10 @@ function briefWriterBlock(brief) {
   }
   if (present.length) lines.push(`- 必须到场：${present.map((x) => x.text).join('；')}`);
   if (handover.length) {
-    lines.push(`- 托付（告别/离场拍由托付人当场交付一句可引用的话或一件物）：${handover.map((x) => x.text).join('；')}`);
+    const detail = handover
+      .map((x) => `${x.text}（交给：${x.to || '未登记'}；形式：${x.handoverKind || '话或物'}）`)
+      .join('；');
+    lines.push(`- 托付（告别/离场拍由托付人本人把主角当场交给登记对象，并交付话或物；交付对象必须同处该拍）：${detail}`);
   }
   if (withhold.length) lines.push(`- 不得解释（必须 withhold）：${withhold.map((x) => x.text).join('；')}`);
   if (reveal.length) lines.push(`- 必须交代（每项至少一句）：${reveal.map((x) => x.text).join('；')}`);
@@ -547,22 +642,22 @@ function partitionCoverage(plan, coverage) {
           : '必须新增开场拍，把这一项放进该拍的 obstacle',
       };
     }
-    // 告别托付：只能落到告别/离场拍，且人物必须当场交付话或物。
+    // 告别托付：只能落到告别/离场拍，且托付人、交付动作、交付对象必须在同一拍。
     if (item.slot === 'handover') {
-      const beat =
-        farewellCandidates.find((candidate) =>
-          (item.keywords || []).some(
-            (term) => term.length >= 2 && beatNarrative(candidate).includes(term)
-          )
-        ) ||
-        farewellCandidates[0] ||
-        null;
+      const trustee = (item.keywords || [])[0] || '托付人';
+      const beat = pickHandoverBeat(farewellCandidates, text(trustee));
+      const to = text(item.to);
+      const kind = text(item.handoverKind) || '话或物';
+      const missingText =
+        Array.isArray(item.missingParts) && item.missingParts.length
+          ? `；当前缺：${item.missingParts.join('、')}`
+          : '';
       return {
         ...item,
         targetBeats: beat ? [beat.id] : [],
         hint: beat
-          ? `必须落到 ${beat.id}（告别/离场拍）：让托付人本人在场，并当场交付一句可引用的话或一件物`
-          : '必须新增告别/离场拍，让托付人本人在场并当场交付话或物',
+          ? `必须落到 ${beat.id}（${text(beat.goal).slice(0, 24)}）：${trustee}本人在场，把主角当场${to ? `交给${to}` : '交给登记的交付对象'}，并交付${kind}；写进该拍 goal/obstacle/cost，不能只塞进 endHook，也不能推到后面的拍${missingText}`
+          : `必须新增一拍，goal/infoGain 写清告别/离场语义，把${trustee}与${to || '登记的交付对象'}放进同一拍${missingText}`,
       };
     }
 
@@ -582,6 +677,65 @@ function partitionCoverage(plan, coverage) {
         : '建议新增一拍承接这一项，或在现有拍里改写 goal/cost',
     };
   });
+}
+
+/**
+ * 把 handover 缺项确定性落进告别/离场拍。
+ *
+ * 只在重排之后调用：重排仍把托付留在章末钩子时，这里按 slot 选一个
+ * goal/infoGain 带离场语义的拍，把「托付人把主角交给对象并交付话/物」
+ * 追加到该拍 goal。不改人物、不改写手提示词，只补规划输入。
+ *
+ * 找不到告别/离场拍，或 brief 缺托付人/交付对象时不动手——留给
+ * planDegraded 如实报缺，不硬编。
+ *
+ * @param {Object|null} plan
+ * @param {{missing: Array}} coverage
+ * @returns {{plan: Object|null, placed: string[], unplaced: Array}}
+ */
+function placeHandoverInPlan(plan, coverage) {
+  const missing =
+    coverage && Array.isArray(coverage.missing)
+      ? coverage.missing.filter((item) => item.slot === 'handover')
+      : [];
+  if (!plan || !Array.isArray(plan.beats) || !plan.beats.length || !missing.length) {
+    return { plan, placed: [], unplaced: [] };
+  }
+
+  const beats = plan.beats.map((beat) => ({ ...beat }));
+  const candidates = farewellBeats(beats);
+  const placed = [];
+  const unplaced = [];
+
+  for (const item of missing) {
+    const trustee = text((item.keywords || [])[0]);
+    const to = text(item.to);
+    if (!trustee || !to) {
+      unplaced.push(item);
+      continue;
+    }
+    const target = pickHandoverBeat(candidates, trustee);
+    if (!target) {
+      unplaced.push(item);
+      continue;
+    }
+    if (handoverMissingParts(item, beatNarrative(target), [trustee]).length === 0) {
+      placed.push(target.id);
+      continue;
+    }
+    const kind = text(item.handoverKind);
+    const delivery =
+      kind === '物'
+        ? '并交付一件可引用的物'
+        : kind === '话或物'
+          ? '并交付一句可引用的话或一件物'
+          : '并留下一句可引用的话（「保他平安」这一级）';
+    const clause = `${trustee}当场把主角交给${to}，${delivery}`;
+    target.goal = [text(target.goal), clause].filter(Boolean).join('；');
+    placed.push(target.id);
+  }
+
+  return { plan: { ...plan, beats }, placed, unplaced };
 }
 
 /**
@@ -615,11 +769,84 @@ function parseRelations(value) {
 }
 
 /**
+ * 交付对象：托付人把主角当面交给谁。
+ *
+ * 只从人物卡关系里找「父子/父女/生父/母亲」这一级直系登记，
+ * 排除托付人本人；找不到就返回空串，交给覆盖校验如实报「交付对象未登记」，
+ * 不从设定文本里猜一个名字。
+ *
+ * @param {string} protagonistName
+ * @param {string} trustee
+ * @param {Array} cards
+ * @returns {string}
+ */
+function resolveHandoverTarget(protagonistName, trustee, cards) {
+  for (const card of cards) {
+    const owner = text(card.name);
+    for (const relation of parseRelations(card.relations)) {
+      const label = text(relation.relation);
+      if (!label || !HANDOVER_TARGET_RELATION_RE.test(label)) continue;
+      const counterpart = text(relation.characterName || relation.name);
+      if (!counterpart) continue;
+      const candidate =
+        protagonistName && owner === protagonistName
+          ? counterpart
+          : protagonistName && counterpart === protagonistName
+            ? owner
+            : '';
+      // 托付人本人不是交付对象（养父关系常也记成「父子」，要排除掉）。
+      if (candidate && candidate !== trustee) return candidate;
+    }
+  }
+  return '';
+}
+
+/**
+ * 交付形式：话还是物。
+ *
+ * 设定/人物卡里已经写明「保…平安 / 照看」这类可引用的话，就取「话」；
+ * 写明「赠 / 交给 / 留给」且与告别、临行同处一段，才取「物」。
+ * 都没写明时按范文的托付句取「话」，这是默认而不是编造具体内容。
+ *
+ * @param {string} trustee
+ * @param {Array} cards
+ * @param {Array} settings
+ * @returns {'话'|'物'|'话或物'}
+ */
+function resolveHandoverKind(trustee, cards, settings) {
+  let line = false;
+  let thing = false;
+  for (const config of settings) {
+    const haystack = [text(config.name), text(config.category), text(config.content)].join('\n');
+    if (!haystack.includes(trustee)) continue;
+    if (HANDOVER_PROMISE_RE.test(haystack)) line = true;
+    if (
+      HANDOVER_OBJECT_RE.test(haystack) &&
+      (FAREWELL_RE.test(haystack) || /托付|临行|临别|辞行/.test(haystack))
+    ) {
+      thing = true;
+    }
+  }
+  for (const card of cards) {
+    if (text(card.name) !== trustee) continue;
+    const haystack = [text(card.identity), text(card.role), text(card.relations)].join('\n');
+    if (HANDOVER_PROMISE_RE.test(haystack)) line = true;
+  }
+  if (line && thing) return '话或物';
+  if (thing) return '物';
+  return '话';
+}
+
+/**
  * 把「托付关系」确定性地并进 brief。
  *
  * 人物卡/设定里一旦登记了寄养、托付、拜师、代养，告别拍就必须让托付人本人在场，
- * 并留下一句正文可引用的话或一件物。这一步只读输入、不改写手提示词：
- * 模型漏了，这里补一条 handover 的 mustPresent，交给规划器硬覆盖。
+ * 把主角当面交给关系里登记的那位直系亲属，并留下一句正文可引用的话或一件物。
+ * 这一步只读输入、不改写手提示词：模型漏了，这里补一条 handover 的 mustPresent，
+ * 交给规划器按 slot 落进告别拍。
+ *
+ * `to` 与 `handoverKind` 都来自人物卡关系/设定原文；找不到交付对象就留空，
+ * 由覆盖校验报「交付对象未登记」，不硬编一个名字。
  *
  * @param {{items: Array}|null} brief
  * @param {{characters?: Array, settings?: Array}} input
@@ -669,22 +896,49 @@ function mergeHandoverIntoBrief(brief, { characters = [], settings = [] } = {}) 
   const items = brief.items.map((item) => {
     if (item.inferred === true || item.kind !== 'mustPresent' || item.none === true) return item;
     const trustee = Array.from(trustees.keys()).find((name) => (item.keywords || []).includes(name));
-    if (!trustee) return item;
+    if (!trustee) {
+      // 模型自己带 handover 的条目：仍从人物卡关系解析交付对象，不用模型写的 to。
+      const owner = text((item.keywords || [])[0]);
+      if (item.handover === true && owner) {
+        return {
+          ...item,
+          to: resolveHandoverTarget(protagonistName, owner, cards),
+          handoverKind: resolveHandoverKind(owner, cards, configs),
+        };
+      }
+      return item;
+    }
     // 只有「这一条就是在写这个托付人」才升级：正文里顺带提到名字不算。
     trustees.delete(trustee);
-    return { ...item, handover: true };
+    return {
+      ...item,
+      handover: true,
+      to: resolveHandoverTarget(protagonistName, trustee, cards),
+      handoverKind: resolveHandoverKind(trustee, cards, configs),
+    };
   });
 
   for (const [name, source] of trustees) {
+    const to = resolveHandoverTarget(protagonistName, name, cards);
+    const handoverKind = resolveHandoverKind(name, cards, configs);
+    const targetText = to ? `把${protagonistName || '主角'}当面交给${to}` : `当面托付${protagonistName || '主角'}`;
+    const deliveryText =
+      handoverKind === '物'
+        ? '并交付一件可引用的物'
+        : handoverKind === '话或物'
+          ? '并留下一句可引用的话或一件物'
+          : '并留下一句可引用的话（「保他平安」这一级）';
     presentCount += 1;
     added.push({
       id: `${KIND_ID_PREFIX.mustPresent}${presentCount}`,
       kind: 'mustPresent',
-      text: `${name}在告别/离场拍当场托付${protagonistName || '主角'}，留下一句可引用的话或一件物`,
+      text: `${name}在告别/离场拍${targetText}，${deliveryText}`,
       keywords: [name],
       source,
       inferred: false,
       handover: true,
+      to,
+      handoverKind,
     });
   }
 
@@ -769,5 +1023,6 @@ module.exports = {
   partitionCoverage,
   buildReplanInstruction,
   mergeHandoverIntoBrief,
+  placeHandoverInPlan,
   generatePlanBrief,
 };

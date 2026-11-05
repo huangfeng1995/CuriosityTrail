@@ -1030,12 +1030,24 @@ router.post('/chat', async (req, res) => {
                 beatPlan = replanOut.plan;
                 coverage = planBrief.briefCoverage(brief, beatPlan);
               }
+              // 重排仍可能把托付留在章末钩子里：按 slot 做一次确定性落位，
+              // 只改目标拍的目标文案，不新增人物、不改写手提示词。
+              const placed = planBrief.placeHandoverInPlan(beatPlan, coverage);
+              beatPlan = placed.plan;
+              coverage = planBrief.briefCoverage(brief, beatPlan);
             }
             briefCoverageResult = coverage;
             if (coverage.missing.length) {
               planDegraded = `brief_missing:${coverage.missing
                 .slice(0, 3)
-                .map((item) => (item.slot ? `${item.kind}/${item.slot}/${item.text}` : `${item.kind}/${item.text}`))
+                .map((item) => {
+                  const parts = Array.isArray(item.missingParts) && item.missingParts.length
+                    ? `/${item.missingParts.join('、')}`
+                    : '';
+                  return item.slot
+                    ? `${item.kind}/${item.slot}${parts}/${item.text}`
+                    : `${item.kind}/${item.text}`;
+                })
                 .join('|')}`;
             }
           }
