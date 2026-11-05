@@ -223,6 +223,34 @@ test('文本越界：说出未达 knows 的事实 → pending 标 possible_leak�
   assert.strictEqual(rows.length, 1);
 });
 
+test('文本越界：说话人写在引号后面，同段共现也能命中', async () => {
+  const work = await seedWork('越界后置说话人', 2);
+  await db.run(
+    `INSERT INTO story_facts (id, work_id, secret_id, part_no, content, keywords, created_at, modified_at)
+     VALUES (?, ?, NULL, 1, '杨平是司空府的人', '司空府', ?, ?)`,
+    [`f4-${work.workId}`, work.workId, TS, TS]
+  );
+  await db.run(
+    `INSERT INTO knowledge_matrix (id, work_id, character_id, fact_id, chapter_seq, state, created_at)
+     VALUES (?, ?, ?, ?, 1, 'suspects', ?)`,
+    [`k2-${work.workId}`, work.workId, work.c1, `f4-${work.workId}`, TS]
+  );
+
+  // 中文常把说话人放在引号之后：按句会漏，按段才抓得到。
+  const result = await scanKnowledge({
+    workId: work.workId,
+    chapterId: work.chapterId,
+    text: '「你爹是司空府的人。」司马懿说。',
+    provider: emptyProvider(),
+  });
+
+  const leak = result.pending.find((row) => row.reason === 'possible_leak');
+  assert.ok(leak, '说话人后置时也必须进 pending');
+  assert.strictEqual(leak.characterName, '司马懿');
+  assert.match(leak.evidence, /司空府/);
+  assert.strictEqual(result.applied.length, 0);
+});
+
 test('同一行重复扫描不重复堆积 pending', async () => {
   const work = await seedWork('pending 幂等');
   const provider = {

@@ -135,6 +135,14 @@ function splitSentences(text) {
   return rows;
 }
 
+/** 段落切分：越界粗筛按「同段共现」，不按句。 */
+function splitParagraphs(text) {
+  return normalizeText(text)
+    .split(/\n+/)
+    .map((row) => row.trim())
+    .filter(Boolean);
+}
+
 /** 角色名与别名的 bigram：事实关键词里属于人名的 bigram 会被剔除，避免只凭人名就产生候选。 */
 function nameBigrams(characters) {
   const set = new Set();
@@ -219,8 +227,13 @@ function collectCandidates({ characters, facts, text }) {
 }
 
 /**
- * 文本越界粗筛：角色在含言说动作/引号的句子里，与一条他尚未 knows 的事实
- * 关键词同句共现，就记一条 possible_leak。只进 pending，不判违规。
+ * 文本越界粗筛：角色在正文里说出/写出他尚未 knows 的事实内容。
+ *
+ * 判定用「同段共现」：同一段落里同时出现角色名、事实关键词与言说动作/引号，
+ * 就把这一对记成 possible_leak。不要求角色名与事实词在同一句——
+ * 中文常把说话人写在引号后面（「……。」司马懿说），按句会漏掉这种写法。
+ *
+ * 命中只进 pending，不直接判违规；粗筛的误报由作者在待确认列表里消掉。
  *
  * @param {Object} params
  * @param {Array} params.characters
@@ -230,33 +243,47 @@ function collectCandidates({ characters, facts, text }) {
  * @returns {Array}
  */
 function detectPossibleLeaks({ characters, facts, states, text }) {
-  const sentences = splitSentences(normalizeText(text));
+  const paragraphs = splitParagraphs(normalizeText(text));
   const excluded = nameBigrams(characters);
   const leaks = [];
   const seen = new Set();
 
-  for (const sentence of sentences) {
-    if (!SPEECH_RE.test(sentence)) continue;
+  for (const paragraph of paragraphs) {
+    if (!SPEECH_RE.test(paragraph)) continue;
+    const sentences = splitSentences(paragraph);
+
     for (const character of characters) {
       const variants = characterVariants(character).filter(Boolean);
-      if (!variants.some((name) => sentence.includes(name))) continue;
+      if (!variants.some((name) => paragraph.includes(name))) continue;
+
       for (const fact of facts) {
         // 背景事实（年龄/籍贯/寄养原因）本来就要说出口，不算越界。
         if (normalizeText(fact.fact_type) === 'background') continue;
         const terms = factTerms(fact, excluded);
-        if (!terms.some((term) => sentence.includes(term))) continue;
+        if (!terms.some((term) => paragraph.includes(term))) continue;
+
         const current = stateFor(states, character.id, fact.id);
         if ((STATE_RANK[current] ?? 0) >= STATE_RANK.knows) continue;
+
         const key = `${character.id}\u0000${fact.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
+
+        // 证据句优先取「角色名 + 事实词」同句的那一句；没有就取命中事实词的句子。
+        const evidenceSentence =
+          sentences.find(
+            (line) =>
+              variants.some((name) => line.includes(name)) &&
+              terms.some((term) => line.includes(term))
+          ) || sentences.find((line) => terms.some((term) => line.includes(term))) || paragraph;
+
         leaks.push({
           characterId: character.id,
           characterName: character.name,
           factId: fact.id,
           fromState: current,
           toState: nextState(current),
-          evidence: Array.from(sentence).slice(0, EVIDENCE_LIMIT).join(''),
+          evidence: Array.from(evidenceSentence).slice(0, EVIDENCE_LIMIT).join(''),
           reason: 'possible_leak',
         });
         if (leaks.length >= MAX_LEAKS) return leaks;
