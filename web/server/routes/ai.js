@@ -37,6 +37,7 @@ const {
   checkBeatCoverage,
   formatBeatPlan,
   buildRewriteInstruction,
+  buildFunctionReplanInstruction,
   beatBadge,
   checkWordShares,
 } = require('../services/agent/beatPlan');
@@ -1026,39 +1027,135 @@ router.post('/chat', async (req, res) => {
         const planMs = Date.now() - planStartedAt;
         if (planOut.plan) {
           beatPlan = planOut.plan;
+          const planNotes = [];
+          if (beatPlan.salvaged) {
+            // R4：结构校验失败时按「最接近合法」的版本交付，但必须记账缺什么。
+            planNotes.push(
+              `plan_salvaged:${(planOut.errors || []).slice(0, 3).join('；') || '结构不合格'}`
+            );
+          }
 
-          // 分场 brief 的硬覆盖：规划器有它的结构校验，但不保证把 brief 的
-          // loss/mustPresent/mustWithhold 都排进去。缺项重排一次；仍缺只记录，
-          // 不因为没排全就把已经合格的节拍表作废。
-          if (brief) {
-            let coverage = planBrief.briefCoverage(brief, beatPlan);
-            if (coverage.missing.length && !roundSignal.aborted) {
-              send({ type: 'agent_thinking', label: '正在按分场 brief 重排节拍' });
-              const partitioned = planBrief.partitionCoverage(beatPlan, coverage);
-              const replanOut = await generateBeatPlan({
-                provider,
-                systemPrompt: briefSystemPrompt,
-                instruction: `${String(message)}\n\n${planBrief.buildReplanInstruction(partitioned)}`,
-                options: makePlanOptions(),
-              }).catch((err) => {
-                console.error('按 brief 重排失败，保留第一版节拍表：', err.message);
-                return { plan: null, errors: [] };
-              });
-              if (replanOut.plan) {
-                beatPlan = replanOut.plan;
-                coverage = planBrief.briefCoverage(brief, beatPlan);
-              }
-              // 重排仍可能把托付留在章末钩子里：按 slot 做一次确定性落位，
-              // 只改目标拍的目标文案，不新增人物、不改写手提示词。
-              const placed = planBrief.placeHandoverInPlan(beatPlan, coverage);
-              beatPlan = placed.plan;
-              coverage = planBrief.briefCoverage(brief, beatPlan);
+          // 一次算清所有规划缺口：功能拍分类、判定依据、brief 硬项、开场对手。
+          const evaluatePlanGaps = (plan) => {
+            const fnMissing = Array.isArray(plan && plan.functionMissing) ? plan.functionMissing : [];
+            const reasonMissing = Array.isArray(plan && plan.functionReasonMissing)
+              ? plan.functionReasonMissing
+              : [];
+            const coverage = brief ? planBrief.briefCoverage(brief, plan) : null;
+            const opp = brief ? planBrief.openingOpponentCoverage(brief, plan) : null;
+            const oppMissing = opp && opp.status === 'missing' ? opp : null;
+            const score =
+              fnMissing.length * 2 +
+              reasonMissing.length +
+              (oppMissing ? 3 : 0) +
+              (coverage ? coverage.missing.length : 0);
+            return { fnMissing, reasonMissing, coverage, oppMissing, score };
+          };
+
+          let gap = evaluatePlanGaps(beatPlan);
+          let best = { plan: beatPlan, gap };
+          let replans = 0;
+
+          // R1 + brief 硬项：只重排一次。功能拍缺哪类、brief 缺哪项一起给指令；
+          // 开场对手单独留给第二次，避免一次重排把已经合格的拍全部推翻。
+          const needFunction = gap.fnMissing.length > 0 || gap.reasonMissing.length > 0;
+          const briefMissing = gap.coverage
+            ? gap.coverage.missing.filter((item) => item.slot !== 'opening')
+            : [];
+          if ((needFunction || briefMissing.length) && replans < 2 && !roundSignal.aborted) {
+            const parts = [];
+            if (needFunction) {
+              parts.push(
+                buildFunctionReplanInstruction(beatPlan, gap.fnMissing, gap.reasonMissing)
+              );
             }
+            if (briefMissing.length) {
+              parts.push(
+                planBrief.buildReplanInstruction(
+                  planBrief.partitionCoverage(beatPlan, { missing: briefMissing })
+                )
+              );
+            }
+            send({ type: 'agent_thinking', label: '正在按功能拍与分场 brief 重排节拍' });
+            const replanOut = await generateBeatPlan({
+              provider,
+              systemPrompt: briefSystemPrompt,
+              instruction: `${String(message)}\n\n${parts.join('\n\n')}`,
+              options: makePlanOptions(),
+            }).catch((err) => {
+              console.error('按功能拍/brief 重排失败，保留第一版节拍表：', err.message);
+              return { plan: null, errors: [] };
+            });
+            if (replanOut.plan) {
+              replans += 1;
+              const nextGap = evaluatePlanGaps(replanOut.plan);
+              if (nextGap.score < best.gap.score) best = { plan: replanOut.plan, gap: nextGap };
+              beatPlan = best.plan;
+              gap = best.gap;
+            }
+          }
+
+          // R2：对手没落进开场拍时，只重排开场一次，其余拍要求原样保留。
+          if (gap.oppMissing && replans < 2 && !roundSignal.aborted) {
+            send({ type: 'agent_thinking', label: '正在把外部对手落进开场拍' });
+            const replanOut = await generateBeatPlan({
+              provider,
+              systemPrompt: briefSystemPrompt,
+              instruction:
+                `${String(message)}\n\n` +
+                planBrief.buildOpeningReplanInstruction({
+                  opponents: gap.oppMissing.opponents,
+                  openingBeatId: gap.oppMissing.openingBeatId,
+                }),
+              options: makePlanOptions(),
+            }).catch((err) => {
+              console.error('开场对手重排失败，保留当前节拍表：', err.message);
+              return { plan: null, errors: [] };
+            });
+            if (replanOut.plan) {
+              replans += 1;
+              const nextGap = evaluatePlanGaps(replanOut.plan);
+              // 只接受更接近合法的版本：修对手把六类结构改坏的，不要。
+              if (nextGap.score < best.gap.score) best = { plan: replanOut.plan, gap: nextGap };
+              beatPlan = best.plan;
+              gap = best.gap;
+            }
+          }
+
+          // 两次重排用完仍有缺口：按最接近合法的版本交付，缺口写进 plan_degraded。
+          beatPlan = best.plan;
+          gap = best.gap;
+
+          if (brief) {
+            // 重排仍可能把托付留在章末钩子里：按 slot 做一次确定性落位，
+            // 只改目标拍的目标文案，不新增人物、不改写手提示词。
+            const placed = planBrief.placeHandoverInPlan(beatPlan, gap.coverage);
+            beatPlan = placed.plan;
+            const coverage = planBrief.briefCoverage(brief, beatPlan);
             // 交付拍号写回 brief：写手指令和重复自检都要具体到第几拍。
             brief.handoverBeat = planBrief.handoverBeatId(brief, beatPlan);
             briefCoverageResult = coverage;
-            if (coverage.missing.length) {
-              planDegraded = `brief_missing:${coverage.missing
+            gap = evaluatePlanGaps(beatPlan);
+          } else {
+            gap = evaluatePlanGaps(beatPlan);
+          }
+
+          const degradedParts = planNotes.slice();
+          if (gap.fnMissing.length) {
+            degradedParts.push(`function_missing:${gap.fnMissing.join('、')}`);
+          }
+          if (gap.reasonMissing.length) {
+            degradedParts.push(`function_reason_missing:${gap.reasonMissing.slice(0, 4).join('、')}`);
+          }
+          if (gap.oppMissing) {
+            const who = gap.oppMissing.opponents.map((item) => item.text).join('；');
+            degradedParts.push(
+              `opponent:unplaced:${who || '对手未登记'}/${gap.oppMissing.openingBeatId || '无 function=opening 拍'}`
+            );
+          }
+          if (briefCoverageResult && briefCoverageResult.missing.length) {
+            degradedParts.push(
+              `brief_missing:${briefCoverageResult.missing
                 .slice(0, 3)
                 .map((item) => {
                   const parts = Array.isArray(item.missingParts) && item.missingParts.length
@@ -1068,9 +1165,10 @@ router.post('/chat', async (req, res) => {
                     ? `${item.kind}/${item.slot}${parts}/${item.text}`
                     : `${item.kind}/${item.text}`;
                 })
-                .join('|')}`;
-            }
+                .join('|')}`
+            );
           }
+          planDegraded = degradedParts.join('|');
 
           // 把「本章计划揭示的事实」真正接进知情边界。
           //
@@ -1457,6 +1555,7 @@ router.post('/chat', async (req, res) => {
     // 自检失败/超时一律交付当前稿，不让作者为一轮「检查」再等一次失败。
     let beatCheck = null;
     let beatCheckError = '';
+    let wordSharesReport = null;
     let beatRewrite = false;
     let beatRewriteFailed = false;
 
@@ -1568,11 +1667,19 @@ router.post('/chat', async (req, res) => {
     const invariantIds = invariantCheck.beatIds;
     if (beatCheck) beatCheck.invariantConflicts = invariantConflicts;
     // 篇幅配比只记账：按纯汉字量，与每拍 wordShare 目标比，超出 ±5pp 就列出拍号。
-    if (beatCheck && beatPlan) {
+    if (beatPlan) {
       const wordShares = checkWordShares(beatPlan, payload.content);
-      beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
-      beatCheck.wordShareOutOfRange = wordShares.outOfRange;
-      beatCheck.wordShareMissing = wordShares.shareMissing || [];
+      wordSharesReport = wordShares;
+      // R3：wordShares 永远给实值数组（每拍目标区间/实际/是否命中），
+      // 即使功能拍没排齐也不留空；是否适用由 wordShareApplicable 单独标。
+      if (beatCheck) {
+        beatCheck.wordShares = wordShares.beats;
+        beatCheck.wordRoleShares = wordShares.roleShares;
+        beatCheck.wordShareApplicable = wordShares.applicable;
+        beatCheck.wordShareReason = wordShares.reason || '';
+        beatCheck.wordShareOutOfRange = wordShares.outOfRange;
+        beatCheck.wordShareMissing = wordShares.shareMissing || [];
+      }
     }
     // 段落形态自检：段数 N±2、单段 20–79 / >140 字、连续 3 段不足 20 字、
     // 对白连续独立成段、引号用「」。违规只重写违规拍所在的组，不整章重写。
@@ -1764,7 +1871,11 @@ router.post('/chat', async (req, res) => {
             if (beatCheck) {
               beatCheck.invariantConflicts = invariantCheck.violations;
               const wordShares = checkWordShares(beatPlan, payload.content);
-              beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
+              wordSharesReport = wordShares;
+              beatCheck.wordShares = wordShares.beats;
+              beatCheck.wordRoleShares = wordShares.roleShares;
+              beatCheck.wordShareApplicable = wordShares.applicable;
+              beatCheck.wordShareReason = wordShares.reason || '';
               beatCheck.wordShareOutOfRange = wordShares.outOfRange;
               beatCheck.wordShareMissing = wordShares.shareMissing || [];
               shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
@@ -1895,7 +2006,11 @@ router.post('/chat', async (req, res) => {
           if (beatCheck) {
             beatCheck.invariantConflicts = invariantCheck.violations;
             const wordShares = checkWordShares(beatPlan, payload.content);
-            beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
+            wordSharesReport = wordShares;
+            beatCheck.wordShares = wordShares.beats;
+            beatCheck.wordRoleShares = wordShares.roleShares;
+            beatCheck.wordShareApplicable = wordShares.applicable;
+            beatCheck.wordShareReason = wordShares.reason || '';
             beatCheck.wordShareOutOfRange = wordShares.outOfRange;
             beatCheck.wordShareMissing = wordShares.shareMissing || [];
             shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
@@ -2085,6 +2200,39 @@ router.post('/chat', async (req, res) => {
       ? { items: brief.items.slice(0, 12), dropped: (brief.dropped || []).slice(0, 5) }
       : null;
     payload.briefCoverage = briefCoverageResult;
+    // 最终交付使用的节拍表（可能是重排后的版本，不是第一次生成的）：
+    // 复盘时按它核对功能分类、对手落位与交付拍号。
+    payload.beatPlan = beatPlan
+      ? {
+          totalParagraphs: beatPlan.totalParagraphs,
+          functionCovered: beatPlan.functionCovered || [],
+          functionMissing: beatPlan.functionMissing || [],
+          functionReasonMissing: beatPlan.functionReasonMissing || [],
+          shareMissing: beatPlan.shareMissing || [],
+          salvaged: Boolean(beatPlan.salvaged),
+          beats: beatPlan.beats.map((beat) => ({
+            id: beat.id,
+            function: beat.function || '',
+            functionReason: beat.functionReason || '',
+            type: beat.type,
+            paragraphs: beat.paragraphs,
+            wordShare: beat.wordShare,
+            targetChars: beat.targetChars || null,
+          })),
+        }
+      : null;
+    // R3：篇幅配比实值（每拍目标区间/实际/是否命中）+ 功能汇总。
+    payload.wordShares = wordSharesReport
+      ? {
+          applicable: wordSharesReport.applicable,
+          total: wordSharesReport.total,
+          beats: wordSharesReport.beats,
+          roleShares: wordSharesReport.roleShares,
+          outOfRange: wordSharesReport.outOfRange,
+          missing: wordSharesReport.shareMissing || [],
+          reason: wordSharesReport.reason || '',
+        }
+      : { applicable: false, total: 0, beats: [], roleShares: [], outOfRange: [], missing: [] };
     if (planDegraded) payload.planDegraded = planDegraded;
     if (segmented) {
       payload.segmentInfo = {
@@ -2340,6 +2488,8 @@ router.post('/chat', async (req, res) => {
       beatCheck: payload.beatCheck || null,
       planDegraded: payload.planDegraded || '',
       planBrief: payload.planBrief || null,
+      beatPlan: payload.beatPlan || null,
+      wordShares: payload.wordShares || null,
       briefCoverage: payload.briefCoverage || null,
       mustReveal: payload.mustReveal || null,
       segmentInfo: payload.segmentInfo || null,
