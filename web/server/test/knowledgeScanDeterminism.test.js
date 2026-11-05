@@ -21,6 +21,7 @@ let db;
 let server;
 let scanKnowledge;
 let collectCandidates;
+let knowledgeAt;
 
 const BODY =
   '司马懿见过密诏，脸色骤变。杨平知道令牌在县衙。';
@@ -110,6 +111,7 @@ test.before(async () => {
   db = require('../database');
   await db.ready;
   ({ scanKnowledge, collectCandidates } = require('../services/pipeline/knowledgeScan'));
+  ({ knowledgeAt } = require('../services/pipeline/knowledge'));
   const app = require('../app');
   server = await startServer(app);
 });
@@ -278,3 +280,141 @@ test('同一行重复扫描不重复堆积 pending', async () => {
   const rows = await db.all('SELECT * FROM knowledge_pending WHERE work_id = ?', [work.workId]);
   assert.strictEqual(rows.length, 1, '同键 pending 不重复插入');
 });
+
+test('model_only：候选之外但证据逐字存在 → 进 pending，低可信且不自动落库', async () => {
+  const work = await seedWork('模型单独提出');
+  // f3 的关键词（征辟）不在正文里，候选层不会产出这一条。
+  await db.run(
+    `INSERT INTO story_facts (id, work_id, secret_id, part_no, content, keywords, created_at, modified_at)
+     VALUES (?, ?, NULL, 1, '杨俊被曹操征辟为掾属', '征辟', ?, ?)`,
+    [`f3-${work.workId}`, work.workId, TS, TS]
+  );
+
+  const provider = {
+    calls: 0,
+    async chat() {
+      this.calls += 1;
+      return {
+        content: JSON.stringify({
+          transitions: [
+            { candidate: 'C1', toState: 'suspects' },
+            {
+              character: '杨平',
+              factId: 'F3',
+              evidence: '杨平知道令牌在县衙',
+              toState: 'knows',
+            },
+          ],
+        }),
+      };
+    },
+  };
+
+  const result = await scanKnowledge({
+    workId: work.workId,
+    chapterId: work.chapterId,
+    text: BODY,
+    provider,
+  });
+
+  const row = result.pending.find((item) => item.source === 'model_only');
+  assert.ok(row, '候选之外逐字证据必须进 pending');
+  assert.strictEqual(row.characterName, '杨平');
+  assert.strictEqual(row.fromState, 'unknown');
+  assert.strictEqual(row.toState, 'knows');
+  assert.strictEqual(row.reason, '跳级', 'reason 保留等级语义，不因为来路而改写');
+  assert.strictEqual(result.applied.length, 1, '只有候选命中的 C1 自动落库');
+
+  const dbRow = await db.get(
+    "SELECT * FROM knowledge_pending WHERE work_id = ? AND source = 'model_only'",
+    [work.workId]
+  );
+  assert.ok(dbRow, 'source 必须持久化，前端才能标记低可信');
+  assert.strictEqual(dbRow.reason, '跳级');
+
+  const matrix = await db.all('SELECT * FROM knowledge_matrix WHERE work_id = ? AND fact_id = ?', [
+    work.workId,
+    `f3-${work.workId}`,
+  ]);
+  assert.strictEqual(matrix.length, 0, 'model_only 确认前不落库');
+  const visible = await knowledgeAt(work.workId, 2);
+  assert.ok(
+    !visible.some((item) => item.fact_id === `f3-${work.workId}`),
+    'model_only 确认前不参与注入'
+  );
+});
+
+test('model_only：证据不在正文逐字出现 → 丢弃，不进 pending', async () => {
+  const work = await seedWork('模型证据不存在');
+  const provider = {
+    async chat() {
+      return {
+        content: JSON.stringify({
+          transitions: [
+            { candidate: 'C1', toState: 'suspects' },
+            {
+              character: '杨平',
+              factId: 'F2',
+              evidence: '杨平在许都见过曹操',
+              toState: 'knows',
+            },
+          ],
+        }),
+      };
+    },
+  };
+
+  const result = await scanKnowledge({
+    workId: work.workId,
+    chapterId: work.chapterId,
+    text: BODY,
+    provider,
+  });
+
+  assert.strictEqual(
+    result.pending.filter((item) => item.source === 'model_only').length,
+    0,
+    '证据不在正文里，哪怕像模像样也必须丢弃'
+  );
+  const rows = await db.all(
+    "SELECT * FROM knowledge_pending WHERE work_id = ? AND source = 'model_only'",
+    [work.workId]
+  );
+  assert.strictEqual(rows.length, 0);
+});
+
+test('同一 transition 同时被候选与模型返回：只留一条 pending，候选优先', async () => {
+  const work = await seedWork('候选优先去重');
+  const provider = {
+    async chat() {
+      return {
+        content: JSON.stringify({
+          transitions: [
+            { candidate: 'C1', toState: 'knows' },
+            {
+              character: '司马懿',
+              factId: 'F1',
+              evidence: '司马懿见过密诏',
+              toState: 'knows',
+            },
+          ],
+        }),
+      };
+    },
+  };
+
+  const result = await scanKnowledge({
+    workId: work.workId,
+    chapterId: work.chapterId,
+    text: '司马懿见过密诏，脸色骤变。',
+    provider,
+  });
+
+  assert.strictEqual(result.pending.length, 1, '同一条 transition 不能重复堆积');
+  assert.strictEqual(result.pending[0].source, 'candidate', '候选路径优先');
+
+  const rows = await db.all('SELECT * FROM knowledge_pending WHERE work_id = ?', [work.workId]);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].source, 'candidate');
+});
+

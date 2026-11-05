@@ -257,6 +257,9 @@ export default function PendingQueue({ workId }) {
                       {STATE_LABELS[row.toState] || row.toState}
                     </span>
                     <span className="ct-anchor-tier-hint">第 {row.chapterSeq} 章</span>
+                    {row.source === 'model_only' && (
+                      <span className="ct-pending-source">低可信 · 需人工核对</span>
+                    )}
                   </div>
                   <p className="ct-pending-reason">{row.reason}</p>
                   {row.evidence && <p className="ct-anchor-quote">原句：{row.evidence}</p>}

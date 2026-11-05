@@ -741,6 +741,7 @@ test('PV8：跳级进 pending，确认后矩阵落行，下一章注入能看到
   assert.strictEqual(scan.pending.length, 1);
   assert.strictEqual(scan.knowledgePendingCount, 1);
   assert.strictEqual(scan.pending[0].reason, '跳级');
+  assert.strictEqual(scan.pending[0].source, 'model_only', '候选之外由模型单独指出');
   const pendingRes = await server.request(`/api/pipeline/${workId}/pending`);
   assert.strictEqual(pendingRes.status, 200);
   const pending = await pendingRes.json();

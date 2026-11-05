@@ -60,13 +60,26 @@ const MAX_CANDIDATES = 24;
 const MAX_LEAKS = 12;
 const EVIDENCE_LIMIT = 40;
 
+/**
+ * 待确认条目的来路。与 reason（为什么进 pending）分开：
+ *   candidate：规则层候选命中；
+ *   model_only：候选之外、模型自己指出（低可信，必须人工确认）；
+ *   rule：规则层粗筛（possible_leak）。
+ */
+const SOURCE_CANDIDATE = 'candidate';
+const SOURCE_MODEL_ONLY = 'model_only';
+const SOURCE_RULE = 'rule';
+
 const SCAN_PROMPT = `你是历史悬疑的知情状态判定器。下面是从正文里机械筛出的候选，
 每个候选已经锁定「角色 + 事实 + 原句」。你的任务只有一件：判断这一句是否让该角色
 对该事实的知情状态上升一级。只输出一个 JSON 对象：
 {"transitions":[{"candidate":"C1","toState":"suspects|partial|knows|exposed"}]}
 
 规则：
-- 只能使用候选清单里的编号；不要新增候选，不要改角色，不要改事实。
+- 候选编号只能取自候选清单；不要改候选里的角色或事实。
+- 若正文里有明确证据、但该角色/事实不在候选清单，可以改用
+  {"character":"角色名","factId":"F2","evidence":"正文原句","toState":"..."} 返回；
+  这类条目会被当作低可信的模型单独提出，必须人工确认，不能自动生效。
 - 状态只能比当前高一级：未知→怀疑→半知→已知→公开。
 - 只是同句提到、没有明确认知变化，就不要输出。
 - 跳级、降级、猜测、推断一律不要输出。
@@ -74,6 +87,9 @@ const SCAN_PROMPT = `你是历史悬疑的知情状态判定器。下面是从�
 
 候选清单：
 {candidateList}
+
+事实清单（候选之外的事实也在这里，按编号引用）：
+{factList}
 
 当前知情状态（只列非「未知」；未列出即未知）：
 {stateList}`;
@@ -315,6 +331,14 @@ function buildCandidateList(candidates, labels) {
     .join('\n');
 }
 
+/** 全部事实的编号与摘要：候选之外的事实也要能被模型按 F# 引用。 */
+function buildFactList(facts, labels) {
+  const lines = facts.map(
+    (fact) => `${labels.get(fact.id)}｜${shortContent(fact.content, 40)}`
+  );
+  return lines.length ? lines.join('\n') : '（无）';
+}
+
 async function callWithTimeout(provider, messages, timeoutMs) {
   let timer = null;
   const timeout = new Promise((resolve) => {
@@ -448,10 +472,17 @@ async function scanKnowledge(params = {}) {
 
   const pendingKey = (row) =>
     [row.characterId, row.factId, row.fromState, row.toState, row.evidence, row.reason].join('\u0000');
+  // 同一次扫描里，同一条 transition（角色+事实+起止状态）只留一条 pending。
+  // 候选先跑，所以模型把同一条又说一遍时不会重复堆积。
+  const pendingTransitions = new Set();
 
   /** 进 pending：库里同键已有 pending 时不再重复插入，但结果里仍保留一条。 */
   const pushPending = async (row) => {
-    pending.push(row);
+    const source = row.source || SOURCE_CANDIDATE;
+    const tkey = [row.characterId, row.factId, row.fromState, row.toState].join('\u0000');
+    if (pendingTransitions.has(tkey)) return;
+    pendingTransitions.add(tkey);
+    pending.push({ ...row, source });
     const key = pendingKey(row);
     if (pendingKeys.has(key)) return;
     pendingKeys.add(key);
@@ -466,9 +497,9 @@ async function scanKnowledge(params = {}) {
     statements.push({
       sql: `INSERT INTO knowledge_pending
               (id, work_id, chapter_id, chapter_seq, character_id, character_name,
-               fact_id, fact_label, from_state, to_state, evidence, reason,
+               fact_id, fact_label, from_state, to_state, evidence, reason, source,
                status, created_at, modified_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       params: [
         crypto.randomUUID(),
         workId,
@@ -482,6 +513,7 @@ async function scanKnowledge(params = {}) {
         row.toState,
         row.evidence,
         row.reason,
+        source,
         now,
         now,
       ],
@@ -489,7 +521,15 @@ async function scanKnowledge(params = {}) {
   };
 
   // 越界命中先入队（规则层产物，不依赖模型）。
+  const transitionKey = (characterId, factId, fromState, toState) =>
+    [characterId, factId, fromState, toState].join('\u0000');
+  // 候选路径已经处理过的 transition（含规则层 leak），model_only 不再重复堆积。
+  const transitionSeen = new Set();
+
   for (const leak of leaks) {
+    transitionSeen.add(
+      transitionKey(leak.characterId, leak.factId, leak.fromState, leak.toState)
+    );
     await pushPending({
       characterName: leak.characterName,
       characterId: leak.characterId,
@@ -499,6 +539,7 @@ async function scanKnowledge(params = {}) {
       toState: leak.toState,
       evidence: leak.evidence,
       reason: 'possible_leak',
+      source: SOURCE_RULE,
     });
   }
 
@@ -516,14 +557,13 @@ async function scanKnowledge(params = {}) {
     const messages = [
       {
         role: 'system',
-        content: SCAN_PROMPT.replace('{candidateList}', buildCandidateList(candidates, labels)).replace(
-          '{stateList}',
-          stateList
-        ),
+        content: SCAN_PROMPT.replace('{candidateList}', buildCandidateList(candidates, labels))
+          .replace('{factList}', buildFactList(facts, labels))
+          .replace('{stateList}', stateList),
       },
       {
         role: 'user',
-        content: `候选清单共 ${candidates.length} 条。只输出候选编号对应的状态迁移；没有明确变化就返回空数组。`,
+        content: `候选清单共 ${candidates.length} 条。优先只输出候选编号对应的状态迁移；候选之外确有正文逐字证据的，按 character/factId/evidence 返回；没有明确变化就返回空数组。`,
       },
     ];
 
@@ -542,24 +582,33 @@ async function scanKnowledge(params = {}) {
       return scanFailed(workId, chapterId, seq, '模型输出不是合法的 transitions 数组');
     }
 
+    const resolveCandidate = (raw) => {
+      const candidateId = normalizeText(raw.candidate).toUpperCase();
+      if (candidateId) return candidates.find((item) => item.id === candidateId) || null;
+
+      // 保留旧的 character/factId 写法给既有调用方。
+      const character = findCharacter(characters, normalizeText(raw.character));
+      const factLabelInput = normalizeText(raw.factId);
+      const fact = facts.find((item) => item.id === factLabelInput) || factByLabel.get(factLabelInput);
+      if (!character || !fact) return null;
+      return (
+        candidates.find(
+          (item) => item.character.id === character.id && item.fact.id === fact.id
+        ) || null
+      );
+    };
+
+    const resolveEntity = (raw) => {
+      const character = findCharacter(characters, normalizeText(raw.character));
+      const factLabelInput = normalizeText(raw.factId);
+      const fact = facts.find((item) => item.id === factLabelInput) || factByLabel.get(factLabelInput);
+      return character && fact ? { character, fact } : null;
+    };
+
+    // 第一遍：候选命中路径。闸门与原来完全一致。
     for (const raw of parsed.transitions.slice(0, MAX_CANDIDATES)) {
       if (!raw || typeof raw !== 'object') continue;
-
-      // 新契约按候选编号；保留旧的 character/factId 写法给既有调用方。
-      let candidate = null;
-      const candidateId = normalizeText(raw.candidate).toUpperCase();
-      if (candidateId) {
-        candidate = candidates.find((item) => item.id === candidateId) || null;
-      } else {
-        const character = findCharacter(characters, normalizeText(raw.character));
-        const factLabelInput = normalizeText(raw.factId);
-        const fact = facts.find((item) => item.id === factLabelInput) || factByLabel.get(factLabelInput);
-        if (character && fact) {
-          candidate = candidates.find(
-            (item) => item.character.id === character.id && item.fact.id === fact.id
-          ) || null;
-        }
-      }
+      const candidate = resolveCandidate(raw);
       if (!candidate) continue;
 
       const character = candidate.character;
@@ -578,7 +627,8 @@ async function scanKnowledge(params = {}) {
         evidence,
       };
       const reject = async (reason) => {
-        await pushPending({ ...base, reason });
+        transitionSeen.add(transitionKey(character.id, fact.id, fromState, toState));
+        await pushPending({ ...base, reason, source: SOURCE_CANDIDATE });
       };
 
       if (!STATES.has(toState)) {
@@ -621,6 +671,7 @@ async function scanKnowledge(params = {}) {
         // 同章同状态同证据 = 上一次扫描已经应用过，按已应用返回，不重复写。
         if (exists.state === toState && normalizeText(exists.note) === evidence) {
           appliedKeys.add(key);
+          transitionSeen.add(transitionKey(character.id, fact.id, fromState, toState));
           applied.push(base);
           continue;
         }
@@ -629,6 +680,7 @@ async function scanKnowledge(params = {}) {
       }
 
       appliedKeys.add(key);
+      transitionSeen.add(transitionKey(character.id, fact.id, fromState, toState));
       applied.push(base);
       statements.push({
         sql: `INSERT INTO knowledge_matrix
@@ -646,6 +698,53 @@ async function scanKnowledge(params = {}) {
           evidence,
           now,
         ],
+      });
+    }
+
+    // 第二遍：候选之外的 model_only。低可信，一律 pending，绝不自动落库。
+    for (const raw of parsed.transitions.slice(0, MAX_CANDIDATES)) {
+      if (!raw || typeof raw !== 'object') continue;
+      // 候选路径已经处理过这一条（无论结果如何），以候选为准。
+      if (resolveCandidate(raw)) continue;
+
+      const entity = resolveEntity(raw);
+      if (!entity) continue;
+      const character = entity.character;
+      const fact = entity.fact;
+      const toState = normalizeText(raw.toState);
+      // 这条通道不接受候选原句兜底：必须由模型显式给出正文里的原句。
+      const evidence = normalizeText(raw.evidence);
+      const fromState = stateFor(states, character.id, fact.id);
+
+      // 闸门：状态合法、证据逐字、状态上升；任一不满足直接丢弃，不进 pending。
+      if (!STATES.has(toState)) continue;
+      if (!evidence || !body.includes(evidence)) continue;
+      const fromRank = STATE_RANK[fromState] ?? 0;
+      const toRank = STATE_RANK[toState];
+      if (toRank <= fromRank) continue;
+
+      const tkey = transitionKey(character.id, fact.id, fromState, toState);
+      if (transitionSeen.has(tkey)) continue;
+      transitionSeen.add(tkey);
+
+      // reason 仍回答「为什么进 pending」（等级语义不丢）；来路单独放 source。
+      const reason =
+        toRank - fromRank > 1
+          ? '跳级'
+          : CONFIRM_REQUIRED_STATES.has(toState)
+            ? `需作者确认：${toState} 不能自动生效`
+            : '模型自行指出，无候选命中，需人工核对';
+
+      await pushPending({
+        characterName: character.name,
+        characterId: character.id,
+        factLabel: labels.get(fact.id),
+        factId: fact.id,
+        fromState,
+        toState,
+        evidence,
+        reason,
+        source: SOURCE_MODEL_ONLY,
       });
     }
   }

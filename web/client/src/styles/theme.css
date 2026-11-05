@@ -3731,6 +3731,16 @@ body.ct-resizing * {
   padding: 1px 8px;
 }
 
+/* 模型自行指出、无候选命中的待确认条目：低可信，需人工核对 */
+.ct-pending-source {
+  font-size: 11px;
+  color: #b45309;
+  border: 1px solid #d97706;
+  background: rgba(217, 119, 6, 0.08);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
 .ct-pending-sev {
   font-size: 11px;
   border-radius: 999px;

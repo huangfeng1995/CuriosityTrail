@@ -469,6 +469,7 @@ function toPendingKnowledge(row) {
     toState: row.to_state,
     evidence: row.evidence,
     reason: row.reason,
+    source: row.source || 'candidate',
     status: row.status,
     createdAt: row.created_at,
   };
