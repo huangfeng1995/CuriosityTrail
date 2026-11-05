@@ -15,6 +15,7 @@ const { all, get, run, transaction } = require('../database');
 const { ownedWork } = require('../services/scope');
 const { isPipelineEnabled } = require('../services/pipeline/gate');
 const anchors = require('../services/pipeline/anchors');
+const upgrade = require('../services/pipeline/upgrade');
 const knowledgeScan = require('../services/pipeline/knowledgeScan');
 const knowledgeView = require('../services/pipeline/knowledgeView');
 
@@ -38,8 +39,12 @@ router.get('/pending-count', async (req, res) => {
          +
          (SELECT COUNT(*) FROM anchor_violations v
             JOIN works w ON w.id = v.work_id
-           WHERE w.user_id = ? AND v.dismissed = 0) AS n`,
-      [req.userId, req.userId]
+           WHERE w.user_id = ? AND v.dismissed = 0)
+         +
+         (SELECT COUNT(*) FROM work_anchors a
+            JOIN works w ON w.id = a.work_id
+           WHERE w.user_id = ? AND a.status = 'pending') AS n`,
+      [req.userId, req.userId, req.userId]
     );
     return res.json({ count: row?.n || 0 });
   } catch (err) {
@@ -69,6 +74,7 @@ function toAnchor(row) {
     sourceQuote: row.source_quote || '',
     rules,
     immutable: row.immutable === 1,
+    sourceMaterialId: row.source_material_id || '',
     status: row.status,
     createdAt: row.created_at,
     modifiedAt: row.modified_at,
@@ -86,6 +92,9 @@ async function pipelineWork(req, res) {
 
 function fail(res, err) {
   if (err instanceof anchors.ValidationError) {
+    return res.status(err.status).json({ error: err.message });
+  }
+  if (err instanceof upgrade.UpgradeError) {
     return res.status(err.status).json({ error: err.message });
   }
   console.error('[pipeline] 锚点接口失败:', err);
@@ -191,6 +200,45 @@ router.post('/:workId/anchors/import', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// 素材 → 锚点：显式升格
+// ---------------------------------------------------------------------------
+
+/**
+ * 把选中的素材升格为锚点草稿。
+ *
+ * 只做一次显式转换：入参是素材 id 列表，出参是 pending 锚点；
+ * 不建外键、不做双向同步，素材后续修改不会回写锚点。
+ * `rules` 可由 agent 通过 `rulesByMaterial` 显式给出，推不出的退 manual_only。
+ */
+router.post('/:workId/anchors/upgrade', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const materialIds = Array.isArray(req.body?.materialIds) ? req.body.materialIds : [];
+    const rulesByMaterial =
+      req.body?.rulesByMaterial && typeof req.body.rulesByMaterial === 'object'
+        ? req.body.rulesByMaterial
+        : {};
+
+    const result = await upgrade.upgradeMaterials(req.userId, work.id, materialIds, {
+      explicitRulesByMaterial: rulesByMaterial,
+    });
+    return res.json({
+      created: result.created.map((item) => ({
+        ...toAnchor(item.anchor),
+        materialId: item.materialId,
+        materialTitle: item.materialTitle,
+        degraded: item.degraded,
+      })),
+      skipped: result.skipped,
+    });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // 列表与状态流转
 // ---------------------------------------------------------------------------
 
@@ -267,6 +315,49 @@ function statusHandler(action) {
 
 router.post('/:workId/anchors/:id/activate', statusHandler('activate'));
 router.post('/:workId/anchors/:id/reject', statusHandler('reject'));
+
+/**
+ * 批量启用锚点草稿。
+ *
+ * 与单条启用同一套状态机：只有 pending 能启用，其余跳过并返回原因。
+ * 「确认后才注入」靠的就是这里——pending 在上下文装配里根本查不到。
+ */
+router.post('/:workId/anchors/activate-batch', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ error: '没有待启用的锚点' });
+
+    const ts = now();
+    const statements = [];
+    const skipped = [];
+    for (const id of ids) {
+      const row = await get('SELECT * FROM work_anchors WHERE id = ? AND work_id = ?', [
+        id,
+        work.id,
+      ]);
+      if (!row) {
+        skipped.push({ id, reason: '锚点不存在' });
+        continue;
+      }
+      if (row.status !== 'pending') {
+        skipped.push({ id, reason: `当前状态 ${row.status} 不能启用` });
+        continue;
+      }
+      statements.push({
+        sql: "UPDATE work_anchors SET status = 'active', modified_at = ? WHERE id = ?",
+        params: [ts, row.id],
+      });
+    }
+
+    if (statements.length) await transaction(statements);
+    return res.json({ activated: statements.length, skipped });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // 知情扫描（HP7）
@@ -396,10 +487,17 @@ router.get('/:workId/pending', async (req, res) => {
        ORDER BY v.created_at ASC, v.id ASC`,
       [work.id]
     );
+    const pendingAnchors = await all(
+      `SELECT * FROM work_anchors
+       WHERE work_id = ? AND status = 'pending'
+       ORDER BY created_at ASC, id ASC`,
+      [work.id]
+    );
 
     return res.json({
       knowledge: knowledge.map(toPendingKnowledge),
       violations: violations.map(toViolation),
+      anchors: pendingAnchors.map(toAnchor),
     });
   } catch (err) {
     return fail(res, err);

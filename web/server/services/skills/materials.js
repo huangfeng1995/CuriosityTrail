@@ -15,6 +15,7 @@
 const localSearch = require('../search/local');
 const deepseekSearch = require('../search/deepseekSearch');
 const store = require('../materials/store');
+const upgrade = require('../pipeline/upgrade');
 
 /** 检索结果里给模型看的条目上限，避免把上下文撑爆 */
 const MAX_ITEMS = 10;
@@ -209,4 +210,73 @@ const saveMaterials = {
   },
 };
 
-module.exports = { searchMaterials, webSearch, saveMaterials };
+const upgradeAnchors = {
+  name: 'upgradeAnchors',
+  label: '素材升格锚点',
+  description:
+    '把素材显式升格为锚点草稿（初始状态为待确认，作者确认后才生效）。' +
+    '只对「天然应当成为硬约束」的条目使用：年代、人物生卒、职官、明确的正史事件。' +
+    '规则推不出来时不要硬编，交给服务退成 manual_only。',
+  parameters: {
+    type: 'object',
+    properties: {
+      materialIds: {
+        type: 'array',
+        description: '要升格的素材 id 列表',
+        items: { type: 'string' },
+      },
+      rulesByMaterial: {
+        type: 'object',
+        description:
+          '可选：按素材 id 显式给出规则，形如 {"素材id": [{"rule_type":"chronology","params":{...}}]}；不给则退 manual_only',
+      },
+    },
+    required: ['materialIds'],
+  },
+  async run(params, ctx) {
+    if (!ctx.userId) {
+      return { label: '素材升格锚点', summary: '缺少用户身份，没有升格。', detail: [] };
+    }
+    if (!ctx.workId) {
+      return {
+        label: '素材升格锚点',
+        summary: '当前对话没有绑定作品，锚点没有归属，未升格。',
+        detail: [],
+      };
+    }
+
+    const result = await upgrade.upgradeMaterials(ctx.userId, ctx.workId, params.materialIds, {
+      explicitRulesByMaterial:
+        params.rulesByMaterial && typeof params.rulesByMaterial === 'object'
+          ? params.rulesByMaterial
+          : {},
+    });
+
+    const detail = [
+      ...result.created.map((item) => ({
+        label: `草稿：${item.anchor.subject}`,
+        text: `${item.confidence} · ${item.anchor.kind} · ${item.rules
+          .map((rule) => rule.rule_type)
+          .join('/')}`,
+      })),
+      ...result.skipped.map((item) => ({
+        label: '跳过',
+        text: `${item.id}：${item.reason}`,
+      })),
+    ];
+
+    return {
+      label: '素材升格锚点',
+      summary: `生成 ${result.created.length} 条锚点草稿，跳过 ${result.skipped.length} 条；确认后才生效。`,
+      detail,
+      created: result.created.map((item) => ({
+        id: item.anchor.id,
+        subject: item.anchor.subject,
+        confidence: item.confidence,
+      })),
+      skipped: result.skipped,
+    };
+  },
+};
+
+module.exports = { searchMaterials, webSearch, saveMaterials, upgradeAnchors };

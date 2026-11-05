@@ -216,8 +216,9 @@ register(checkConsistency);
 const checkStyle = require('./checkStyle');
 register(checkStyle);
 
-// 素材整理三件套：先查（站内/联网），再批量入库。
+// 素材整理四件套：先查（站内/联网），再批量入库，最后显式升格锚点草稿。
 const materialTools = require('./materials');
 register(materialTools.searchMaterials);
 register(materialTools.webSearch);
 register(materialTools.saveMaterials);
+register(materialTools.upgradeAnchors);

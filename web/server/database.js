@@ -32,8 +32,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 8 → 9：人物卡正史/立场/底线/弱点，秘密/事实/知情矩阵/证据四表。
  * 版本 9 → 10：知情扫描待确认表（knowledge_pending）。
  * 版本 10 → 11：素材出处/置信/来源/状态列（agent 整理素材的机械约束）。
+ * 版本 11 → 12：锚点记录来源素材 id（素材显式升格用，不建外键、不双向同步）。
  */
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 /**
  * 版本号之前的老库遗留表。
@@ -461,6 +462,9 @@ CREATE TABLE IF NOT EXISTS work_anchors (
   source_quote   TEXT,
   rules          TEXT NOT NULL DEFAULT '[]',
   immutable      INTEGER NOT NULL DEFAULT 1,
+  -- 来源素材 id。只做溯源与幂等判断，**不是外键**：
+  -- 素材改了不会自动改锚点，也不做双向同步。
+  source_material_id TEXT NOT NULL DEFAULT '',
   status         TEXT NOT NULL DEFAULT 'pending'
                  CHECK (status IN ('pending','active','rejected')),
   created_at     TEXT NOT NULL,
@@ -472,6 +476,8 @@ CREATE TABLE IF NOT EXISTS work_anchors (
 );
 CREATE INDEX IF NOT EXISTS idx_work_anchors
   ON work_anchors (work_id, status, kind);
+CREATE INDEX IF NOT EXISTS idx_work_anchors_material
+  ON work_anchors (work_id, source_material_id);
 
 -- 史料空白区。正史无载、可合法虚构的区间，单独成表，不混进锚点库。
 CREATE TABLE IF NOT EXISTS work_blank_areas (
@@ -726,6 +732,8 @@ async function migrate(fromVersion) {
   await ensureColumn('materials', 'status', "TEXT NOT NULL DEFAULT 'active'");
   await ensureColumn('materials', 'created_by', "TEXT NOT NULL DEFAULT 'user'");
   await ensureColumn('materials', 'search_log', "TEXT NOT NULL DEFAULT ''");
+  // 11 → 12：锚点记录来源素材 id。老锚点留空串，仍按原状态工作。
+  await ensureColumn('work_anchors', 'source_material_id', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('prompt_overrides', 'model', 'TEXT');
   await ensureColumn('prompt_overrides', 'thinking', 'INTEGER');
   await ensureColumn('chapters', 'outline', 'TEXT');
