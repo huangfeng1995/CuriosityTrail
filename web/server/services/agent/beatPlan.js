@@ -42,6 +42,14 @@ const EMPTY_HOOKS = ['且听下回分解', '欲知后事', '下回分解'];
 
 /** 回城/身世是本章的承重拍：并进「过渡」拍且份额过低，等于把身世交代糊过去。 */
 const ARC_BEAT_RE = /回城|到家|进城|身世|寄养|旧事|年龄|籍贯/;
+/**
+ * 判「身世被并进过渡拍」只认身世语义，不认「回城」这个地点词。
+ *
+ * 范文里「下山议论」这一拍本来就发生在回城路上（14%），如果拿「回城」
+ * 当判据，会把合法的途中议论拍全部打成「身世合并」，整章计划被拒后
+ * 降级直写，后面的自检连跑都跑不到。
+ */
+const IDENTITY_MERGE_RE = /身世|寄养|旧事|年龄|籍贯|小时候|自幼|童年/;
 const ARC_MIN_SHARE = 20;
 
 /**
@@ -284,13 +292,14 @@ function validateBeatPlan(candidate) {
     errors.push('mainType 必须与某一个节拍的 type 相同');
   }
 
-  // 回城/身世不能并进过渡拍：计划份额低于 20% 说明这一拍只是顺带提一句。
+  // 身世不能并进过渡拍：计划份额低于 20% 说明这一拍只是顺带提一句。
+  // 只认身世语义，不认「回城」地点词——途中议论拍本来就发生在回城路上。
   for (const beat of beats) {
     const planned = Number.isFinite(beat.plannedShare) ? beat.plannedShare : beat.wordShare;
-    if (beat.type === '过渡' && ARC_BEAT_RE.test(beatNarrative(beat)) && planned < ARC_MIN_SHARE) {
+    if (beat.type === '过渡' && IDENTITY_MERGE_RE.test(beatNarrative(beat)) && planned < ARC_MIN_SHARE) {
       errors.push(
-        `${beat.id}把回城/身世并进了过渡拍（计划份额仅 ${planned}%，应 ≥${ARC_MIN_SHARE}%），` +
-          '回城与身世必须单独成拍'
+        `${beat.id}把身世（寄养/年龄/籍贯/旧事）并进了过渡拍（计划份额仅 ${planned}%，应 ≥${ARC_MIN_SHARE}%），` +
+          '身世必须单独成拍'
       );
     }
   }

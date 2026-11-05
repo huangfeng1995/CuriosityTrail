@@ -521,9 +521,21 @@ test('计划校验拒绝：回城/身世并进过渡拍且份额低于 20%', () 
   const result = validateBeatPlan(plan);
   assert.strictEqual(result.ok, false);
   assert.ok(
-    result.errors.some((error) => error.includes('回城/身世并进了过渡拍')),
-    `应拒绝合并回城/身世，实际：${result.errors.join('；')}`
+    result.errors.some((error) => error.includes('把身世（寄养/年龄/籍贯/旧事）并进了过渡拍')),
+    `应拒绝合并身世，实际：${result.errors.join('；')}`
   );
+});
+
+test('计划校验放行：回城路上的途中议论拍不算身世合并', () => {
+  const plan = makePlan({
+    beats: makePlan().beats.map((beat, index) => ({
+      ...beat,
+      wordShare: [10, 14, 30, 46][index],
+      ...(index === 1 ? { type: '过渡', goal: '两人下山回城，途中议论河内形势' } : {}),
+    })),
+  });
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, true, `途中议论拍不应被误判，实际：${result.errors.join('；')}`);
 });
 
 test('计划校验拒绝：两拍都写完整交付', () => {
