@@ -22,6 +22,32 @@ const router = express.Router();
 
 const now = () => new Date().toISOString();
 
+/**
+ * 待确认总数（跨作品）。
+ *
+ * 设置入口上的角标靠它：作者不需要打开任何一个面板，
+ * 也能知道「有东西等我处理」。
+ */
+router.get('/pending-count', async (req, res) => {
+  try {
+    const row = await get(
+      `SELECT
+         (SELECT COUNT(*) FROM knowledge_pending p
+            JOIN works w ON w.id = p.work_id
+           WHERE w.user_id = ? AND p.status = 'pending')
+         +
+         (SELECT COUNT(*) FROM anchor_violations v
+            JOIN works w ON w.id = v.work_id
+           WHERE w.user_id = ? AND v.dismissed = 0) AS n`,
+      [req.userId, req.userId]
+    );
+    return res.json({ count: row?.n || 0 });
+  } catch (err) {
+    console.error('[pipeline] 待确认计数失败:', err);
+    return res.json({ count: 0 });
+  }
+});
+
 /** 单条锚点的对外形状 */
 function toAnchor(row) {
   let rules = [];
@@ -445,6 +471,89 @@ router.post('/:workId/pending/knowledge/:id/confirm', async (req, res) => {
     ]);
 
     return res.json({ ok: true, knowledge: toPendingKnowledge({ ...row, status: 'confirmed' }) });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+/**
+ * 批量确认知情变化。
+ *
+ * 与单条确认同一套校验，只是一次处理一批：作者在设置里点一次，
+ * 不用为每条候选逐个别点。校验不过的条目跳过并返回原因，
+ * 不会把整批都拒掉。
+ */
+router.post('/:workId/pending/knowledge/confirm-batch', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ error: '没有待确认的条目' });
+
+    const ts = now();
+    const statements = [];
+    const skipped = [];
+    let confirmed = 0;
+
+    for (const id of ids) {
+      const row = await get(
+        'SELECT * FROM knowledge_pending WHERE id = ? AND work_id = ?',
+        [id, work.id]
+      );
+      if (!row) {
+        skipped.push({ id, reason: '条目不存在' });
+        continue;
+      }
+      if (row.status !== 'pending') {
+        skipped.push({ id, reason: `当前状态 ${row.status} 不能确认` });
+        continue;
+      }
+      if (!row.character_id || !row.fact_id) {
+        skipped.push({ id, reason: '角色或事实没能对应到库里' });
+        continue;
+      }
+      if (!knowledgeScan.STATES.has(row.to_state)) {
+        skipped.push({ id, reason: `状态不合法：${row.to_state}` });
+        continue;
+      }
+      const exists = await get(
+        `SELECT id FROM knowledge_matrix
+         WHERE character_id = ? AND fact_id = ? AND chapter_seq = ?`,
+        [row.character_id, row.fact_id, row.chapter_seq]
+      );
+      if (exists) {
+        skipped.push({ id, reason: '本章已有该角色/事实的知情记录' });
+        continue;
+      }
+
+      statements.push({
+        sql: `INSERT INTO knowledge_matrix
+                (id, work_id, character_id, fact_id, chapter_seq, state,
+                 evidence_id, source_chapter_id, note, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+        params: [
+          crypto.randomUUID(),
+          work.id,
+          row.character_id,
+          row.fact_id,
+          row.chapter_seq,
+          row.to_state,
+          row.chapter_id,
+          row.evidence,
+          ts,
+        ],
+      });
+      statements.push({
+        sql: `UPDATE knowledge_pending SET status = 'confirmed', modified_at = ?
+              WHERE id = ?`,
+        params: [ts, row.id],
+      });
+      confirmed += 1;
+    }
+
+    if (statements.length) await transaction(statements);
+    return res.json({ confirmed, skipped });
   } catch (err) {
     return fail(res, err);
   }

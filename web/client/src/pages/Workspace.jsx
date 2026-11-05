@@ -20,7 +20,7 @@ import PlotCardPanel from '../components/Sidebar/PlotCardPanel';
 import ProgressPanel from '../components/Sidebar/ProgressPanel';
 import ConsistencyPanel from '../components/Sidebar/ConsistencyPanel';
 import PanelNav from '../components/Sidebar/PanelNav';
-import KnowledgeBoundaryPanel from '../components/Sidebar/KnowledgeBoundaryPanel';
+import api from '../api/client';
 
 /**
  * 三栏工作区。
@@ -166,6 +166,35 @@ export default function Workspace() {
     }
   }, [workId, chapters, chapter, loadChapter, deepLinkChapter]);
 
+  // 写作页只留一行知情边界元信息；明细收在设置页「历史悬疑」。
+  const [boundaryCount, setBoundaryCount] = useState(0);
+  useEffect(() => {
+    if (work?.template !== 'history_thriller' || !chapter?.id) {
+      setBoundaryCount(0);
+      return undefined;
+    }
+    let alive = true;
+    api
+      .get(`/pipeline/${work.id}/knowledge/boundary`, { params: { chapterId: chapter.id } })
+      .then((res) => {
+        if (!alive) return;
+        const chars = res.data?.characters || [];
+        // 受限 = 还有不知道/半知/怀疑的事实，不是全知
+        setBoundaryCount(
+          chars.filter(
+            (c) =>
+              (c.partial?.length || 0) + (c.suspects?.length || 0) + (c.unknown?.length || 0) > 0
+          ).length
+        );
+      })
+      .catch(() => {
+        if (alive) setBoundaryCount(0);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [work?.id, work?.template, chapter?.id]);
+
   // 当前面板内容。key 变化时用 key 强制重挂载，配合 CSS 做淡入过渡。
   const panelContent = {
     characters: <CharacterPanel workId={work?.id} />,
@@ -179,13 +208,6 @@ export default function Workspace() {
         workId={work?.id}
         chapterId={chapter?.id}
         onOpenChapter={loadChapter}
-      />
-    ),
-    knowledge: (
-      <KnowledgeBoundaryPanel
-        workId={work?.id}
-        chapter={chapter}
-        templateEnabled={work?.template === 'history_thriller'}
       />
     ),
     work: <WorkInfoPanel work={work} onSaved={() => loadWork(work.id)} />,
@@ -328,6 +350,33 @@ export default function Workspace() {
       />
 
       <main className="ct-col-center">
+        {work?.template === 'history_thriller' && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              padding: '0 24px',
+              fontSize: 12,
+              lineHeight: '24px',
+              color: 'var(--text-tertiary)',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => navigate(`/settings?tab=history&work=${work.id}`)}
+              style={{
+                background: 'none',
+                border: 0,
+                padding: 0,
+                cursor: 'pointer',
+                color: 'inherit',
+                fontSize: 'inherit',
+              }}
+            >
+              本章知情边界：{boundaryCount > 0 ? `${boundaryCount} 人受限` : '无受限'} · 设置
+            </button>
+          </div>
+        )}
         <ChapterEditor />
       </main>
 

@@ -5,6 +5,7 @@ import {
   Button,
   ConfigProvider,
   Spin,
+  Badge,
   App as AntApp,
 } from 'antd';
 import { Sun, Moon, Settings as SettingsIcon, LogOut, Library, Feather, Palette, BarChart, BookOpen, MessageSquare, Minimize2 } from 'lucide-react';
@@ -23,6 +24,7 @@ import StatsPage from './pages/Stats';
 import FeedbackPage from './pages/Feedback';
 import PipelinePage from './pages/Pipeline';
 import BrandLogo from './components/BrandLogo';
+import api from './api/client';
 
 const { Header, Content } = Layout;
 
@@ -91,6 +93,22 @@ function AppShell({ isDark, setIsDark }) {
   const isNarrow = useIsNarrow();
   const { focusMode, exitFocus } = useFocus();
 
+  // 待确认角标：设置入口上的一个小红点，不常驻写作页。
+  const [pendingCount, setPendingCount] = useState(0);
+  useEffect(() => {
+    if (!authenticated) return undefined;
+    let alive = true;
+    api
+      .get('/pipeline/pending-count')
+      .then((res) => {
+        if (alive) setPendingCount(Number(res.data?.count) || 0);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [authenticated, location.pathname]);
+
   const navItems = [
     { key: '/works', icon: <Feather size={15} />, label: '作品' },
     { key: '/materials', icon: <Library size={15} />, label: '素材库' },
@@ -103,7 +121,15 @@ function AppShell({ isDark, setIsDark }) {
       label: '手册',
     },
     { key: '/feedback', icon: <MessageSquare size={15} />, label: '反馈' },
-    { key: '/settings', icon: <SettingsIcon size={15} />, label: '设置' },
+    {
+      key: '/settings',
+      icon: (
+        <Badge count={pendingCount} size="small" offset={[6, -4]}>
+          <SettingsIcon size={15} />
+        </Badge>
+      ),
+      label: '设置',
+    },
   ];
 
   // 工作区自己占满整屏，不需要顶部导航

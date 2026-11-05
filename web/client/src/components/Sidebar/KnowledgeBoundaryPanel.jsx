@@ -108,9 +108,9 @@ export default function KnowledgeBoundaryPanel({ workId, chapter, templateEnable
       <Button
         size="small"
         block
-        onClick={() => navigate(`/works/${workId}/pipeline?tab=pending`)}
+        onClick={() => navigate(`/settings?tab=history&work=${workId}`)}
       >
-        有待确认的知情变化？去确认
+        有待确认的知情变化？去设置里确认
       </Button>
     </div>
   );

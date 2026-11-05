@@ -80,8 +80,10 @@ export default function Pipeline() {
     <div className="ct-pipeline">
       <div className="ct-page-head">
         <div>
-          <h2 className="ct-page-title font-serif">{work.title} · 锚点库</h2>
-          <p className="ct-page-sub">整理史实候选，逐条核对后入库；锚点启用后才会进入正文约束</p>
+          <h2 className="ct-page-title font-serif">{work.title} · 历史悬疑</h2>
+          <p className="ct-page-sub">
+            锚点由 agent 整理素材、你确认后升格；这里只做核对与启用/撤回。完整入口在设置 → 历史悬疑。
+          </p>
         </div>
         <span style={{ flex: 1 }} />
         <Button type="text" icon={<ArrowLeftOutlined />} onClick={back}>

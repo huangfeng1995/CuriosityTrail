@@ -7,7 +7,6 @@ import {
   SafetyOutlined,
   InfoCircleOutlined,
   BulbOutlined,
-  EyeOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -17,7 +16,9 @@ import {
  * Tabs 溢出后 antd 会把「检查/作品/灵感」塞进「更多」下拉里——
  * 功能就这么被藏起来了，用户根本不知道它们存在。
  *
- * 改成纵向分段：图标 + 文字，7 个全露出来，一眼扫完。
+ * 改成纵向分段：图标 + 文字，全部露出来，一眼扫完。
+ *
+ * 知情边界不在这里：它是偶尔核对一次的东西，收进了设置页的「历史悬疑」。
  */
 const PANELS = [
   { key: 'characters', label: '人物', icon: <UserOutlined /> },
@@ -25,7 +26,6 @@ const PANELS = [
   { key: 'plot', label: '情节', icon: <PartitionOutlined /> },
   { key: 'progress', label: '进度', icon: <LineChartOutlined /> },
   { key: 'check', label: '检查', icon: <SafetyOutlined /> },
-  { key: 'knowledge', label: '知情', icon: <EyeOutlined /> },
   { key: 'work', label: '作品', icon: <InfoCircleOutlined /> },
   { key: 'inspirations', label: '灵感', icon: <BulbOutlined /> },
 ];

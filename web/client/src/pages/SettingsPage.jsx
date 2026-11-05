@@ -21,6 +21,8 @@ import api from '../api/client';
 import { useAuth } from '../store/auth';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { useMemoryPref } from '../hooks/useMemoryPref';
+import { useSearchParams } from 'react-router-dom';
+import HistorySettings from '../components/Pipeline/HistorySettings';
 
 const { Text, Paragraph } = Typography;
 
@@ -34,10 +36,20 @@ const { Text, Paragraph } = Typography;
  */
 export default function SettingsPage() {
   const { user } = useAuth();
+  const [params] = useSearchParams();
+  const initialTab = ['prompts', 'memory', 'history', 'anchor', 'backup'].includes(params.get('tab'))
+    ? params.get('tab')
+    : 'prompts';
+  const historyWorkId = params.get('work') || '';
 
   const items = [
     { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
     { key: 'memory', label: '长期记忆', children: <MemoryConfig /> },
+    {
+      key: 'history',
+      label: '历史悬疑',
+      children: <HistorySettings initialWorkId={historyWorkId} />,
+    },
     { key: 'anchor', label: '范文锚点', children: <AnchorConfig /> },
   ];
   // 备份是整库级别的：下载包里是所有人的稿子，只有管理员能看这个入口
@@ -47,7 +59,7 @@ export default function SettingsPage() {
 
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
-      <Tabs defaultActiveKey="prompts" items={items} />
+      <Tabs defaultActiveKey={initialTab} items={items} />
     </div>
   );
 }

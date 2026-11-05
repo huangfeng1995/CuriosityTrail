@@ -102,7 +102,26 @@ export default function PendingQueue({ workId }) {
     }
   };
 
+  const confirmAllKnowledge = async (rows) => {
+    const ids = rows.map((row) => row.id);
+    if (!ids.length) return;
+    setBusy('batch');
+    try {
+      const res = await api.post(`/pipeline/${workId}/pending/knowledge/confirm-batch`, { ids });
+      const skipped = res.data?.skipped?.length || 0;
+      message.success(
+        `已确认 ${res.data?.confirmed ?? 0} 条${skipped ? `，${skipped} 条校验未过已跳过` : ''}`
+      );
+      await load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '批量确认失败');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const total = data.knowledge.length + data.violations.length;
+  const confirmable = data.knowledge.filter((row) => row.characterId && row.factId);
 
   return (
     <div className="ct-pending">
@@ -133,6 +152,19 @@ export default function PendingQueue({ workId }) {
             <span className="ct-pending-title">知情变化</span>
             <span className="ct-pending-count">{data.knowledge.length} 条</span>
             <span className="ct-pending-hint">确认后才写入知情矩阵；驳回只丢弃这一条候选</span>
+            {confirmable.length > 0 && (
+              <Button
+                size="small"
+                type="primary"
+                ghost
+                icon={<CheckOutlined />}
+                loading={busy === 'batch'}
+                onClick={() => confirmAllKnowledge(confirmable)}
+                style={{ marginLeft: 'auto' }}
+              >
+                全部确认（{confirmable.length}）
+              </Button>
+            )}
           </div>
           {data.knowledge.map((row) => {
             const canConfirm = Boolean(row.characterId && row.factId);

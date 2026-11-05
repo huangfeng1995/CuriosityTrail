@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Input, Button, Form, message, Empty, InputNumber, Select } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
 import api from '../../api/client';
 
 /**
@@ -14,7 +13,6 @@ import api from '../../api/client';
 export default function WorkInfoPanel({ work, onSaved }) {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
-  const navigate = useNavigate();
 
   useEffect(() => {
     if (!work) return;
@@ -79,7 +77,7 @@ export default function WorkInfoPanel({ work, onSaved }) {
         <Form.Item
           name="template"
           label="创作模板"
-          help="启用后，AI 会遵守锚点库与本章知情边界；关闭时行为与现在完全一致。新建作品默认不启用。"
+          help="启用后 AI 会遵守锚点与本章知情边界。锚点库、待确认在设置 → 历史悬疑里。"
         >
           <Select
             options={[
@@ -98,16 +96,6 @@ export default function WorkInfoPanel({ work, onSaved }) {
         >
           保存作品信息
         </Button>
-        {work.template === 'history_thriller' && (
-          <Button
-            type="link"
-            size="small"
-            block
-            onClick={() => navigate(`/works/${work.id}/pipeline`)}
-          >
-            打开锚点库
-          </Button>
-        )}
       </Form>
     </div>
   );
