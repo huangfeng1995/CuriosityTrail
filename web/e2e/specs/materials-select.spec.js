@@ -76,6 +76,14 @@ async function mockApi(page) {
       json: [{ id: 'w-e2e', title: '测试作品', template: 'history_thriller' }],
     })
   );
+  // 升格：默认按提交的 ids 如数生成草稿
+  await page.route('**/api/pipeline/*/anchors/upgrade', (route) => {
+    const body = route.request().postDataJSON() || {};
+    const ids = Array.isArray(body.materialIds) ? body.materialIds : [];
+    return route.fulfill({
+      json: { created: ids.map((id) => ({ id: `a-${id}`, materialId: id })), skipped: [] },
+    });
+  });
 }
 
 // 拿到当前 toast 文案（antd message 会给两个汉字插空格，统一去掉空白）
@@ -90,6 +98,11 @@ function toastCount(text, action) {
   const m = text.match(new RegExp(`${action}(\\d+)条`));
   return m ? Number(m[1]) : NaN;
 }
+
+// 素材已绑定作品（该作品没启用模板）时，空态跳转要带上作品 id
+const BOUND_MATERIALS = MATERIALS.map((m) =>
+  m.id === 'mat-sourced' ? { ...m, work_id: 'w-plain' } : m
+);
 
 test.describe('素材库勾选', () => {
   test('每条素材都有勾选框，li 不再泄漏 avatar 属性', async ({ page }) => {
@@ -235,6 +248,79 @@ test.describe('素材库勾选', () => {
     expect(calls).toBe(2);
     expect(toastCount(text, '已撤回')).toBe(1);
     expect(text).toContain('失败1条');
+  });
+
+  test('升格：选 1 sourced + 1 missing，按钮/请求/toast 都是 2', async ({ page }) => {
+    let upgradeBody = null;
+    await mockApi(page);
+    await page.route('**/api/pipeline/*/anchors/upgrade', async (route) => {
+      upgradeBody = route.request().postDataJSON();
+      await route.fulfill({ json: { created: [{ id: 'a1' }, { id: 'a2' }], skipped: [] } });
+    });
+    await page.goto('/materials');
+
+    const boxes = page.locator('.ant-list-item input[type="checkbox"]');
+    await boxes.nth(0).check(); // mat-sourced
+    await boxes.nth(2).check(); // mat-missing
+    const btn = button(page, '升格为史实锚点（2）');
+    await expect(btn).toBeEnabled();
+    await btn.click();
+
+    // 不再静默少提交，而是在 Modal 里说明其中 1 条证据不足
+    const modal = page.locator('.ant-modal-content').last();
+    await expect(modal.getByText(/其中 1 条证据不足/)).toBeVisible();
+    await button(modal, '生成锚点草稿').click();
+
+    const text = await toastText(page);
+    expect(upgradeBody.materialIds).toEqual(['mat-sourced', 'mat-missing']);
+    expect(upgradeBody.materialIds).toHaveLength(2);
+    expect(toastCount(text, '已生成')).toBe(upgradeBody.materialIds.length);
+    expect(text).toContain('已生成2条');
+  });
+
+  test('升格空态：没有模板作品时弹 Modal，并引导去作品设置', async ({ page }) => {
+    await mockApi(page);
+    await page.route('**/api/works', (route) =>
+      route.fulfill({ json: [{ id: 'w-plain', title: '普通作品', template: 'novel' }] })
+    );
+    await page.goto('/materials');
+
+    await page.locator('.ant-list-item input[type="checkbox"]').nth(0).check();
+    await button(page, '升格为史实锚点（1）').click();
+
+    const modal = page.locator('.ant-modal-content').last();
+    await expect(modal).toBeVisible();
+    await expect(modal.getByText(/还没有作品启用历史悬疑模板/)).toBeVisible();
+    await expect(button(modal, '去开启模板')).toBeEnabled();
+    // 空态不显示提交与「归到作品」下拉，避免误导
+    await expect(button(modal, '生成锚点草稿')).toHaveCount(0);
+    await expect(modal.locator('.ant-select')).toHaveCount(0);
+
+    await button(modal, '去开启模板').click();
+    await expect(page).toHaveURL(/\/settings\?tab=work$/);
+  });
+
+  test('升格空态：素材已绑作品时跳到该作品的设置', async ({ page }) => {
+    await mockApi(page);
+    await page.route('**/api/materials', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ json: BOUND_MATERIALS });
+        return;
+      }
+      await route.fallback();
+    });
+    await page.route('**/api/works', (route) =>
+      route.fulfill({ json: [{ id: 'w-plain', title: '普通作品', template: 'novel' }] })
+    );
+    await page.goto('/materials');
+
+    await page.locator('.ant-list-item input[type="checkbox"]').nth(0).check();
+    await button(page, '升格为史实锚点（1）').click();
+
+    const modal = page.locator('.ant-modal-content').last();
+    await expect(modal.getByText(/还没有作品启用历史悬疑模板/)).toBeVisible();
+    await button(modal, '去开启模板').click();
+    await expect(page).toHaveURL(/\/settings\?tab=work&work=w-plain/);
   });
 
   test('三档底色/图标/边框与出处行仍按原样显示', async ({ page }) => {

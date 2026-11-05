@@ -29,7 +29,7 @@ import {
   RollbackOutlined,
   CheckOutlined,
 } from '@ant-design/icons';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import EmptyState from '../components/EmptyState';
 import { useIsMobile } from '../hooks/useMediaQuery';
@@ -74,6 +74,7 @@ function confidenceMeta(item) {
  */
 export default function Materials() {
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
@@ -293,29 +294,51 @@ export default function Materials() {
   const [upgradeWorks, setUpgradeWorks] = useState([]);
   const [upgradeWorkId, setUpgradeWorkId] = useState('');
   const [upgrading, setUpgrading] = useState(false);
+  // 没有启用历史悬疑模板的作品时，Modal 切空态并给出「去开启模板」
+  const [upgradeNoTemplate, setUpgradeNoTemplate] = useState(false);
+  const [upgradeBoundWorkId, setUpgradeBoundWorkId] = useState('');
 
+  // missing 也照常提交：服务端会把它降为可推定、claim 带「证据不足」标记，
+  // 客户端不私自从提交集合里剔除，否则按钮数字与实际提交条数会对不上。
   const upgradeEligible = selected.filter((id) => {
     const item = items.find((i) => i.id === id);
-    return item && item.confidence !== 'missing' && item.status !== 'pending';
+    return item && item.status !== 'pending';
   });
+  const missingUpgradeCount = upgradeEligible.filter((id) => {
+    const item = items.find((i) => i.id === id);
+    return item && item.confidence === 'missing';
+  }).length;
 
   const openUpgrade = async () => {
     if (!upgradeEligible.length) return;
     try {
       const res = await api.get('/works');
-      const list = (res.data || []).filter((w) => w.template === 'history_thriller');
+      const all = res.data || [];
+      const list = all.filter((w) => w.template === 'history_thriller');
+      setUpgradeWorks(list);
+      // 素材若已绑定某部作品，用作跳转与默认目标
+      const bound = items.find((i) => upgradeEligible.includes(i.id) && i.work_id)?.work_id;
+      setUpgradeBoundWorkId(bound || '');
+      setUpgradeNoTemplate(!list.length);
       if (!list.length) {
-        message.warning('还没有启用历史悬疑模板的作品，先去「作品」面板开启');
+        // 没模板作品时不做死胡同：弹 Modal 空态，引导去作品设置开模板
+        setUpgradeOpen(true);
         return;
       }
-      setUpgradeWorks(list);
-      // 素材若已绑定某部作品，默认选它
-      const bound = items.find((i) => upgradeEligible.includes(i.id) && i.work_id)?.work_id;
       setUpgradeWorkId(list.some((w) => w.id === bound) ? bound : list[0].id);
       setUpgradeOpen(true);
     } catch (e) {
       message.error('作品列表加载失败');
     }
+  };
+
+  // 空态主按钮：跳到能改作品模板的设置页，素材已绑定就带上作品 id
+  const goEnableTemplate = () => {
+    const target = upgradeBoundWorkId
+      ? `/settings?tab=work&work=${encodeURIComponent(upgradeBoundWorkId)}`
+      : '/settings?tab=work';
+    setUpgradeOpen(false);
+    navigate(target);
   };
 
   const doUpgrade = async () => {
@@ -488,24 +511,40 @@ export default function Materials() {
       <Modal
         open={upgradeOpen}
         title="升格为史实锚点"
-        okText="生成锚点草稿"
-        cancelText="取消"
+        okText={upgradeNoTemplate ? '去开启模板' : '生成锚点草稿'}
+        cancelText={upgradeNoTemplate ? '关闭' : '取消'}
         confirmLoading={upgrading}
-        onOk={doUpgrade}
+        onOk={upgradeNoTemplate ? goEnableTemplate : doUpgrade}
         onCancel={() => setUpgradeOpen(false)}
       >
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          生成的是待确认草稿，确认前不会进入写作上下文；素材之后修改也不会自动回写锚点。
-        </Text>
-        <div style={{ marginTop: 12 }}>
-          <Text style={{ fontSize: 12, marginRight: 8 }}>归到作品</Text>
-          <Select
-            value={upgradeWorkId}
-            onChange={setUpgradeWorkId}
-            options={upgradeWorks.map((w) => ({ value: w.id, label: w.title }))}
-            style={{ minWidth: 220 }}
-          />
-        </div>
+        {upgradeNoTemplate ? (
+          // 空态：没有可归入的作品，不显示下拉与「生成草稿」，只留一条可走的路
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            还没有作品启用历史悬疑模板，暂时无法把素材升格成锚点。先在作品设置里把创作模板设为「历史悬疑」，再回来升格；勾选的素材会保留。
+          </Text>
+        ) : (
+          <>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              生成的是待确认草稿，确认前不会进入写作上下文；素材之后修改也不会自动回写锚点。
+            </Text>
+            {missingUpgradeCount > 0 ? (
+              <div style={{ marginTop: 8 }}>
+                <Text type="warning" style={{ fontSize: 12 }}>
+                  其中 {missingUpgradeCount} 条证据不足，将生成可推定锚点（带「证据不足」标记），不会成为有出处锚点。
+                </Text>
+              </div>
+            ) : null}
+            <div style={{ marginTop: 12 }}>
+              <Text style={{ fontSize: 12, marginRight: 8 }}>归到作品</Text>
+              <Select
+                value={upgradeWorkId}
+                onChange={setUpgradeWorkId}
+                options={upgradeWorks.map((w) => ({ value: w.id, label: w.title }))}
+                style={{ minWidth: 220 }}
+              />
+            </div>
+          </>
+        )}
       </Modal>
 
       {visible.length === 0 ? (
