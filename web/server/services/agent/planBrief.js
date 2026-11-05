@@ -1374,6 +1374,115 @@ function mergeInvariants(brief, derived = []) {
   return { ...brief, invariants: Array.from(byKey.values()) };
 }
 
+/**
+ * 外部压力兜底规则：输入里能指认的外部阻碍。
+ *
+ * 同伴的期待、主角的心软都不算对手（INTERNAL_STATE_RE 已在条目层拦掉），
+ * 这里只认能落到开场 obstacle 的硬压力：时限/传车、父命、官威。
+ * 规则按优先级排列，取第一个命中的；text 固定成可被 itemHit 逐字命中的写法。
+ */
+const EXTERNAL_PRESSURE_RULES = [
+  {
+    id: 'deadline',
+    re: /传车|不等人|即刻|连夜|限时|启程|马上走/,
+    text: '传车已在门外等候，限时启程',
+    keywords: ['传车'],
+  },
+  {
+    id: 'father_order',
+    re: /父命|父亲[^。；;\n]{0,16}(要|带|走|来接|叫你)/,
+    text: '父亲命他立刻随行，不得耽搁',
+    keywords: ['父亲'],
+  },
+  {
+    id: 'authority',
+    re: /符传|司空|征辟|传诏|官威|军令/,
+    text: '司空府的符传与官威压着，不得拖延',
+    keywords: ['符传'],
+  },
+];
+
+/**
+ * 从输入里补一个外部对手。
+ *
+ * 规划器经常把「本章没有对手」直接标 none，但输入里明明写了传车在门外、
+ * 父亲连夜来接、司空府符传压着——这些都是能排进开场 obstacle 的外部压力。
+ * 这里不让模型再判断一次，按可解释的规则从 instruction/设定/素材里取第一个命中的，
+ * 并写清来源；确实一个都没命中才保留 none 并说明缺什么素材。
+ *
+ * 已有具体对手时原样返回（包括对象引用），不做二次覆盖。
+ *
+ * @param {Object|null} brief
+ * @param {{instruction?: string, settings?: Array, facts?: Array}} context
+ * @returns {Object|null}
+ */
+function mergeDerivedOpponent(brief, { instruction = '', settings = [], facts = [] } = {}) {
+  if (!brief || !Array.isArray(brief.items)) return brief;
+  if (concreteOpponents(brief).length) return brief;
+
+  const sources = [
+    { text: text(instruction), source: '本章大纲' },
+    ...(Array.isArray(settings) ? settings : []).map((row) => ({
+      text: [text(row && row.name), text(row && row.category), text(row && row.content)].join('\n'),
+      source: '设定',
+    })),
+    ...(Array.isArray(facts) ? facts : []).map((row) => ({
+      text: text(row && row.content),
+      source: '素材',
+    })),
+  ];
+
+  let found = null;
+  for (const source of sources) {
+    if (!source.text) continue;
+    const rule = EXTERNAL_PRESSURE_RULES.find((item) => item.re.test(source.text));
+    if (rule) {
+      found = { rule, source: source.source };
+      break;
+    }
+  }
+
+  // 模型可能给了一条 none 的结论；补到对手时必须把它替换掉，不能留两条。
+  const rest = brief.items.filter(
+    (item) => !(item.kind === 'opponent' && item.none === true)
+  );
+  const id = `OP${rest.filter((item) => item.kind === 'opponent').length + 1}`;
+
+  if (!found) {
+    return {
+      ...brief,
+      items: [
+        ...rest,
+        {
+          id,
+          kind: 'opponent',
+          text: '',
+          keywords: [],
+          source: '本章大纲',
+          inferred: false,
+          none: true,
+          reason: '输入里未找到传车/时限、父命、官威这类外部压力，需补势力或反派素材',
+        },
+      ],
+    };
+  }
+
+  return {
+    ...brief,
+    items: [
+      ...rest,
+      {
+        id,
+        kind: 'opponent',
+        text: found.rule.text,
+        keywords: found.rule.keywords.slice(),
+        source: found.source,
+        inferred: false,
+      },
+    ],
+  };
+}
+
 /** 数值必须落在锚词的邻近范围内，否则「三年」会被「住了一夜」这种词误抓。 */
 const INVARIANT_KEYWORD_WINDOW = 12;
 
@@ -1617,6 +1726,7 @@ module.exports = {
   WITHHOLD_TERMS,
   deriveInvariants,
   mergeInvariants,
+  mergeDerivedOpponent,
   checkInvariantConsistency,
   INVARIANT_KEYS,
   generatePlanBrief,

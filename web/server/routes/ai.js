@@ -973,6 +973,13 @@ router.post('/chat', async (req, res) => {
                 facts: backgroundFactRows,
               })
             );
+            // 对手兜底：模型标了 none，但输入里写了传车/父命/官威这类外部压力时，
+            // 从输入里取一个写进 brief；确实没有才保留 none 并说明缺什么素材。
+            brief = planBrief.mergeDerivedOpponent(brief, {
+              instruction: String(message),
+              settings: settingRows,
+              facts: backgroundFactRows,
+            });
           } catch (err) {
             console.error('[ai] 托付关系并入 brief 失败，沿用原 brief:', err.message);
           }

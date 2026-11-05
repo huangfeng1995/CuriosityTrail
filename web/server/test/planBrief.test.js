@@ -26,6 +26,7 @@ const {
   findHandoverDuplicates,
   checkMustWithhold,
   WITHHOLD_TERMS,
+  mergeDerivedOpponent,
   deriveInvariants,
   mergeInvariants,
   checkInvariantConsistency,
@@ -1263,4 +1264,69 @@ test('一致性自检：v17 B 原文「十五年/十年 vs 十一年」被抓到
     result.violations.map((v) => v.actual).sort(),
     ['十五年', '十年', '十年'].sort()
   );
+});
+
+// ---- 对手兜底（P4）----
+
+test('对手兜底：输入里有传车与时限时，从输入补出外部压力并写来源', () => {
+  const brief = { items: [{ id: 'MP1', kind: 'mustPresent', text: '父亲赶到', keywords: [], source: '本章大纲' }] };
+  const out = mergeDerivedOpponent(brief, {
+    instruction: '父亲持符传连夜赶到，传车已在门外等候，要立刻带他走。',
+  });
+
+  const opponents = out.items.filter((item) => item.kind === 'opponent');
+  assert.strictEqual(opponents.length, 1);
+  assert.strictEqual(opponents[0].none, undefined, '有具体外部压力时不能再标 none');
+  assert.ok(opponents[0].text.includes('传车'));
+  assert.deepStrictEqual(opponents[0].keywords, ['传车']);
+  assert.strictEqual(opponents[0].source, '本章大纲');
+  assert.strictEqual(opponents[0].inferred, false, '兜底对手不能被 inferred 过滤掉');
+});
+
+test('对手兜底：只有同伴的期待、没有外部压力时落 none 并说明', () => {
+  const brief = { items: [] };
+  const out = mergeDerivedOpponent(brief, {
+    instruction: '司马懿希望他多留两天，两人依依不舍。',
+  });
+
+  const opponents = out.items.filter((item) => item.kind === 'opponent');
+  assert.strictEqual(opponents.length, 1);
+  assert.strictEqual(opponents[0].none, true, '同伴的期待不算外部对手');
+  assert.match(opponents[0].reason, /未找到/);
+});
+
+test('对手兜底：brief 已有具体对手时不改动', () => {
+  const brief = {
+    items: [
+      { id: 'OP1', kind: 'opponent', text: '司马家的门禁拦人', keywords: ['门禁'], source: '设定', inferred: false },
+    ],
+  };
+  const out = mergeDerivedOpponent(brief, { instruction: '传车已在门外。' });
+  assert.strictEqual(out, brief);
+});
+
+test('对手兜底：模型说「本章没有对手」但输入有官威时，用输入的外部压力替换', () => {
+  const brief = {
+    items: [
+      {
+        id: 'OP1',
+        kind: 'opponent',
+        text: '',
+        keywords: [],
+        source: '本章大纲',
+        inferred: false,
+        none: true,
+        reason: '没有对手',
+      },
+    ],
+  };
+  const out = mergeDerivedOpponent(brief, {
+    settings: [{ name: '符传', content: '司空府发符传征辟掾属，形制逾制。' }],
+  });
+
+  const opponents = out.items.filter((item) => item.kind === 'opponent');
+  assert.strictEqual(opponents.length, 1, '原来的 none 结论要被替换掉');
+  assert.strictEqual(opponents[0].none, undefined);
+  assert.ok(opponents[0].text.includes('符传'));
+  assert.strictEqual(opponents[0].source, '设定');
 });
