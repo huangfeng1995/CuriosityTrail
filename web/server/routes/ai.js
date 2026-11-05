@@ -1652,6 +1652,8 @@ router.post('/chat', async (req, res) => {
         ? String(brief.handoverBeat)
         : planBrief.handoverBeatId(brief, beatPlan);
       const actual = handoverDup.evidence.length ? handoverDup.evidence[0].id : '';
+      // 对外交付拍号以正文实际交付为准；计划偏差另记 mismatch，不静默。
+      beatCheck.handoverBeatId = actual || designated;
       beatCheck.handoverBeatMismatch = designated && actual && designated !== actual
         ? { designated, actual }
         : null;
@@ -1860,6 +1862,7 @@ router.post('/chat', async (req, res) => {
                 ? String(brief.handoverBeat)
                 : planBrief.handoverBeatId(brief, beatPlan);
               const actual = recheckDup.evidence.length ? recheckDup.evidence[0].id : '';
+              beatCheck.handoverBeatId = actual || designated;
               beatCheck.handoverBeatMismatch = designated && actual && designated !== actual
                 ? { designated, actual }
                 : null;
@@ -1996,6 +1999,7 @@ router.post('/chat', async (req, res) => {
               ? String(brief.handoverBeat)
               : planBrief.handoverBeatId(brief, beatPlan);
             const actual = recheckDup.evidence.length ? recheckDup.evidence[0].id : '';
+            beatCheck.handoverBeatId = actual || designated;
             beatCheck.handoverBeatMismatch = designated && actual && designated !== actual
               ? { designated, actual }
               : null;

@@ -1355,6 +1355,18 @@ test('一致性自检：赠弓的十岁那年不能算成寄养起始年龄', ()
   assert.strictEqual(result.violations.length, 0);
 });
 
+test('一致性自检：大两岁是年龄差，不能判成实际年龄两岁', () => {
+  const brief = {
+    invariants: [
+      { key: 'age', label: '年龄', value: '十八岁', numeric: 18, unit: '岁', keywords: ['今年', '十八'] },
+    ],
+  };
+  // v27 A 的真实误报句：两个人都十八，只是「大两岁」；不能把差值当年龄。
+  const body = '“我知道，”他说，“你比我还大两岁，今年十八，可你在我们家待的年头，比我认字的日子还长。';
+  const result = checkInvariantConsistency(brief, body, { beats: [{ id: 'B2' }] });
+  assert.strictEqual(result.violations.length, 0);
+});
+
 // ---- 对手兜底（P4）----
 
 test('对手兜底：输入里有传车与时限时，从输入补出外部压力并写来源', () => {

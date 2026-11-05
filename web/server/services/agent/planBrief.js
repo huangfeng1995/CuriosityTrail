@@ -1610,6 +1610,10 @@ function checkInvariantConsistency(brief, body, plan) {
       for (const token of tokens) {
         const numeric = parseNumberToken(token.match[1]);
         if (!Number.isInteger(numeric)) continue;
+        // 「你比我还大两岁」「长我三岁」里的数词是年龄差，不是年龄本身。
+        // 不排除会把「大两岁」当成实际年龄 2 岁，反判成不变项冲突。
+        const beforeToken = sentence.slice(Math.max(0, token.index - 3), token.index);
+        if (/大|小|长|多|少|差/.test(beforeToken)) continue;
         let best = null;
         for (const invariant of invariants.filter((item) => item.unit === token.invariant.unit)) {
           for (const keyword of invariant.keywords) {
