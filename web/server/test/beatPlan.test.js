@@ -22,6 +22,7 @@ const {
   generateBeatPlan,
   checkBeatCoverage,
   checkWordShares,
+  PLAN_PROMPT,
 } = require('../services/agent/beatPlan');
 
 /**
@@ -625,4 +626,10 @@ test('自检：超时返回 null 与 timeout，正文留空不发起请求', asy
   assert.strictEqual(empty.coverage, null);
   assert.strictEqual(empty.reason, 'no_body');
   assert.strictEqual(called, false);
+});
+
+test('规划提示词：明确 paragraphs 与 wordShare 是两件事，避免为份额写超段数', () => {
+  assert.match(PLAN_PROMPT, /paragraphs 是这一拍的段落数，硬上限 10/);
+  assert.match(PLAN_PROMPT, /30% 的身世拍也用 3–10 段/);
+  assert.match(PLAN_PROMPT, /份额靠每段写长来承担/);
 });
