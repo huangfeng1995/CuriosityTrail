@@ -10,12 +10,14 @@
  *     · 设定卡写了但正文从没提到（没落地的设定）
  *     · 章节标题重复、章节状态异常
  *     · 人物别名与其它人物重名（一个人两个名字，AI 会当成两个人）
- *   AI 层（需要模型）—— 把全书摘要 + 人物卡 + 设定卡一起给审稿人，
- *     让它找规则层找不到的语义矛盾（前后时间线、性格突变、设定打架）
+ *   AI 层（需要模型）—— 把全书正文按字数分批交给审稿人逐段精读，
+ *     再把各章摘要与已发现问题汇总做一次跨章总检，
+ *     找规则层找不到的语义矛盾（前后时间线、性格突变、设定打架）
  *
  * 规则层先跑：它不花钱、结果确定，能立刻指出最刺眼的问题。
  */
 
+const config = require('../config');
 const { all, get } = require('../database');
 const { isPipelineEnabled } = require('./pipeline/gate');
 const { checkAnchors } = require('./pipeline/anchorCheck');
@@ -38,32 +40,6 @@ function nameVariants(character) {
  * 章节状态白名单
  */
 const VALID_STATUS = new Set(['draft', 'revising', 'done']);
-
-/**
- * 取全书正文摘要（每章开头截断，避免上下文爆掉）。
- *
- * @param {string} workId
- * @param {number} [perChapterLimit] 每章最多取多少字
- * @returns {Promise<Array<{id,title,seq,status,words,excerpt}>>}
- */
-async function getChapterSummaries(workId, perChapterLimit = 600) {
-  const chapters = await all(
-    `SELECT id, title, seq, volume, status, content, blocks, outline, word_count
-     FROM chapters WHERE work_id = ? ORDER BY seq, created_at`,
-    [workId]
-  );
-
-  return chapters.map((c) => ({
-    id: c.id,
-    title: c.title,
-    seq: c.seq,
-    volume: c.volume,
-    status: c.status,
-    words: c.word_count || 0,
-    outline: c.outline || '',
-    excerpt: (c.content || '').slice(0, perChapterLimit),
-  }));
-}
 
 /**
  * 把人物名归一化，用于跨人物查重。
@@ -225,197 +201,448 @@ async function runRuleChecks(workId) {
 }
 
 /**
+ * 章节块：blocks 坏掉时返回空数组，由调用方退回 content。
+ */
+function blocksOf(chapter) {
+  if (!chapter.blocks) return [];
+  try {
+    const parsed = JSON.parse(chapter.blocks);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
  * 章节正文：blocks 优先，content 兜底。
  *
  * 编辑器以 blocks 为准，纯文本 content 可能还没同步；
  * 只看 content 会漏掉实际写进块里的句子。
  */
 function chapterText(chapter) {
-  let blocks = [];
-  if (chapter.blocks) {
-    try {
-      const parsed = JSON.parse(chapter.blocks);
-      if (Array.isArray(parsed)) blocks = parsed;
-    } catch (e) {
-      // blocks 坏了就退回 content
-    }
-  }
-  const body = blocks
+  const body = blocksOf(chapter)
     .filter((b) => b && b.content)
     .map((b) => b.content)
     .join('\n\n');
   return body || String(chapter.content || '');
 }
 
+// ---------------------------------------------------------------------------
+// AI 层：逐批精读 + 跨章总检
+// ---------------------------------------------------------------------------
+
+/** 单批送进模型的字数上限：太大模型容易漏读、输出也容易被截断。 */
+const CHUNK_CHARS = Math.max(2000, Number(config.consistencyChunkChars) || 12000);
+/** 一次检查最多读多少字；超出按章序截断，并在结果里说明，不静默少读。 */
+const MAX_CHARS = Math.max(CHUNK_CHARS, Number(config.consistencyMaxChars) || 300000);
+/** quote 至少多少字才参与定位（与前端审稿意见的 6 字规则一致）。 */
+const MIN_QUOTE_LENGTH = 6;
+
+const BATCH_TASK_PROMPT = `## 本次任务：全书精读（第 {index} / {total} 批）
+你拿到的是全书中的一段连续章节。请逐段细读，只报这些章节里确实存在的问题。
+- 每条问题必须能落到某一章的某一段原文上：给出 chapterSeq 和逐字抄录的 quote。
+- 不要写"整体不错，但……"这类客套，也不要提无法执行的建议。
+- 最多 8 条；确实没问题就返回 {"issues": []}。
+- 只输出一个 JSON 对象，不要 markdown 代码块，不要额外文字。
+
+{
+  "issues": [
+    {
+      "chapterSeq": 3,
+      "severity": "high | medium | low",
+      "title": "10–20 字的问题概括",
+      "detail": "问题是什么、读者会怎么误解、建议怎么改",
+      "quote": "该章正文里逐字抄录的片段（6–80 字）"
+    }
+  ]
+}`;
+
+const REDUCE_TASK_PROMPT = `## 本次任务：全书跨章总检
+前面已经逐批读完全书正文，下面给出各章摘要和逐批发现的问题。
+请只找**跨章层面**的矛盾：同一事件在不同章里的时间/因果冲突、人物性格或能力前后不一致、
+前文埋的因后文没有结果、设定卡与正文打架。
+不要重复下面已经列出的问题，也不要报单章的措辞好坏。
+每条必须给 chapterSeq；quote 尽量逐字抄自所给章节开头的原文，抄不到就省略。
+最多 6 条；没有就返回 {"issues": []}。只输出 JSON。`;
+
+/** 人物卡的一行摘要，和单章上下文里的写法保持一致。 */
+function characterLine(c) {
+  const bits = [`【${c.name}】`];
+  if (c.role) bits.push(`身份：${c.role}`);
+  if (c.identity) bits.push(`背景：${c.identity}`);
+  if (c.personality) bits.push(`性格：${c.personality}`);
+  if (c.goal) bits.push(`目标：${c.goal}`);
+  if (c.arc) bits.push(`弧光：${c.arc}`);
+  if (c.aliases) bits.push(`别名：${c.aliases}`);
+  return bits.join('；');
+}
+
 /**
- * AI 层检查：把全书摘要交给审稿人角色，找语义矛盾。
- *
- * 需要模型可用。没配 key 时由调用方跳过。
- *
- * @param {string} workId
- * @param {Object} params
- * @param {Function} params.provider 已解析的 provider
- * @param {string} [params.providerName]
- * @param {Object} [params.role] 审稿人角色定义
- * @returns {Promise<Array<Object>>}
+ * 作品级上下文：每批、以及最后的跨章总检都要带。
  */
-async function runAiCheck(workId, params) {
-  const { provider, providerName, role } = params;
-
-  const work = await get('SELECT * FROM works WHERE id = ?', [workId]);
-  if (!work) return [];
-
-  const chapters = await getChapterSummaries(workId, 500);
-  const characters = await all('SELECT * FROM characters WHERE work_id = ?', [workId]);
-  const settings = await all('SELECT * FROM settings WHERE work_id = ?', [workId]);
-
-  if (!chapters.length) return [];
-
-  const parts = [];
-
-  parts.push('## 全书结构');
+function buildSharedContext(plan) {
+  const { work, characters, settings } = plan;
+  const parts = ['## 作品'];
   parts.push(`标题：${work.title}`);
   if (work.genre) parts.push(`题材：${work.genre}`);
   if (work.synopsis) parts.push(`简介：${work.synopsis}`);
   if (work.outline) parts.push(`大纲：\n${work.outline}`);
 
   parts.push('\n## 人物卡');
-  if (characters.length) {
-    parts.push(
-      characters
-        .map((c) => {
-          const bits = [`【${c.name}】`];
-          if (c.role) bits.push(`身份：${c.role}`);
-          if (c.identity) bits.push(`背景：${c.identity}`);
-          if (c.personality) bits.push(`性格：${c.personality}`);
-          if (c.goal) bits.push(`目标：${c.goal}`);
-          if (c.arc) bits.push(`弧光：${c.arc}`);
-          if (c.aliases) bits.push(`别名：${c.aliases}`);
-          return bits.join('；');
-        })
-        .join('\n')
-    );
-  } else {
-    parts.push('（还没有人物卡）');
-  }
+  parts.push(characters.length ? characters.map(characterLine).join('\n') : '（还没有人物卡）');
 
   parts.push('\n## 设定卡');
-  if (settings.length) {
-    parts.push(
-      settings.map((s) => `【${s.name}·${s.category}】${s.content}`).join('\n')
-    );
-  } else {
-    parts.push('（还没有设定卡）');
-  }
-
-  parts.push('\n## 各章摘要');
   parts.push(
-    chapters
-      .map(
-        (c) =>
-          `### 第 ${c.seq} 章 ${c.title}${c.outline ? `\n本章大纲：${c.outline}` : ''}\n${
-            c.excerpt || '（本章暂无正文）'
-          }`
-      )
-      .join('\n\n')
+    settings.length
+      ? settings.map((s) => `【${s.name}·${s.category || ''}】${s.content || ''}`).join('\n')
+      : '（还没有设定卡）'
   );
-
-  const systemPrompt =
-    (role?.systemPrompt || '') +
-    `
-
-## 本次任务
-这是一次**全书一致性检查**，不是单章审稿。请重点找出：
-1. 跨章的时间线矛盾（同一事件在不同章里的时间说法冲突）
-2. 人物性格/说话方式前后突变，且没有转折铺垫
-3. 设定卡与正文冲突（能力边界、地理距离、称呼、关键物件的状态）
-4. 情节逻辑断裂（A 章埋的因，B 章没有对应的果）
-5. 视角人物的错位（前文是 A 视角，后文突然写了 B 的内心）
-
-只报**确实存在的矛盾**，不要为了凑数把正常的伏笔或留白当成问题。
-每条问题要指明**具体章节**。`;
-
-  const result = await provider.chat({
-    messages: [
-      { role: 'system', content: systemPrompt },
-      {
-        role: 'user',
-        content:
-          '请检查上面这本小说的全书一致性，列出发现的问题。' +
-          '如果确实没有矛盾，就明确说"未发现跨章矛盾"。',
-      },
-    ],
-    temperature: role?.temperature ?? 0.4,
-    model: role?.model && providerName === 'deepseek' ? role.model : undefined,
-    thinking:
-      role?.thinking === null || role?.thinking === undefined
-        ? undefined
-        : (role.thinking ? 'enabled' : 'disabled'),
-  });
-
-  const text = result?.content || '';
-  return parseIssues(text);
+  return parts.join('\n');
 }
 
 /**
- * 把模型的自由文本解析成问题列表。
+ * 规划一次全书检查：读全章正文、切批、算覆盖范围。
  *
- * 模型可能返回 JSON，也可能返回分条文本——两种都支持。
- * 解析失败时整段作为一条问题返回，不能因为格式不对就丢掉全部内容。
+ * 切批只按章边界，不把一章切成两半：quote 要能落回某一章，
+ * 半章上下文也容易让模型误判人物状态。
  *
- * @param {string} text
- * @returns {Array<Object>}
+ * @param {string} workId
+ * @returns {Promise<Object|null>}
  */
-function parseIssues(text) {
+async function planAiCheck(workId) {
+  const work = await get('SELECT * FROM works WHERE id = ?', [workId]);
+  if (!work) return null;
+
+  const rows = await all(
+    `SELECT id, title, seq, volume, status, content, blocks, outline, word_count
+     FROM chapters WHERE work_id = ? ORDER BY seq, created_at`,
+    [workId]
+  );
+  const characters = await all('SELECT * FROM characters WHERE work_id = ? ORDER BY name', [
+    workId,
+  ]);
+  const settings = await all('SELECT * FROM settings WHERE work_id = ? ORDER BY name', [workId]);
+
+  const chapters = [];
+  for (const row of rows) {
+    const text = chapterText(row);
+    if (!text.trim()) continue;
+    chapters.push({
+      id: row.id,
+      seq: row.seq,
+      title: row.title,
+      volume: row.volume,
+      outline: row.outline || '',
+      blocks: blocksOf(row),
+      text,
+    });
+  }
+
+  const batches = [];
+  let current = null;
+  let usedChars = 0;
+  let covered = 0;
+
+  for (const chapter of chapters) {
+    if (usedChars + chapter.text.length > MAX_CHARS) break;
+    if (!current || (current.chapters.length && current.chars + chapter.text.length > CHUNK_CHARS)) {
+      current = { chapters: [], chars: 0 };
+      batches.push(current);
+    }
+    current.chapters.push(chapter);
+    current.chars += chapter.text.length;
+    usedChars += chapter.text.length;
+    covered += 1;
+  }
+
+  const notices = [];
+  if (covered < chapters.length) {
+    notices.push(
+      `全书共 ${chapters.length} 章，本次只读了前 ${covered} 章（单次上限约 ${MAX_CHARS} 字）。其余章节请再查一次。`
+    );
+  }
+
+  return { work, characters, settings, chapters, batches, notices };
+}
+
+/** 归一化：去空白、全角标点转半角，便于 quote 匹配。 */
+function normalizeForMatch(text) {
+  return String(text || '')
+    .replace(/\s+/g, '')
+    .replace(/[…⋯]{2,}/g, '…')
+    .replace(/\.{3,}/g, '…');
+}
+
+function needleOf(quote) {
+  const normalized = normalizeForMatch(quote);
+  return normalized.endsWith('…') ? normalized.slice(0, -1) : normalized;
+}
+
+/**
+ * 把 quote 落回某一章：全书必须唯一命中，否则宁可不定章，也不乱挂。
+ */
+function findChapterByQuote(chapters, quote) {
+  const needle = needleOf(quote);
+  if (needle.length < MIN_QUOTE_LENGTH) return null;
+
+  const hits = chapters.filter((c) => normalizeForMatch(c.text).includes(needle));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** 在章内找唯一的块；多处命中就只留 quote，不指定块。 */
+function findBlockId(chapter, quote) {
+  const needle = needleOf(quote);
+  if (!chapter || needle.length < MIN_QUOTE_LENGTH) return '';
+  const hits = chapter.blocks.filter(
+    (b) => b && b.content && normalizeForMatch(b.content).includes(needle)
+  );
+  return hits.length === 1 ? hits[0].id : '';
+}
+
+/** 模型输出的宽松解析：JSON 优先，分条文本兜底。 */
+function parseAiIssues(text, fallbackSeq = 0) {
   if (!text || !text.trim()) return [];
 
-  // 先试 JSON
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = (fence ? fence[1] : text).trim();
+  const raw = (fence ? fence[1] : text).trim();
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  const candidate = start >= 0 && end > start ? raw.slice(start, end + 1) : raw;
+
   try {
     const parsed = JSON.parse(candidate);
     const items = Array.isArray(parsed) ? parsed : parsed?.issues;
     if (Array.isArray(items)) {
       return items
-        .filter((i) => i && (i.title || i.content))
-        .map((i) => ({
-          type: i.type || 'ai',
-          severity: i.severity || 'medium',
-          title: String(i.title || '').trim(),
-          detail: String(i.content || i.detail || '').trim(),
-          target: i.target ? String(i.target) : '',
-        }));
+        .map((item) => {
+          const rawItem = item && typeof item === 'object' ? item : {};
+          const seq = Number(rawItem.chapterSeq ?? rawItem.chapter ?? rawItem.seq);
+          const severity = ['high', 'medium', 'low'].includes(rawItem.severity)
+            ? rawItem.severity
+            : 'medium';
+          return {
+            chapterSeq: Number.isFinite(seq) && seq > 0 ? seq : fallbackSeq,
+            severity,
+            title: String(rawItem.title || '').trim(),
+            detail: String(rawItem.detail || rawItem.content || '').trim(),
+            quote: String(rawItem.quote || '').trim(),
+          };
+        })
+        .filter((issue) => issue.title || issue.detail);
     }
   } catch (e) {
     // 不是 JSON，走文本分条
   }
 
-  // 文本分条：按换行分，每行去掉列表符号
-  const lines = candidate
+  const lines = raw
     .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 2);
+    .map((line) => line.trim())
+    .filter((line) => line.length > 2);
 
   const issues = [];
   for (const line of lines) {
     const cleaned = line.replace(/^[-*·•\d]+[.、)]?\s*/, '').trim();
     if (!cleaned) continue;
-    // 跳过纯结论行
     if (/^(未发现|没有发现|未发现跨章矛盾)[。.]?$/.test(cleaned)) continue;
     issues.push({
-      type: 'ai',
+      chapterSeq: fallbackSeq,
       severity: 'medium',
       title: cleaned.slice(0, 40),
       detail: cleaned,
-      target: '',
+      quote: '',
     });
   }
   return issues;
 }
 
+/**
+ * 把模型给的章节号 + quote 解析成前端能用的定位信息。
+ *
+ * 顺序：先信 chapterSeq；该章里找不到 quote 时，再按全书唯一命中改判；
+ * 仍然找不到就只保留文本，前端显示为「全书」。
+ */
+function resolveIssues(rawIssues, plan) {
+  const bySeq = new Map(plan.chapters.map((c) => [c.seq, c]));
+
+  return rawIssues.map((raw) => {
+    const quote = String(raw.quote || '').trim();
+    const needle = needleOf(quote);
+    let chapter = bySeq.get(Number(raw.chapterSeq)) || null;
+
+    if (quote && (!chapter || !normalizeForMatch(chapter.text).includes(needle))) {
+      chapter = findChapterByQuote(plan.chapters, quote) || chapter;
+    }
+    if (!chapter && quote) {
+      chapter = findChapterByQuote(plan.chapters, quote);
+    }
+
+    const detail = String(raw.detail || '').trim();
+    const title = String(raw.title || '').trim() || detail.slice(0, 40);
+
+    return {
+      type: 'ai',
+      severity: raw.severity || 'medium',
+      title,
+      detail,
+      target: chapter ? chapter.title : '',
+      chapterId: chapter ? chapter.id : '',
+      chapterSeq: chapter ? chapter.seq : 0,
+      chapterTitle: chapter ? chapter.title : '',
+      quote,
+      blockId: chapter ? findBlockId(chapter, quote) : '',
+    };
+  });
+}
+
+/** 同一章里标题与片段都相同的，只留一条。 */
+function dedupeIssues(issues) {
+  const seen = new Set();
+  const out = [];
+  for (const issue of issues) {
+    const key = [
+      issue.chapterSeq || 0,
+      normalizeForMatch(issue.title),
+      normalizeForMatch(issue.quote).slice(0, 60),
+    ].join('::');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(issue);
+  }
+  return out;
+}
+
+function chatOptions(role, providerName, maxTokens) {
+  return {
+    temperature: role?.temperature ?? 0.4,
+    model: role?.model && providerName === 'deepseek' ? role.model : undefined,
+    thinking:
+      role?.thinking === null || role?.thinking === undefined
+        ? undefined
+        : role.thinking
+          ? 'enabled'
+          : 'disabled',
+    jsonOutput: true,
+    maxTokens,
+  };
+}
+
+/**
+ * 执行全书检查。
+ *
+ * @param {Object} plan planAiCheck 的结果
+ * @param {Object} params
+ * @param {Object} params.provider
+ * @param {string} [params.providerName]
+ * @param {Object} [params.role]
+ * @param {Function} [params.onProgress] (done, total) => void
+ * @returns {Promise<{issues: Array<Object>, notices: Array<string>}>}
+ */
+async function executeAiCheck(plan, params = {}) {
+  const { provider, providerName, role, onProgress } = params;
+  const shared = buildSharedContext(plan);
+  const baseSystem = `${role?.systemPrompt || ''}\n\n${shared}`;
+  const total = plan.batches.length + (plan.batches.length > 1 ? 1 : 0);
+  const notices = [...plan.notices];
+  const rawIssues = [];
+  let done = 0;
+
+  for (let i = 0; i < plan.batches.length; i += 1) {
+    const batch = plan.batches[i];
+    const first = batch.chapters[0];
+    const last = batch.chapters[batch.chapters.length - 1];
+    const rangeLabel =
+      first.seq === last.seq ? `第 ${first.seq} 章` : `第 ${first.seq}–${last.seq} 章`;
+    const fallbackSeq = batch.chapters.length === 1 ? first.seq : 0;
+
+    const body = batch.chapters
+      .map((c) => `## 第 ${c.seq} 章 ${c.title}\n${c.text}`)
+      .join('\n\n');
+
+    try {
+      const result = await provider.chat({
+        messages: [
+          {
+            role: 'system',
+            content: `${baseSystem}\n\n${BATCH_TASK_PROMPT.replace('{index}', String(i + 1)).replace(
+              '{total}',
+              String(plan.batches.length)
+            )}`,
+          },
+          {
+            role: 'user',
+            content: `以下是第 ${first.seq}–${last.seq} 章的正文，请按上面的格式输出问题清单。\n\n${body}`,
+          },
+        ],
+        ...chatOptions(role, providerName, 2000),
+      });
+      rawIssues.push(...parseAiIssues(result?.content, fallbackSeq));
+    } catch (err) {
+      notices.push(`${rangeLabel}没有读完（${err.message}），这部分可能漏检。`);
+    }
+
+    done += 1;
+    if (onProgress) onProgress(done, total);
+  }
+
+  if (plan.batches.length > 1) {
+    try {
+      const summaries = plan.chapters
+        .map((c) => {
+          const outline = c.outline ? `\n大纲：${c.outline}` : '';
+          return `## 第 ${c.seq} 章 ${c.title}${outline}\n开头：${c.text.slice(0, 220)}`;
+        })
+        .join('\n\n');
+
+      const known = rawIssues.length
+        ? rawIssues
+            .slice(0, 60)
+            .map((issue) => `- 第 ${issue.chapterSeq || '?'} 章：${issue.title || issue.detail}`)
+            .join('\n')
+        : '（暂无）';
+
+      const result = await provider.chat({
+        messages: [
+          { role: 'system', content: `${baseSystem}\n\n${REDUCE_TASK_PROMPT}` },
+          {
+            role: 'user',
+            content: `## 各章摘要\n${summaries}\n\n## 已发现的问题\n${known}\n\n请补上跨章层面的矛盾。`,
+          },
+        ],
+        ...chatOptions(role, providerName, 1400),
+      });
+      rawIssues.push(...parseAiIssues(result?.content, 0));
+    } catch (err) {
+      notices.push(`跨章总检没有完成（${err.message}），只保留逐批结果。`);
+    }
+
+    done += 1;
+    if (onProgress) onProgress(done, total);
+  }
+
+  return { issues: dedupeIssues(resolveIssues(rawIssues, plan)), notices };
+}
+
+/**
+ * AI 层检查：整本正文逐批精读，再做一次跨章总检。
+ *
+ * 作品不存在或全书还没有正文时返回空清单。
+ *
+ * @param {string} workId
+ * @param {Object} params 见 executeAiCheck
+ */
+async function runAiCheck(workId, params = {}) {
+  const plan = await planAiCheck(workId);
+  if (!plan) return { issues: [], notices: [] };
+  if (!plan.batches.length) {
+    return { issues: [], notices: [...plan.notices, '全书还没有正文，没有可检查的内容。'] };
+  }
+  return executeAiCheck(plan, params);
+}
+
 module.exports = {
-  getChapterSummaries,
+  planAiCheck,
+  executeAiCheck,
   runRuleChecks,
   runAiCheck,
-  parseIssues,
+  parseAiIssues,
 };

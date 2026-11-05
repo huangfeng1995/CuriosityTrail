@@ -149,6 +149,16 @@ const memoryExtractEnabled =
 const memoryRetryBaseMs = Number(process.env.MEMORY_RETRY_BASE_MS || 1000);
 
 // ---------------------------------------------------------------------------
+// 4.2 全书审校
+// ---------------------------------------------------------------------------
+//
+// AI 层要逐段读完整本正文，不能一次全塞进去：单批太大时模型容易漏读、
+// 输出也容易被截断。按字数切批，一次检查的总字数另设上限，
+// 超出部分按章序截断并在结果里说明（不静默少读）。
+const consistencyChunkChars = Number(process.env.CONSISTENCY_CHUNK_CHARS || 12000);
+const consistencyMaxChars = Number(process.env.CONSISTENCY_MAX_CHARS || 300000);
+
+// ---------------------------------------------------------------------------
 // 5. 运行环境
 // ---------------------------------------------------------------------------
 const port = Number(process.env.PORT || 3001);
@@ -238,6 +248,9 @@ module.exports = {
   memoryMinScore,
   memoryExtractEnabled,
   memoryRetryBaseMs,
+  // 全书审校
+  consistencyChunkChars,
+  consistencyMaxChars,
   // 异地备份
   backupOffsiteDir,
   backupOffsiteKeep,

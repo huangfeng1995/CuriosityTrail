@@ -174,7 +174,13 @@ export default function Workspace() {
     progress: (
       <ProgressPanel workId={work?.id} work={work} onWorkChanged={() => loadWork(work.id)} />
     ),
-    check: <ConsistencyPanel workId={work?.id} />,
+    check: (
+      <ConsistencyPanel
+        workId={work?.id}
+        chapterId={chapter?.id}
+        onOpenChapter={loadChapter}
+      />
+    ),
     knowledge: (
       <KnowledgeBoundaryPanel
         workId={work?.id}

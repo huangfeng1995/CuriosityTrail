@@ -536,10 +536,20 @@ export default function AssistantSidebar() {
    *
    * 失败时整批都不标记，并给一句人话提示；成功后把条目标成已采纳，
    * 作者不会因为同一条意见被重复发给写手而反复改稿。
+   *
+   * source 用来把回执送回发起方：检查面板发起的那批要标记面板里的条目，
+   * 卡片里点的不需要。
    */
   const adoptFindings = useCallback(
-    async (findings) => {
-      if (sending) return { ok: false, sent: false, keys: [] };
+    async (findings, source = '') => {
+      if (sending) {
+        window.dispatchEvent(
+          new CustomEvent('ct:adopt-result', {
+            detail: { ok: false, sent: false, keys: [], source },
+          })
+        );
+        return { ok: false, sent: false, keys: [] };
+      }
 
       const result = await sendAdoptionBatch(send, findings);
       if (result.ok) {
@@ -551,10 +561,29 @@ export default function AssistantSidebar() {
       } else if (result.sent) {
         toast.warning('这次没有改成，请再试一次');
       }
+
+      window.dispatchEvent(
+        new CustomEvent('ct:adopt-result', {
+          detail: { ok: result.ok, sent: result.sent, keys: result.keys, source },
+        })
+      );
       return result;
     },
     [send, sending, toast]
   );
+
+  // 左侧「检查」面板勾选后，同样交给这里统一发一次 /chat：
+  // 写手改稿的入口只有一个，避免两处各写一套流式处理。
+  useEffect(() => {
+    const onAdopt = (e) => {
+      const detail = e.detail || {};
+      const findings = Array.isArray(detail.findings) ? detail.findings : [];
+      if (!findings.length) return;
+      adoptFindings(findings, detail.source || '');
+    };
+    window.addEventListener('ct:adopt-findings', onAdopt);
+    return () => window.removeEventListener('ct:adopt-findings', onAdopt);
+  }, [adoptFindings]);
 
   /** 侧栏意见 → 正文：滚到对应块并高亮。 */
   const jumpToFinding = useCallback((finding) => {
