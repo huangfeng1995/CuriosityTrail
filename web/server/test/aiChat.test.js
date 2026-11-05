@@ -26,6 +26,7 @@ const env = setupTempEnv();
 const app = require('../app');
 const { ready, all, get, run } = require('../database');
 const aiConfig = require('../services/aiConfig');
+const { assembleContext } = require('../services/context');
 
 let server;
 let fakeModel;
@@ -1183,5 +1184,97 @@ test('规划失败降级：知情边界回到未规划 1 条，system 不出现�
 
   const action = events.find((e) => e.type === 'action');
   assert.strictEqual(action.planDegraded, 'invalid', '降级标记要如实上报');
+});
+
+test('规划失败/降级/无节拍表：写手 system 与未规划基线逐字相等', async () => {
+  const { workId, chapterId, now, prefix } = await seedKnowledgeChapter();
+  await run(
+    `INSERT INTO story_facts (id, work_id, secret_id, part_no, content, keywords, created_at, modified_at)
+     VALUES (?, ?, NULL, 1, ?, ?, ?, ?)`,
+    [
+      `${prefix}-f1`,
+      workId,
+      '庙里供着的不是城隍像，而是一张旧照片，照片背面有模糊的字。',
+      '旧照片',
+      now,
+      now,
+    ]
+  );
+  await markKnown(workId, now, prefix);
+
+  const user = await get('SELECT id FROM users WHERE phone = ?', [server.phone]);
+  // 这就是「无节拍表」调用 assembleContext 得到的原行为。
+  const baseline = (await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    userId: user.id,
+  })).messages[0].content;
+
+  /** 取本轮所有与基线逐字相同的请求里最后一个（写手请求）。 */
+  function writerSystem(before) {
+    const calls = fakeModel.calls
+      .slice(before)
+      .filter((item) => String(item.messages?.[0]?.content || '') === baseline);
+    assert.ok(calls.length > 0, '应当至少有一个沿用未规划基线的请求');
+    return String(calls[calls.length - 1].messages[0].content || '');
+  }
+
+  // 1) 格式不合格（invalid）
+  await settleBackground();
+  fakeModel.setQueue([
+    { content: '{"beats":[]}', finishReason: 'stop' },
+    { content: '{"beats":[]}', finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '他推门进庙，先看见供桌上的一层灰。',
+        reason: '规划失败，按直写处理',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+  const beforeInvalid = fakeModel.calls.length;
+  const invalidEvents = await chat('直接写这一段', { workId, chapterId });
+  const invalidSystem = writerSystem(beforeInvalid);
+  assert.strictEqual(invalidSystem, baseline, 'invalid 降级必须逐字回到基线 system');
+  assert.strictEqual(
+    invalidEvents.find((e) => e.type === 'action').planDegraded,
+    'invalid'
+  );
+
+  // 2) 上游失败（failed）：规划连试两次都拿不到响应
+  await settleBackground();
+  fakeModel.setQueue([
+    { httpStatus: 500, errorMessage: '规划上游失败' },
+    { httpStatus: 500, errorMessage: '规划上游失败' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: '他推门进庙，先看见供桌上的一层灰。',
+        reason: '规划失败，按直写处理',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+  const beforeFailed = fakeModel.calls.length;
+  const failedEvents = await chat('直接写这一段', { workId, chapterId });
+  const failedSystem = writerSystem(beforeFailed);
+  assert.strictEqual(failedSystem, baseline, '上游失败降级必须逐字回到基线 system');
+  const failedReason = failedEvents.find((e) => e.type === 'action').planDegraded;
+  assert.ok(failedReason, '上游失败要如实上报降级原因');
+
+  console.log(
+    '[fallback] baseline 长度 =',
+    baseline.length,
+    '；格式不合格 system 逐字相等 =',
+    invalidSystem === baseline,
+    '；上游失败 system 逐字相等 =',
+    failedSystem === baseline,
+    '；降级原因 =',
+    JSON.stringify(failedReason)
+  );
 });
 
