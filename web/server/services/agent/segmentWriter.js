@@ -40,16 +40,18 @@ const MIN_TARGET_RATIO = 0.8;
 /**
  * 段落形态要求。
  *
- * 基线范文 45 段 / 5047 字，不是靠统一段长做到的，而是靠「小场景」成段。
- * 这里只写描述性风格，不给段落字数锚点、段数区间和对白占比门槛。
+ * 基线范文 45 段 / 5047 字，段均 112 字：靠「小场景」成段，而不是把动作、
+ * 对白各拆一段。这里给出可执行的硬约束：段数按拍、段长 80–140 字、
+ * 禁止连续短段、对白与动作合并、引号统一。
  */
 const PARAGRAPH_SHAPE_RULES = [
-  '## 全章形态（写作要求，不是逐项打分的表格）',
+  '## 全章形态（硬约束）',
   '- 全章按长章体量写，总量大致在 4800–5600 字（含标点）；不要为凑数拉长段落，也不要写到 7000 字以上。',
-  '- 把一段写成一个小场景：段内通常 2–4 句，把动作、神态、对话、心理中的几样收在同一个节奏里，一段写完场景要往前推进一步；不要把一串连续动作拆成好几段。',
-  '- 只有单句对白、短促反应、转折强调这三种情况允许独立成段；除此之外不要一句话一段，禁止「一个动作一段」的碎片化。',
-  '- 段落长度随叙事节奏自然变化，长短交替，不要每段都写成同一个长度；长短由场景决定，不设统一字数。',
-  '- 关键交流必须写成直接引语：用人物原话，带引号（「」或“”），并带说话人的动作、神态或对方的反应；不要用「他说他问我是否……」这类转述代替关键对话，转述只用于交代次要信息。',
+  '- 每拍段数按节拍表给的段数为准，允许 ±2 段；不要把一拍压成提纲，也不要把一个动作拆成好几段。',
+  '- 每个自然段 80–140 字（含标点）：一段写一个小场景，段内 3–6 句，把动作、神态、对话、心理中的几样收在同一个节奏里；超过 140 字要拆，不足 80 字要与相邻同场景段合并。',
+  '- 禁止连续 3 段不足 20 字；短促反应、单句对白最多连续 2 段，且前后必须有动作或叙述句承接。',
+  '- 对白必须与动作/叙述合并在同一段，不得连续独立成段；只有两句以内、且前后有动作句时才允许单独成段。',
+  '- 引号统一用全角 “”，禁止使用「」；关键交流必须写成直接引语：用人物原话，带说话人的动作、神态或对方的反应，不要用「他说他问我是否……」这类转述代替关键对话。',
   '- 每次对话都要推动一次变化：关系、立场、决定或信息，至少变一项；不写只为填充的寒暄。',
   '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它要付的代价。',
   '- 本组写到大致够用就停，余下内容留给后面的拍；章末只留一个钩子。',
@@ -74,6 +76,17 @@ const MERGE_MAX_PARAGRAPH_CHARS = 120;
 
 /** 含直接引语的段落一律不参与合并。 */
 const DIRECT_QUOTE_RE = /[「」“”"]/;
+
+/** 段落形态硬约束。字数含标点，与 wordCount 口径一致。 */
+const SHAPE_PARAGRAPH_MIN = 80;
+const SHAPE_PARAGRAPH_MAX = 140;
+const SHAPE_FRAGMENT_MIN = 20;
+const SHAPE_BEAT_TOLERANCE = 2;
+const SHAPE_SHORT_RUN = 3;
+
+/** 只用于检出，不做替换：作者交稿后由写手改，不静默改作者文字。 */
+const CORNER_QUOTE_RE = /[「」]/;
+const DIALOGUE_ONLY_RE = /^[“"][^”"]*[”"][。！？!?…]?$/;
 
 /**
  * 场景切换的保守识别：只认开头的时间/地点提示语。
@@ -324,6 +337,7 @@ function beatSummary(beats) {
       (b) =>
         `${b.id}【${b.type}】目标：${b.goal}；阻碍：${b.obstacle}；代价：${b.cost}；` +
         `变量：${b.delta.variable}从「${b.delta.from}」到「${b.delta.to}」；` +
+        `本拍写 ${b.paragraphs}±2 段、占全章约 ${b.wordShare ?? '未定'}%；` +
         `收在小钩子：${b.endHook}`
     )
     .join('\n');
@@ -375,7 +389,8 @@ function buildSelfCheck(group) {
     '## 交稿前自检（对照这几条，不合格就改）',
     `- 本组总量大致在 ${softMin}–${softMax} 字（含标点）就够了，不要为凑字数拉长段落。`,
     '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它的代价。',
-    '- 交稿前检查段落粒度：除单句对白、短促反应、转折强调外，一段应有 2–4 句，把动作、神态、对话或心理收在同一个节奏里；不要一个动作一段。',
+    `- 段数按本组各拍计划（±2 段）；每段 80–140 字（含标点），不要连续 3 段不足 20 字。`,
+    '- 对白与动作/叙述合并在同一段，不得连续独立成段；引号统一用全角 “”，禁止使用「」。',
     '- 关键交流用带引号的直接引语，有说话人的动作或神态承接；不要转述成「他说他问我是否」。',
     '- 每次对话都要推动一次变化，不写只为填充的寒暄。',
     group.isLast
@@ -427,8 +442,8 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     '',
     completed.length ? buildHandoffRules({ from: '上一组' }) : '',
     '',
-    '## 本组篇幅（只估量，不设锚点）',
-    `本组大致写 ${group.targetChars} 字（含标点），段落长短随叙事节奏自然变化，不要每段都写成同一个长度，也不要为凑字数拉长段落。写到大致够用就停；全章大致 4800–5600 字即可，7000 字以上会被截断。`,
+    '## 本组篇幅（硬约束）',
+    `本组大致写 ${group.targetChars} 字（含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。写到大致够用就停；全章大致 4800–5600 字即可，7000 字以上会被截断。`,
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
@@ -499,7 +514,7 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `本组目标约 ${group.targetChars} 字（含标点），已经写了 ${written} 字，再补约 ${remainingChars} 字就够；段数不用凑，按小场景自然分段。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
+    `本组目标约 ${group.targetChars} 字（含标点），已经写了 ${written} 字，再补约 ${remainingChars} 字就够；按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
@@ -533,6 +548,7 @@ function buildGroupRewriteInstruction({
   handoverDupIds = [],
   mustWithholdIds = [],
   invariantConflicts = [],
+  shapeViolations = [],
   tail,
   nextHead,
   brief = null,
@@ -542,6 +558,13 @@ function buildGroupRewriteInstruction({
   const weak = new Set(weakIds || []);
   const dup = new Set(handoverDupIds || []);
   const withhold = new Set(mustWithholdIds || []);
+  const shape = new Map();
+  for (const violation of shapeViolations || []) {
+    if (!violation || !violation.beatId) continue;
+    const rows = shape.get(violation.beatId) || [];
+    rows.push(violation);
+    shape.set(violation.beatId, rows);
+  }
   const conflicts = new Map();
   for (const conflict of invariantConflicts || []) {
     if (!conflict || !conflict.beatId) continue;
@@ -559,7 +582,8 @@ function buildGroupRewriteInstruction({
         weak.has(b.id) ||
         dup.has(b.id) ||
         withhold.has(b.id) ||
-        conflicts.has(b.id)
+        conflicts.has(b.id) ||
+        shape.has(b.id)
     )
     .map((b) => {
       if (conflicts.has(b.id)) {
@@ -584,7 +608,12 @@ function buildGroupRewriteInstruction({
         `- ${b.id}：必须写出目标「${b.goal}」、阻碍「${b.obstacle}」、代价「${b.cost}」，` +
         `以及「${b.delta.variable}」从「${b.delta.from}」到「${b.delta.to}」的变化，` +
         `收在「${b.endHook}」。` +
-        (weak.has(b.id) ? '写到了事件但没写出变化，这一遍要把变化写实。' : '')
+        (weak.has(b.id) ? '写到了事件但没写出变化，这一遍要把变化写实。' : '') +
+        (shape.has(b.id)
+          ? ` 本拍段落形态不合规（${describeShapeViolations(shape.get(b.id))}）：` +
+            `按 ${b.paragraphs}±2 段落段，每段 80–140 字（含标点），合并碎片段、拆开超长段，` +
+            '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。'
+          : '')
       );
     });
 
@@ -614,8 +643,8 @@ function buildGroupRewriteInstruction({
     '',
     buildBoundaryBlock({ group, groups }),
     '',
-    '## 篇幅',
-    `本组大致写 ${group.targetChars} 字（含标点）；段落长短随叙事节奏自然变化，不要每段都写成同一个长度，也不要为凑字数拉长段落。`,
+    '## 篇幅（硬约束）',
+    `本组大致写 ${group.targetChars} 字（含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。`,
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
@@ -741,6 +770,219 @@ function mergeSceneParagraphs(paragraphs, options = {}) {
     merged.push(row);
   }
   return merged;
+}
+
+/**
+ * 按各拍计划段数的权重，把正文段落切成等比例的拍区间。
+ *
+ * 正文经过合并后段数会少于计划；这里只用于定位「这一段属于哪一拍」，
+ * 不反过来修正计划段数。
+ */
+function beatParagraphRanges(beats, count) {
+  const rows = Array.isArray(beats) ? beats : [];
+  if (!rows.length || count <= 0) return [];
+  const weights = rows.map((beat) => Math.max(1, Number(beat.paragraphs) || 0));
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const ranges = [];
+  let from = 0;
+  for (let i = 0; i < rows.length; i += 1) {
+    const to =
+      i === rows.length - 1
+        ? count
+        : Math.min(count, Math.max(from, from + Math.round((weights[i] / totalWeight) * count)));
+    ranges.push([from, to]);
+    from = to;
+  }
+  return ranges;
+}
+
+function sentenceCount(paragraph) {
+  return String(paragraph || '')
+    .split(/[。！？!?；;…]/)
+    .map((row) => row.trim())
+    .filter(Boolean).length;
+}
+
+function paragraphSample(paragraph, max = 24) {
+  const value = normalizedParagraph(paragraph);
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+/**
+ * 写手执行层的段落形态自检。
+ *
+ * 只判可机械验证的四件事，不靠模型打分：
+ *   1. 每拍实际段数与计划段数相差超过 2；
+ *   2. 单段 20–79 字（碎片段）或超过 140 字（超长段）；
+ *   3. 连续 3 段不足 20 字；
+ *   4. 对白连续独立成段（两句以内且前后有动作句的例外）、引号使用「」。
+ *
+ * 返回的 beatId 直接用于分组重写；没有节拍表时不做判定。
+ */
+function checkParagraphShape(plan, body) {
+  const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
+  const paragraphs = splitParagraphs(body);
+  if (!beats.length || !paragraphs.length) {
+    return { applicable: false, totalParagraphs: 0, avgChars: 0, beatIds: [], violations: [] };
+  }
+
+  const ranges = beatParagraphRanges(beats, paragraphs.length);
+  const lengths = paragraphs.map((paragraph) => countWords(paragraph));
+  const beatIdAt = (index) => {
+    const hit = ranges.findIndex(([from, to]) => index >= from && index < to);
+    return hit >= 0 ? beats[hit].id : beats[beats.length - 1].id;
+  };
+  const violations = [];
+
+  // 1. 每拍段数 N±2
+  beats.forEach((beat, i) => {
+    const [from, to] = ranges[i] || [0, 0];
+    const actual = to - from;
+    const expected = Number(beat.paragraphs) || 0;
+    if (expected && Math.abs(actual - expected) > SHAPE_BEAT_TOLERANCE) {
+      violations.push({
+        beatId: beat.id,
+        kind: 'count',
+        expected,
+        actual,
+        tolerance: SHAPE_BEAT_TOLERANCE,
+      });
+    }
+  });
+
+  // 2. 单段长度：20–79 字算碎片段，>140 字算超长段；<20 字交给第 3 条
+  lengths.forEach((chars, index) => {
+    if (chars >= SHAPE_FRAGMENT_MIN && chars < SHAPE_PARAGRAPH_MIN) {
+      violations.push({
+        beatId: beatIdAt(index),
+        kind: 'fragment',
+        index,
+        chars,
+        sample: paragraphSample(paragraphs[index]),
+      });
+    } else if (chars > SHAPE_PARAGRAPH_MAX) {
+      violations.push({
+        beatId: beatIdAt(index),
+        kind: 'too_long',
+        index,
+        chars,
+        sample: paragraphSample(paragraphs[index]),
+      });
+    }
+  });
+
+  // 3. 连续 3 段不足 20 字
+  let shortStart = 0;
+  let shortRun = 0;
+  const flushShortRun = () => {
+    if (shortRun < SHAPE_SHORT_RUN) return;
+    const ids = new Set();
+    for (let i = shortStart; i < shortStart + shortRun; i += 1) ids.add(beatIdAt(i));
+    for (const beatId of ids) {
+      violations.push({
+        beatId,
+        kind: 'short_run',
+        index: shortStart,
+        run: shortRun,
+        chars: lengths.slice(shortStart, shortStart + shortRun),
+        sample: paragraphSample(paragraphs[shortStart]),
+      });
+    }
+  };
+  for (let i = 0; i <= lengths.length; i += 1) {
+    if (i < lengths.length && lengths[i] < SHAPE_FRAGMENT_MIN) {
+      if (!shortRun) shortStart = i;
+      shortRun += 1;
+      continue;
+    }
+    flushShortRun();
+    shortRun = 0;
+  }
+
+  // 4. 对白连续独立成段
+  const dialogueOnly = paragraphs.map((paragraph) =>
+    DIALOGUE_ONLY_RE.test(normalizedParagraph(paragraph))
+  );
+  const pushTalkViolation = (start, length) => {
+    const ids = new Set();
+    for (let i = start; i < start + length; i += 1) ids.add(beatIdAt(i));
+    for (const beatId of ids) {
+      violations.push({
+        beatId,
+        kind: 'dialogue_stack',
+        index: start,
+        run: length,
+        sample: paragraphSample(paragraphs[start]),
+      });
+    }
+  };
+  let talkStart = 0;
+  let talkRun = 0;
+  const flushTalkRun = (endIndex) => {
+    if (talkRun >= 3) {
+      pushTalkViolation(talkStart, talkRun);
+    } else if (talkRun === 2) {
+      const shortEnough = paragraphs
+        .slice(talkStart, talkStart + 2)
+        .every((paragraph) => sentenceCount(paragraph) <= 2);
+      const hasActionAround =
+        talkStart > 0 &&
+        !dialogueOnly[talkStart - 1] &&
+        endIndex < paragraphs.length &&
+        !dialogueOnly[endIndex];
+      if (!shortEnough || !hasActionAround) pushTalkViolation(talkStart, 2);
+    }
+  };
+  for (let i = 0; i <= dialogueOnly.length; i += 1) {
+    if (i < dialogueOnly.length && dialogueOnly[i]) {
+      if (!talkRun) talkStart = i;
+      talkRun += 1;
+      continue;
+    }
+    flushTalkRun(i);
+    talkRun = 0;
+  }
+
+  // 5. 引号统一为全角 “”，禁止「」
+  paragraphs.forEach((paragraph, index) => {
+    if (!CORNER_QUOTE_RE.test(paragraph)) return;
+    violations.push({
+      beatId: beatIdAt(index),
+      kind: 'corner_quote',
+      index,
+      sample: paragraphSample(paragraph),
+    });
+  });
+
+  const totalChars = lengths.reduce((sum, chars) => sum + chars, 0);
+  return {
+    applicable: true,
+    totalParagraphs: paragraphs.length,
+    avgChars: Math.round((totalChars / paragraphs.length) * 10) / 10,
+    beatIds: [...new Set(violations.map((row) => row.beatId))],
+    violations,
+  };
+}
+
+/**
+ * 把一组形态违规压缩成给写手看的一句话，同类只报数量，不逐段罗列。
+ */
+function describeShapeViolations(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const count = list.find((row) => row.kind === 'count');
+  const parts = [];
+  if (count) parts.push(`实际 ${count.actual} 段，目标是 ${count.expected}±${count.tolerance} 段`);
+  const fragments = list.filter((row) => row.kind === 'fragment').length;
+  if (fragments) parts.push(`有 ${fragments} 段不足 80 字`);
+  const tooLong = list.filter((row) => row.kind === 'too_long').length;
+  if (tooLong) parts.push(`有 ${tooLong} 段超过 140 字`);
+  const shortRun = list.find((row) => row.kind === 'short_run');
+  if (shortRun) parts.push(`有连续 ${shortRun.run} 段不足 20 字`);
+  const talks = list.filter((row) => row.kind === 'dialogue_stack').length;
+  if (talks) parts.push('对白连续独立成段');
+  const quotes = list.filter((row) => row.kind === 'corner_quote').length;
+  if (quotes) parts.push(`有 ${quotes} 段使用「」`);
+  return parts.join('；');
 }
 
 /**
@@ -1018,6 +1260,7 @@ async function rewriteMissingGroups({
   mustReveal = [],
   mustWithholdIds = [],
   invariantConflicts = [],
+  shapeViolations = [],
   log = () => {},
   progress = () => {},
 }) {
@@ -1032,12 +1275,14 @@ async function rewriteMissingGroups({
   const weakIds = (coverage?.weak || []).map((w) => w.id);
   const dupIds = coverage?.handoverDuplicated || [];
   const conflictIds = (invariantConflicts || []).map((conflict) => conflict.beatId);
+  const shapeIds = [...new Set((shapeViolations || []).map((row) => row && row.beatId).filter(Boolean))];
   const missingIds = [
     ...(coverage?.missing || []),
     ...weakIds,
     ...dupIds,
     ...(mustWithholdIds || []),
     ...conflictIds,
+    ...shapeIds,
   ];
   const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
   const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
@@ -1067,6 +1312,7 @@ async function rewriteMissingGroups({
       handoverDupIds: factsOnly ? [] : (coverage?.handoverDuplicated || []),
       mustWithholdIds: factsOnly ? [] : (mustWithholdIds || []),
       invariantConflicts: factsOnly ? [] : (invariantConflicts || []),
+      shapeViolations: factsOnly ? [] : (shapeViolations || []),
       tail: tailParagraphs(before || existingBody, 3),
       nextHead,
       brief,
@@ -1156,6 +1402,10 @@ module.exports = {
   MERGE_MAX_PARAGRAPH_CHARS,
   SCENE_SHIFT_RE,
   PARAGRAPH_SHAPE_RULES,
+  SHAPE_PARAGRAPH_MIN,
+  SHAPE_PARAGRAPH_MAX,
+  SHAPE_FRAGMENT_MIN,
+  SHAPE_BEAT_TOLERANCE,
   CLOSING_RE,
   splitParagraphs,
   tailParagraphs,
@@ -1163,6 +1413,9 @@ module.exports = {
   isRestatement,
   continuationAnchor,
   mergeSceneParagraphs,
+  beatParagraphRanges,
+  checkParagraphShape,
+  describeShapeViolations,
   composeChapterContent,
   beatMarkers,
   enforceGroupBoundary,

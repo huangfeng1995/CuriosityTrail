@@ -181,23 +181,20 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
   for (const instruction of [middle, last, continuation, rewrite]) {
     assert.match(instruction, /全章按长章体量写/);
     assert.match(instruction, /4800–5600 字/);
-    assert.match(instruction, /段落长度随叙事节奏自然变化/);
-    assert.match(instruction, /不要每段都写成同一个长度/, '不能给段落锚点，否则模型会一路往上限靠');
-    assert.match(instruction, /把一段写成一个小场景/, '段落要按小场景成段，不能切成碎片');
-    assert.match(
-      instruction,
-      /只有单句对白、短促反应、转折强调这三种情况允许独立成段/,
-      '只有三种情况允许独立成段'
-    );
-    assert.match(instruction, /禁止「一个动作一段」的碎片化/);
-    assert.match(instruction, /段内通常 2–4 句/, '一段要装 2–4 句，不是一个动作一段');
-    assert.match(instruction, /一段应有 2–4 句/, '自检也要检查段落粒度');
+    assert.match(instruction, /每拍段数按节拍表给的段数为准/, '段数按拍，允许 ±2');
+    assert.match(instruction, /每个自然段 80–140 字（含标点）/, '段长是硬约束，不再只描述风格');
+    assert.match(instruction, /禁止连续 3 段不足 20 字/);
+    assert.match(instruction, /一段写一个小场景/, '段落要按小场景成段，不能切成碎片');
+    assert.match(instruction, /段内 3–6 句/);
+    assert.match(instruction, /对白必须与动作\/叙述合并在同一段/, '对白不得连续独立成段');
+    assert.match(instruction, /引号统一用全角 “”，禁止使用「」/);
     assert.match(instruction, /关键交流必须写成直接引语/, '关键对话必须用人物原话');
     assert.match(instruction, /不要用「他说他问我是否……」这类转述代替关键对话/);
     assert.match(instruction, /每次对话都要推动一次变化/);
     assert.match(instruction, /每一拍都要有变量变化、信息增量和代价/);
     assert.match(instruction, /交稿前自检/);
     assert.match(instruction, /含标点/, '字数口径必须写明含标点');
+    assert.match(instruction, /段数按本组各拍计划（±2 段）/, '自检也要核对段数');
 
     assert.doesNotMatch(instruction, /14%–22%/, '对白占比已降级为诊断指标，不能再当门槛');
     assert.doesNotMatch(instruction, /不少于 25 字/, '段落下限已降级为诊断指标');
@@ -214,7 +211,7 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
       '续写不能从找灵感的角度重讲'
     );
   }
-  assert.match(continuation, /段数不用凑/, '续写不能再按段数补差');
+  assert.match(continuation, /按各拍计划段数（±2 段）落段/, '续写也要按拍段落数收口');
 });
 
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
@@ -574,4 +571,121 @@ test('全章超过 7000 字安全上限时截到最后一个完整段并标记',
   assert.ok(draft.chars <= segmentWriter.MAX_CHAPTER_CHARS);
   const last = segmentWriter.splitParagraphs(draft.content).pop();
   assert.match(last, /[。！？]$/, '截断必须落在完整段，不能切半句');
+});
+
+// ---------------------------------------------------------------------------
+// P3 段落形态自检：段数、段长、连续短段、对白独立成段、引号
+// ---------------------------------------------------------------------------
+
+function shapeRows(count = 12, mutate = () => {}) {
+  const longSentence =
+    '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
+  const rows = Array.from({ length: count }, (_, i) => `第${i + 1}段：${longSentence}${longSentence}${longSentence}`);
+  mutate(rows);
+  return rows.join('\n\n');
+}
+
+test('段落形态：合格正文（每拍 3 段、段长 80–140）不报违规', () => {
+  const plan = makePlan(4, 3);
+  const result = segmentWriter.checkParagraphShape(plan, shapeRows(12));
+
+  assert.strictEqual(result.applicable, true);
+  assert.strictEqual(result.totalParagraphs, 12);
+  assert.deepStrictEqual(result.violations, []);
+  assert.ok(result.avgChars >= 80 && result.avgChars <= 140);
+});
+
+test('段落形态：连续 3 段不足 20 字判违规，两段带前后动作是例外', () => {
+  const plan = makePlan(4, 3);
+
+  const threeShort = shapeRows(12, (rows) => {
+    rows[3] = '他停住。';
+    rows[4] = '他没动。';
+    rows[5] = '风停了。';
+  });
+  const bad = segmentWriter.checkParagraphShape(plan, threeShort);
+  assert.ok(bad.violations.some((row) => row.kind === 'short_run'), '连续短段必须被抓到');
+
+  const twoTalk = shapeRows(12, (rows) => {
+    rows[3] = '“走吧。”';
+    rows[4] = '“这就走。”';
+  });
+  const ok = segmentWriter.checkParagraphShape(plan, twoTalk);
+  assert.ok(!ok.violations.some((row) => row.kind === 'dialogue_stack'), '两句以内且前后有动作句应放行');
+});
+
+test('段落形态：20–79 字碎片段、超过 140 字长段、连续独立对白、直角引号都要报', () => {
+  const plan = makePlan(4, 3);
+
+  const fragment = segmentWriter.checkParagraphShape(
+    plan,
+    shapeRows(12, (rows) => {
+      rows[2] = '他把门环按下去，门里有人应了一声，随后脚步声往后退。';
+    })
+  );
+  assert.ok(fragment.violations.some((row) => row.kind === 'fragment'));
+
+  const tooLong = segmentWriter.checkParagraphShape(
+    plan,
+    shapeRows(12, (rows) => {
+      rows[1] = `${rows[1]}${rows[1]}`;
+    })
+  );
+  assert.ok(tooLong.violations.some((row) => row.kind === 'too_long'));
+
+  const talks = segmentWriter.checkParagraphShape(
+    plan,
+    shapeRows(12, (rows) => {
+      rows[4] = '“走吧。”';
+      rows[5] = '“这就走。”';
+      rows[6] = '“不等了。”';
+    })
+  );
+  assert.ok(talks.violations.some((row) => row.kind === 'dialogue_stack'), '连续 3 段独立对白必须被抓到');
+
+  const quotes = segmentWriter.checkParagraphShape(
+    plan,
+    shapeRows(12, (rows) => {
+      rows[7] = '他说「走吧」，把门推开了。';
+    })
+  );
+  assert.ok(quotes.violations.some((row) => row.kind === 'corner_quote'));
+});
+
+test('段落形态：每拍段数超过计划 ±2 也要报，并定位到拍', () => {
+  const plan = makePlan(2, 3);
+  const result = segmentWriter.checkParagraphShape(plan, shapeRows(12));
+
+  const counts = result.violations.filter((row) => row.kind === 'count');
+  assert.strictEqual(counts.length, 2, '两拍各写了 6 段，计划 3 段，都超 ±2');
+  assert.deepStrictEqual(counts.map((row) => row.beatId).sort(), ['B1', 'B2']);
+});
+
+test('段落形态违规只重写违规拍所在组，指令给出段数与合并要求', async () => {
+  const plan = makePlan(4);
+  const draftRunner = makeRunner([body('甲', 8), body('乙', 8)]);
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: draftRunner });
+
+  const beforeGroup = draft.groups[0].content;
+  const rewriteRunner = makeRunner(['重写这一组：\n\n' + body('乙改', 8, '章末抬出一口箱子。')]);
+
+  const rewritten = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups: draft.groups,
+    coverage: { covered: [], missing: [], weak: [] },
+    shapeViolations: [
+      { beatId: 'B4', kind: 'count', expected: 3, actual: 9, tolerance: 2 },
+      { beatId: 'B4', kind: 'fragment', chars: 40, sample: '他把门环按下去。' },
+    ],
+    runSegment: rewriteRunner,
+    callCount: draft.callCount,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(rewriteRunner.seen.length, 1, '只重写违规拍所在组');
+  assert.strictEqual(rewriteRunner.seen[0].group.index, 1);
+  assert.match(rewriteRunner.seen[0].instruction, /B4：.*段落形态不合规/);
+  assert.match(rewriteRunner.seen[0].instruction, /实际 9 段，目标是 3±2 段/);
+  assert.match(rewriteRunner.seen[0].instruction, /每段 80–140 字（含标点）/);
+  assert.strictEqual(rewritten.groups[0].content, beforeGroup, '违规拍之外的组不能被改写');
 });

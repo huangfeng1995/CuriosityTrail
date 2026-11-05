@@ -1567,6 +1567,16 @@ router.post('/chat', async (req, res) => {
       beatCheck.wordShareOutOfRange = wordShares.outOfRange;
       beatCheck.wordShareMissing = wordShares.shareMissing || [];
     }
+    // 段落形态自检：段数 N±2、单段 20–79 / >140 字、连续 3 段不足 20 字、
+    // 对白连续独立成段、引号用「」。违规只重写违规拍所在的组，不整章重写。
+    let shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
+    const shapeIds = shapeCheck.beatIds;
+    if (beatCheck) {
+      beatCheck.shapeViolations = shapeCheck.violations;
+      beatCheck.shapeBeatIds = shapeIds;
+      beatCheck.paragraphCount = shapeCheck.totalParagraphs;
+      beatCheck.avgParagraphChars = shapeCheck.avgChars;
+    }
     const revealAllMissing = revealCheck.applicable ? revealCheck.missing : [];
     // 「背景事实尚未入库」不是写手能补的：只报给作者（beatCheck + 徽标），
     // 不发起重写，否则等于逼写手编造年龄/籍贯。
@@ -1588,8 +1598,9 @@ router.post('/chat', async (req, res) => {
           ...(beatCheck.handoverDuplicated || []),
           ...withholdIds,
           ...invariantIds,
+          ...shapeIds,
         ]
-      : [...withholdIds, ...invariantIds];
+      : [...withholdIds, ...invariantIds, ...shapeIds];
     if (
       segmented &&
       beatPlan &&
@@ -1646,6 +1657,7 @@ router.post('/chat', async (req, res) => {
             mustReveal: revealMissing.map((fact) => fact.content),
             mustWithholdIds: withholdIds,
             invariantConflicts,
+            shapeViolations: shapeCheck.violations,
             runSegment: segmentRun,
             maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
             callCount: segmented.callCount,
@@ -1748,6 +1760,11 @@ router.post('/chat', async (req, res) => {
               beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
               beatCheck.wordShareOutOfRange = wordShares.outOfRange;
               beatCheck.wordShareMissing = wordShares.shareMissing || [];
+              shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
+              beatCheck.shapeViolations = shapeCheck.violations;
+              beatCheck.shapeBeatIds = shapeCheck.beatIds;
+              beatCheck.paragraphCount = shapeCheck.totalParagraphs;
+              beatCheck.avgParagraphChars = shapeCheck.avgChars;
             }
 
             console.log(
@@ -1873,6 +1890,12 @@ router.post('/chat', async (req, res) => {
             const wordShares = checkWordShares(beatPlan, payload.content);
             beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
             beatCheck.wordShareOutOfRange = wordShares.outOfRange;
+            beatCheck.wordShareMissing = wordShares.shareMissing || [];
+            shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
+            beatCheck.shapeViolations = shapeCheck.violations;
+            beatCheck.shapeBeatIds = shapeCheck.beatIds;
+            beatCheck.paragraphCount = shapeCheck.totalParagraphs;
+            beatCheck.avgParagraphChars = shapeCheck.avgChars;
           }
 
           console.log(
@@ -1975,6 +1998,32 @@ router.post('/chat', async (req, res) => {
       );
     }
 
+    // 段落形态徽标：重写后仍不合规才挂，避免把「查过且合格」写成打扰。
+    const shapeBadge = shapeCheck.applicable && shapeCheck.violations.length
+      ? `【段落自检：第${shapeCheck.beatIds
+          .map((id) => String(id).replace(/^B/i, ''))
+          .join('、')}拍段落形态不合规（${shapeCheck.violations.length} 条）】`
+      : '';
+    if (shapeCheck.applicable) {
+      console.log(
+        JSON.stringify({
+          event: 'ai_paragraph_shape',
+          traceId,
+          userId: req.userId,
+          paragraphs: shapeCheck.totalParagraphs,
+          avgChars: shapeCheck.avgChars,
+          beatIds: shapeCheck.beatIds,
+          violations: shapeCheck.violations.map((row) => ({
+            beat: row.beatId,
+            kind: row.kind,
+            chars: row.chars,
+            sample: row.sample,
+          })),
+          rewrote: beatRewrite,
+        })
+      );
+    }
+
     const badge = beatPlan
       ? beatBadge({
           coverage: beatCheck,
@@ -1989,7 +2038,15 @@ router.post('/chat', async (req, res) => {
       segmented && segmented.truncated
         ? `【字数安全上限 ${segmentWriter.MAX_CHAPTER_CHARS}：已截到最后一个完整段】`
         : '';
-    if (segmentBadge || truncationBadge || badge || revealBadge || withholdBadge || invariantBadge) {
+    if (
+      segmentBadge ||
+      truncationBadge ||
+      badge ||
+      revealBadge ||
+      withholdBadge ||
+      invariantBadge ||
+      shapeBadge
+    ) {
       payload.reason = [
         segmentBadge,
         truncationBadge,
@@ -1997,6 +2054,7 @@ router.post('/chat', async (req, res) => {
         revealBadge,
         withholdBadge,
         invariantBadge,
+        shapeBadge,
         payload.reason,
       ]
         .filter(Boolean)
