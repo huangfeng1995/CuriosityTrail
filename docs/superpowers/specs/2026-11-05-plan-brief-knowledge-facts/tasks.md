@@ -1,11 +1,11 @@
 # 任务清单
 
 ## T3 planBrief
-- [ ] 新建 `web/server/services/agent/planBrief.js`：prompt、`validatePlanBrief`、`generatePlanBrief`、`formatPlanBrief`、`briefCoverage`、`briefWriterBlock`、`partitionCoverage`
-- [ ] `routes/ai.js`：规划前生成 brief（含 missing 素材与 background facts）；注入规划 system；硬缺项重排一次；仍缺写 `planDegraded`
-- [ ] `routes/ai.js` + `services/agent/segmentWriter.js`：写手 system 与组指令注入 brief 具体约束
-- [ ] `test/planBrief.test.js`：粗提纲推 loss/mustPresent/mustWithhold、inferred 非硬约束、覆盖报缺、空 brief 回落
-- [ ] 提交 1
+- [x] 新建 `web/server/services/agent/planBrief.js`：prompt、`validatePlanBrief`、`generatePlanBrief`、`formatPlanBrief`、`briefCoverage`、`briefWriterBlock`、`partitionCoverage`
+- [x] `routes/ai.js`：规划前生成 brief（含 missing 素材与 background facts）；注入规划 system；硬缺项重排一次；仍缺写 `planDegraded`
+- [x] `routes/ai.js` + `services/agent/segmentWriter.js`：写手 system 与组指令注入 brief 具体约束
+- [x] `test/planBrief.test.js`：粗提纲推 loss/mustPresent/mustWithhold、inferred 非硬约束、覆盖报缺、空 brief 回落
+- [x] 提交 1
 
 ## T4 知情扫描确定性
 - [ ] `knowledgeScan.js`：`collectCandidates` / `detectPossibleLeaks` / 模型只看候选 / 空候选不调模型 / pending 幂等 / possible_leak 进 pending

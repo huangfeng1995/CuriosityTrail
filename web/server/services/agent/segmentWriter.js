@@ -13,6 +13,7 @@
  */
 
 const { countWords } = require('../wordCount');
+const { briefWriterBlock } = require('./planBrief');
 
 /** 每组最多写的节拍数（设计上允许 2–4，取 3 让 8 拍的章也有 3 次推进） */
 const MAX_BEATS_PER_GROUP = 3;
@@ -389,13 +390,14 @@ function buildSelfCheck(group) {
  * 完整节拍表已经在 system 里（每次调用都会带上），所以这里不再重贴 JSON，
  * 只标清楚「本组写哪几拍、哪些已写完、哪些还没到」。
  */
-function buildSegmentInstruction({ plan, group, groups, tail = '' }) {
+function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null }) {
   const completed = groups
     .filter((g) => g.index < group.index)
     .flatMap((g) => g.beatIds);
   const later = groups
     .filter((g) => g.index > group.index)
     .flatMap((g) => g.beatIds);
+  const briefBlock = briefWriterBlock(brief);
 
   const lines = [
     `## 分段写作任务（第 ${group.index + 1}/${groups.length} 组）`,
@@ -415,6 +417,8 @@ function buildSegmentInstruction({ plan, group, groups, tail = '' }) {
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
+    briefBlock,
+    briefBlock ? '' : null,
     '## 本组节拍',
     beatSummary(group.beats),
     '',
@@ -460,8 +464,9 @@ function buildContinuationIsolation() {
  * 只带最后一个完整场景的最后一段（太长则最后两三句），不带整组正文；
  * 「不能复述」也由调用后的相似度断言兜底，不指望模型自觉。
  */
-function buildContinuationInstruction({ plan, group, groups, tail, remainingChars }) {
+function buildContinuationInstruction({ plan, group, groups, tail, remainingChars, brief = null }) {
   const written = countWords(group.content);
+  const briefBlock = briefWriterBlock(brief);
   const lines = [
     `## 续写本组（第 ${group.index + 1}/${groups.length} 组）`,
     '本组提前收尾了，但还没写够。接着写，不要重开。',
@@ -480,6 +485,9 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
     `本组目标约 ${group.targetChars} 字（含标点），已经写了 ${written} 字，再补约 ${remainingChars} 字就够；段数不用凑，按小场景自然分段。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
     '',
     PARAGRAPH_SHAPE_RULES,
+    '',
+    briefBlock,
+    briefBlock ? '' : null,
   ];
 
   if (group.isLast) {
@@ -505,9 +513,13 @@ function buildGroupRewriteInstruction({
   weakIds = [],
   tail,
   nextHead,
+  brief = null,
+  mustReveal = [],
 }) {
   const wanted = new Set(problemIds || []);
   const weak = new Set(weakIds || []);
+  const briefBlock = briefWriterBlock(brief);
+  const revealLines = (mustReveal || []).map((fact) => `- ${fact}`);
   const problems = group.beats
     .filter((b) => wanted.has(b.id) || weak.has(b.id))
     .map(
@@ -526,6 +538,12 @@ function buildGroupRewriteInstruction({
     '## 必须补足',
     problems.length ? problems.join('\n') : '把本组几拍写完整。',
     '',
+    revealLines.length
+      ? `## 必须交代的背景事实（每项至少一句，写进人物对话或叙述，不得一句话带过）\n${revealLines.join('\n')}`
+      : '',
+    revealLines.length ? '' : null,
+    briefBlock,
+    briefBlock ? '' : null,
     '## 上一组结尾（仅供衔接，不要重抄）',
     tail || '（本章从这里开始）',
     '',
@@ -776,6 +794,7 @@ async function draftInSegments({
   runSegment,
   maxCalls = MAX_SEGMENT_CALLS,
   mergeScenes = true,
+  brief = null,
   log = () => {},
   progress = () => {},
 }) {
@@ -819,7 +838,7 @@ async function draftInSegments({
 
     progress({ phase: 'segment', index: group.index, total: groups.length, beatIds: group.beatIds });
     const tail = tailParagraphs(stitchGroups(groups, existingBody), 3);
-    const instruction = buildSegmentInstruction({ plan, group, groups, tail });
+    const instruction = buildSegmentInstruction({ plan, group, groups, tail, brief });
 
     let out;
     try {
@@ -859,6 +878,7 @@ async function draftInSegments({
         groups,
         tail: continuationAnchor(group.content),
         remainingChars,
+        brief,
       });
 
       try {
@@ -934,6 +954,8 @@ async function rewriteMissingGroups({
   maxCalls = MAX_SEGMENT_CALLS,
   callCount = 0,
   mergeScenes = true,
+  brief = null,
+  mustReveal = [],
   log = () => {},
   progress = () => {},
 }) {
@@ -947,7 +969,8 @@ async function rewriteMissingGroups({
 
   const weakIds = (coverage?.weak || []).map((w) => w.id);
   const missingIds = [...(coverage?.missing || []), ...weakIds];
-  const affected = groupsForIds(groups, missingIds);
+  const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
+  const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
 
   for (const group of affected) {
     if (count >= maxCalls) {
@@ -968,10 +991,13 @@ async function rewriteMissingGroups({
       plan,
       group,
       groups,
-      problemIds: coverage?.missing || [],
-      weakIds,
+      // 只为补背景事实强制重写时，把本组原有节拍一并列出来，避免补一句身世却丢掉本组动作。
+      problemIds: factsOnly ? group.beatIds : (coverage?.missing || []),
+      weakIds: factsOnly ? [] : weakIds,
       tail: tailParagraphs(before || existingBody, 3),
       nextHead,
+      brief,
+      mustReveal,
     });
 
     count += 1;

@@ -12,6 +12,12 @@
 
 const http = require('http');
 
+/** 分场 brief 请求的特征：system 末尾拼的是 brief 提示词。 */
+function isBriefCall(body) {
+  const system = body && Array.isArray(body.messages) ? String(body.messages[0]?.content || '') : '';
+  return system.includes('章节分场 brief 规划器');
+}
+
 /**
  * @param {Object} [options]
  * @param {Array} [options.queue] 按次序返回的响应。取完就用 defaultBehavior。
@@ -23,7 +29,12 @@ function startFakeModel(options = {}) {
     const sockets = new Set();
     let queue = Array.isArray(options.queue) ? [...options.queue] : [];
     let defaultBehavior = options.defaultBehavior || { content: '', finishReason: 'stop' };
+    // 分场 brief 是规划前新增的一步：默认返回空清单，不占用队列，
+    // 这样既有规划用例的 setQueue 次序保持不变。
+    let briefBehavior = options.brief || { content: '{"items":[]}', finishReason: 'stop' };
     const calls = [];
+    // brief 是规划前的独立一步，不计入「写作/规划调用」的次数断言。
+    const briefCalls = [];
 
     const srv = http.createServer((req, res) => {
       let raw = '';
@@ -36,9 +47,13 @@ function startFakeModel(options = {}) {
           body = {};
         }
 
-        calls.push(body);
+        const isBrief = isBriefCall(body);
+        if (isBrief) briefCalls.push(body);
+        else calls.push(body);
 
-        const b = queue.length ? queue.shift() : defaultBehavior;
+        const b = isBrief
+          ? briefBehavior
+          : (queue.length ? queue.shift() : defaultBehavior);
 
         // 模拟供应商直接报错（限流、鉴权失败等）
         if (b.httpStatus) {
@@ -107,11 +122,15 @@ function startFakeModel(options = {}) {
       resolve({
         server: srv,
         calls,
+        briefCalls,
         setQueue(next) {
           queue = [...next];
         },
         setDefault(next) {
           defaultBehavior = next;
+        },
+        setBrief(next) {
+          briefBehavior = next;
         },
         close() {
           for (const socket of sockets) socket.destroy();

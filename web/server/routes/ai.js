@@ -39,6 +39,7 @@ const {
   buildRewriteInstruction,
   beatBadge,
 } = require('../services/agent/beatPlan');
+const planBrief = require('../services/agent/planBrief');
 const referenceAnchor = require('../services/agent/referenceAnchor');
 const segmentWriter = require('../services/agent/segmentWriter');
 const { checkAnchors } = require('../services/pipeline/anchorCheck');
@@ -46,6 +47,8 @@ const knowledgeScan = require('../services/pipeline/knowledgeScan');
 
 const router = express.Router();
 
+/** 分场 brief 上限：只做清单，不写正文，30s 足够 */
+const BRIEF_TIMEOUT_MS = 30000;
 /** 规划步上限：超时即降级直写，不重试 */
 const PLAN_TIMEOUT_MS = 45000;
 /**
@@ -865,6 +868,8 @@ router.post('/chat', async (req, res) => {
     const planningEnabled = roleKey === 'writer' && Boolean(chapterId);
     let beatPlan = null;
     let planDegraded = '';
+    let brief = null;
+    let briefCoverageResult = null;
 
     if (planningEnabled) {
       send({ type: 'agent_thinking', label: '正在规划本章节拍' });
@@ -884,24 +889,116 @@ router.post('/chat', async (req, res) => {
           includeChapterBody: false,
         });
 
+        // ---- 分场 brief（先于节拍规划）----
+        //
+        // 粗提纲只能排进提纲里已有的东西：没写「交弓/托付」，规划器就排不出。
+        // 这里先把「本章必须发生的动作」补成分场级清单，再交给规划器硬覆盖。
+        // 失败一律回落到无 brief 的旧链路，不因为多一步而拖挂整轮。
+        let briefSystemPrompt = planContext.messages[0].content;
+        try {
+          const missingMaterials = await all(
+            `SELECT title FROM materials
+             WHERE user_id = ? AND (work_id = ? OR work_id IS NULL OR work_id = '')
+               AND status != 'retracted' AND confidence = 'missing'
+             ORDER BY created_at DESC, id DESC LIMIT 10`,
+            [req.userId, workId]
+          ).catch(() => []);
+
+          if (missingMaterials.length) {
+            briefSystemPrompt +=
+              `\n\n---\n\n## 本章素材缺口（confidence=missing，只能作为背景线索，不得当作有出处的事实引用）\n` +
+              missingMaterials.map((row) => `- ${row.title}`).join('\n');
+          }
+
+          send({ type: 'agent_thinking', label: '正在整理本章必须发生的动作' });
+          const briefOut = await planBrief.generatePlanBrief({
+            provider,
+            systemPrompt: briefSystemPrompt,
+            instruction: String(message),
+            options: {
+              temperature: role?.temperature,
+              model: role?.model && name === 'deepseek' ? role.model : undefined,
+              thinking: role?.thinking === null || role?.thinking === undefined
+                ? undefined
+                : (role.thinking ? 'enabled' : 'disabled'),
+              signal: AbortSignal.any([roundSignal, AbortSignal.timeout(BRIEF_TIMEOUT_MS)]),
+            },
+          });
+
+          if (briefOut.brief && briefOut.brief.items.length) {
+            brief = briefOut.brief;
+            briefSystemPrompt = `${briefSystemPrompt}\n\n---\n\n${planBrief.formatPlanBrief(brief)}`;
+          }
+
+          console.log(
+            JSON.stringify({
+              event: 'ai_brief',
+              traceId,
+              userId: req.userId,
+              role: roleKey,
+              ok: Boolean(brief),
+              reason: brief ? '' : (briefOut.reason || 'empty'),
+              items: brief ? brief.items.length : 0,
+              hard: brief ? brief.items.filter((item) => !item.inferred).length : 0,
+              errors: (briefOut.errors || []).slice(0, 6),
+              usage: briefOut.usage || null,
+            })
+          );
+        } catch (err) {
+          console.error('分场 brief 失败，沿用无 brief 链路：', err.message);
+        }
+
+        const makePlanOptions = () => ({
+          temperature: role?.temperature,
+          model: role?.model && name === 'deepseek' ? role.model : undefined,
+          thinking: role?.thinking === null || role?.thinking === undefined
+            ? undefined
+            : (role.thinking ? 'enabled' : 'disabled'),
+          // 45s 硬顶；取消信号一路沿用，作者断开时规划立刻停。
+          signal: AbortSignal.any([roundSignal, AbortSignal.timeout(PLAN_TIMEOUT_MS)]),
+        });
+
         const planOut = await generateBeatPlan({
           provider,
-          systemPrompt: planContext.messages[0].content,
+          systemPrompt: briefSystemPrompt,
           instruction: String(message),
-          options: {
-            temperature: role?.temperature,
-            model: role?.model && name === 'deepseek' ? role.model : undefined,
-            thinking: role?.thinking === null || role?.thinking === undefined
-              ? undefined
-              : (role.thinking ? 'enabled' : 'disabled'),
-            // 45s 硬顶；取消信号一路沿用，作者断开时规划立刻停。
-            signal: AbortSignal.any([roundSignal, AbortSignal.timeout(PLAN_TIMEOUT_MS)]),
-          },
+          options: makePlanOptions(),
         });
 
         const planMs = Date.now() - planStartedAt;
         if (planOut.plan) {
           beatPlan = planOut.plan;
+
+          // 分场 brief 的硬覆盖：规划器有它的结构校验，但不保证把 brief 的
+          // loss/mustPresent/mustWithhold 都排进去。缺项重排一次；仍缺只记录，
+          // 不因为没排全就把已经合格的节拍表作废。
+          if (brief) {
+            let coverage = planBrief.briefCoverage(brief, beatPlan);
+            if (coverage.missing.length && !roundSignal.aborted) {
+              send({ type: 'agent_thinking', label: '正在按分场 brief 重排节拍' });
+              const partitioned = planBrief.partitionCoverage(beatPlan, coverage);
+              const replanOut = await generateBeatPlan({
+                provider,
+                systemPrompt: briefSystemPrompt,
+                instruction: `${String(message)}\n\n${planBrief.buildReplanInstruction(partitioned)}`,
+                options: makePlanOptions(),
+              }).catch((err) => {
+                console.error('按 brief 重排失败，保留第一版节拍表：', err.message);
+                return { plan: null, errors: [] };
+              });
+              if (replanOut.plan) {
+                beatPlan = replanOut.plan;
+                coverage = planBrief.briefCoverage(brief, beatPlan);
+              }
+            }
+            briefCoverageResult = coverage;
+            if (coverage.missing.length) {
+              planDegraded = `brief_missing:${coverage.missing
+                .slice(0, 3)
+                .map((item) => `${item.kind}/${item.text}`)
+                .join('|')}`;
+            }
+          }
 
           // 把「本章计划揭示的事实」真正接进知情边界。
           //
@@ -921,6 +1018,10 @@ router.post('/chat', async (req, res) => {
 
           // 拼进写手请求：system 末尾、技能清单之前。
           chatMessages[0].content += `\n\n---\n\n${formatBeatPlan(beatPlan)}`;
+          // brief 放在节拍表之后：先给「必须发生什么」，再给「拆成哪几拍」。
+          if (brief) {
+            chatMessages[0].content += `\n\n---\n\n${planBrief.formatPlanBrief(brief)}`;
+          }
         } else {
           planDegraded = planOut.reason || 'failed';
         }
@@ -936,6 +1037,9 @@ router.post('/chat', async (req, res) => {
             durationMs: planMs,
             beats: beatPlan ? beatPlan.beats.length : 0,
             paragraphs: beatPlan ? beatPlan.totalParagraphs : 0,
+            briefOk: Boolean(brief),
+            briefItems: brief ? brief.items.length : 0,
+            briefMissing: briefCoverageResult ? briefCoverageResult.missing.map((x) => x.id) : [],
             errors: (planOut.errors || []).slice(0, 6),
             usage: planOut.usage || null,
           })
@@ -1089,6 +1193,7 @@ router.post('/chat', async (req, res) => {
       const segmentStartedAt = Date.now();
       segmented = await segmentWriter.draftInSegments({
         plan: beatPlan,
+        brief,
         runSegment: segmentRun,
         maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
         log: (entry) => {
@@ -1601,6 +1706,11 @@ router.post('/chat', async (req, res) => {
       payload.reason = [segmentBadge, truncationBadge, badge, payload.reason].filter(Boolean).join(' ');
     }
     payload.beatCheck = beatCheck;
+    // 分场 brief 与硬覆盖结果：给前端复盘用，不改变正文。
+    payload.planBrief = brief
+      ? { items: brief.items.slice(0, 12), dropped: (brief.dropped || []).slice(0, 5) }
+      : null;
+    payload.briefCoverage = briefCoverageResult;
     if (planDegraded) payload.planDegraded = planDegraded;
     if (segmented) {
       payload.segmentInfo = {
@@ -1855,7 +1965,8 @@ router.post('/chat', async (req, res) => {
       // reason 里的徽标是给作者看的短句，这两个字段留给后续复盘/前端展示。
       beatCheck: payload.beatCheck || null,
       planDegraded: payload.planDegraded || '',
-      // 分段起稿的分组/调用信息：前端与测试靠它确认这一轮跑了几次、有没有降级。
+      planBrief: payload.planBrief || null,
+      briefCoverage: payload.briefCoverage || null,
       segmentInfo: payload.segmentInfo || null,
     });
     send({

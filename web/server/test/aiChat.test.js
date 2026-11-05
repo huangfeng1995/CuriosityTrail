@@ -813,6 +813,118 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
   assert.ok(!tokenText.includes('chapterGoal'), '规划 JSON 不能让作者看见');
 });
 
+test('分场 brief 进入规划 system 与写手组指令，且不改变原有调用次序', async () => {
+  const { workId, chapterId } = await seedChapter({
+    outline: 'MAGIC-大纲：主角进庙查旧案，庙祝会拦他。',
+    body: 'MAGIC-正文：已经写好的段落。',
+  });
+
+  fakeModel.setBrief({
+    content: JSON.stringify({
+      items: [
+        {
+          kind: 'loss',
+          text: '交出随身信物',
+          keywords: ['信物'],
+          source: '本章大纲',
+          inferred: false,
+        },
+        {
+          kind: 'mustPresent',
+          text: '庙祝到场并当面拦门',
+          keywords: ['庙祝', '拦'],
+          source: '人物卡',
+          inferred: false,
+        },
+        {
+          kind: 'mustWithhold',
+          text: '不得解释照片上的人是谁',
+          keywords: ['照片'],
+          source: '设定',
+          inferred: false,
+        },
+        {
+          kind: 'mustPresent',
+          text: '主簿可能提前离场',
+          keywords: ['主簿'],
+          inferred: true,
+        },
+      ],
+    }),
+    finishReason: 'stop',
+  });
+
+  fakeModel.setQueue([
+    { content: validPlanJson(), finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第一组'),
+        reason: '第一组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第二组', '县衙后门当晚抬出一口箱子。'),
+        reason: '第二组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        covered: [
+          { id: 'B1', evidence: '庙门半掩' },
+          { id: 'B2', evidence: '庙祝不答' },
+          { id: 'B3', evidence: '旧档中间缺了几页' },
+          { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+        ],
+        missing: [],
+        weak: [],
+        hookPresent: true,
+        chapterGoalMet: true,
+      }),
+      finishReason: 'stop',
+    },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const beforeBrief = fakeModel.briefCalls.length;
+  const events = await chat('按大纲写这一章', { workId, chapterId });
+
+  const briefCall = fakeModel.briefCalls[beforeBrief];
+  assert.ok(briefCall, '规划前应先跑一次分场 brief');
+  assert.match(String(briefCall.messages[0].content), /MAGIC-大纲/);
+  assert.match(String(briefCall.messages[1].content), /分场 brief/);
+
+  const planCall = fakeModel.calls[before];
+  assert.match(String(planCall.messages[0].content), /本章分场 brief/);
+  assert.match(String(planCall.messages[0].content), /交出随身信物/);
+
+  // 覆盖齐全，不应多排一次：紧接规划的是第一组，而不是第二版规划。
+  const writerCall = fakeModel.calls[before + 1];
+  assert.strictEqual(writerCall.max_tokens, 10000);
+  const writerSystem = String(writerCall.messages[0].content || '');
+  assert.match(writerSystem, /本章分场 brief/);
+  assert.match(writerSystem, /\[loss\] 交出随身信物/);
+
+  const groupInstruction = String(
+    writerCall.messages[writerCall.messages.length - 1].content || ''
+  );
+  assert.match(groupInstruction, /本章不可逆约束/);
+  assert.match(groupInstruction, /必须到场：庙祝到场并当面拦门/);
+  assert.match(groupInstruction, /不得解释（必须 withhold）：不得解释照片上的人是谁/);
+  assert.ok(!groupInstruction.split('- 建议')[0].includes('主簿可能提前离场'));
+
+  const action = events.find((e) => e.type === 'action');
+  assert.strictEqual(action.briefCoverage.hardTotal, 3);
+  assert.deepStrictEqual(action.briefCoverage.missing, []);
+  assert.ok(action.planBrief && action.planBrief.items.length >= 3);
+});
+
 test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二次', async () => {
   const { workId, chapterId } = await seedChapter({ outline: '主角进庙查旧案。' });
 
