@@ -1529,6 +1529,11 @@ router.post('/chat', async (req, res) => {
     // 交付只允许一次：确定性扫正文，不依赖模型自检。
     const handoverDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
     if (beatCheck) beatCheck.handoverDuplicated = handoverDup.beatIds;
+    // 悬念自检：确定性扫正文，同一拍里制度词和结论词同时出现就判「把悬念解释掉」。
+    // 与覆盖自检独立：模型说拍子写完了，但把制度结论讲完，仍然算违规。
+    let withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
+    if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
+    const withholdIds = withholdCheck.violations.map((v) => v.id);
     const revealAllMissing = revealCheck.applicable ? revealCheck.missing : [];
     // 「背景事实尚未入库」不是写手能补的：只报给作者（beatCheck + 徽标），
     // 不发起重写，否则等于逼写手编造年龄/籍贯。
@@ -1548,8 +1553,9 @@ router.post('/chat', async (req, res) => {
           ...beatCheck.missing,
           ...beatCheck.weak.map((w) => w.id),
           ...(beatCheck.handoverDuplicated || []),
+          ...withholdIds,
         ]
-      : [];
+      : withholdIds;
     if (
       segmented &&
       beatPlan &&
@@ -1604,6 +1610,7 @@ router.post('/chat', async (req, res) => {
             coverage: beatCheck,
             brief,
             mustReveal: revealMissing.map((fact) => fact.content),
+            mustWithholdIds: withholdIds,
             runSegment: segmentRun,
             maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
             callCount: segmented.callCount,
@@ -1687,6 +1694,9 @@ router.post('/chat', async (req, res) => {
             await loadRevealCheck(payload.content);
             const recheckDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
             if (beatCheck) beatCheck.handoverDuplicated = recheckDup.beatIds;
+            // 重写后再判一次：仍违规就交付当前稿，只打徽标，不无限重写。
+            withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
+            if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
 
             console.log(
               JSON.stringify({
@@ -1702,6 +1712,7 @@ router.post('/chat', async (req, res) => {
                 hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
                 chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
                 handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
+                mustWithholdViolations: withholdCheck.violations.map((v) => v.id),
                 rewrote: true,
                 usage: recheckOut.usage || null,
               })
@@ -1717,7 +1728,10 @@ router.post('/chat', async (req, res) => {
     } else if (
       beatPlan &&
       beatCheck &&
-      (beatCheck.missing.length || (beatCheck.handoverDuplicated || []).length || revealMissing.length) &&
+      (beatCheck.missing.length ||
+        (beatCheck.handoverDuplicated || []).length ||
+        withholdIds.length ||
+        revealMissing.length) &&
       !roundSignal.aborted &&
       ROUND_BUDGET_MS - (Date.now() - startedAt) >= WRITE_TIMEOUT_MS + CHECK_TIMEOUT_MS
     ) {
@@ -1732,7 +1746,10 @@ router.post('/chat', async (req, res) => {
           beatPlan,
           beatCheck,
           revealMissing.map((fact) => fact.content),
-          { handoverBeat: brief && brief.handoverBeat ? brief.handoverBeat : '' }
+          {
+            handoverBeat: brief && brief.handoverBeat ? brief.handoverBeat : '',
+            mustWithholdIds: withholdIds,
+          }
         );
         const rewriteResult = await runChat(
           [
@@ -1782,6 +1799,8 @@ router.post('/chat', async (req, res) => {
           await loadRevealCheck(payload.content);
           const recheckDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
           if (beatCheck) beatCheck.handoverDuplicated = recheckDup.beatIds;
+          withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
+          if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
 
           console.log(
             JSON.stringify({
@@ -1797,6 +1816,7 @@ router.post('/chat', async (req, res) => {
               hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
               chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
               handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
+              mustWithholdViolations: withholdCheck.violations.map((v) => v.id),
               rewrote: true,
               usage: recheckOut.usage || null,
             })
@@ -1831,6 +1851,29 @@ router.post('/chat', async (req, res) => {
       );
     }
 
+    // 悬念自检徽标：重写后仍有违规才挂，说明这一拍仍把制度结论讲完了。
+    const withholdBadge = withholdCheck.violations.length
+      ? `【悬念自检：第${withholdCheck.violations
+          .map((v) => String(v.id).replace(/^B/i, ''))
+          .join('、')}拍解释掉制度悬念】`
+      : '';
+    if (withholdCheck.applicable) {
+      console.log(
+        JSON.stringify({
+          event: 'ai_must_withhold',
+          traceId,
+          userId: req.userId,
+          total: withholdCheck.total,
+          violations: withholdCheck.violations.map((v) => ({
+            beat: v.id,
+            terms: v.terms,
+            sentence: v.sentence,
+          })),
+          rewrote: beatRewrite,
+        })
+      );
+    }
+
     const badge = beatPlan
       ? beatBadge({
           coverage: beatCheck,
@@ -1845,8 +1888,15 @@ router.post('/chat', async (req, res) => {
       segmented && segmented.truncated
         ? `【字数安全上限 ${segmentWriter.MAX_CHAPTER_CHARS}：已截到最后一个完整段】`
         : '';
-    if (segmentBadge || truncationBadge || badge || revealBadge) {
-      payload.reason = [segmentBadge, truncationBadge, badge, revealBadge, payload.reason]
+    if (segmentBadge || truncationBadge || badge || revealBadge || withholdBadge) {
+      payload.reason = [
+        segmentBadge,
+        truncationBadge,
+        badge,
+        revealBadge,
+        withholdBadge,
+        payload.reason,
+      ]
         .filter(Boolean)
         .join(' ');
     }

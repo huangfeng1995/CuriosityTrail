@@ -531,6 +531,7 @@ function buildGroupRewriteInstruction({
   problemIds,
   weakIds = [],
   handoverDupIds = [],
+  mustWithholdIds = [],
   tail,
   nextHead,
   brief = null,
@@ -539,12 +540,19 @@ function buildGroupRewriteInstruction({
   const wanted = new Set(problemIds || []);
   const weak = new Set(weakIds || []);
   const dup = new Set(handoverDupIds || []);
+  const withhold = new Set(mustWithholdIds || []);
   const handoverBeat = brief && typeof brief.handoverBeat === 'string' ? brief.handoverBeat.trim() : '';
   const briefBlock = briefWriterBlock(brief);
   const revealLines = (mustReveal || []).map((fact) => `- ${fact}`);
   const problems = group.beats
-    .filter((b) => wanted.has(b.id) || weak.has(b.id) || dup.has(b.id))
+    .filter((b) => wanted.has(b.id) || weak.has(b.id) || dup.has(b.id) || withhold.has(b.id))
     .map((b) => {
+      if (withhold.has(b.id)) {
+        return (
+          `- ${b.id}：本拍只写形制细节与人物反应，不写制度结论，不替读者解释；` +
+          '删掉所有关于私辟/传诏/符传/逾制/该不该的判断句。'
+        );
+      }
       if (dup.has(b.id)) {
         return (
           `- ${b.id}：本章交付只发生一次，已在第 ${handoverBeat || '指定'} 拍完成；` +
@@ -987,6 +995,7 @@ async function rewriteMissingGroups({
   mergeScenes = true,
   brief = null,
   mustReveal = [],
+  mustWithholdIds = [],
   log = () => {},
   progress = () => {},
 }) {
@@ -1000,7 +1009,12 @@ async function rewriteMissingGroups({
 
   const weakIds = (coverage?.weak || []).map((w) => w.id);
   const dupIds = coverage?.handoverDuplicated || [];
-  const missingIds = [...(coverage?.missing || []), ...weakIds, ...dupIds];
+  const missingIds = [
+    ...(coverage?.missing || []),
+    ...weakIds,
+    ...dupIds,
+    ...(mustWithholdIds || []),
+  ];
   const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
   const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
 
@@ -1027,6 +1041,7 @@ async function rewriteMissingGroups({
       problemIds: factsOnly ? group.beatIds : (coverage?.missing || []),
       weakIds: factsOnly ? [] : weakIds,
       handoverDupIds: factsOnly ? [] : (coverage?.handoverDuplicated || []),
+      mustWithholdIds: factsOnly ? [] : (mustWithholdIds || []),
       tail: tailParagraphs(before || existingBody, 3),
       nextHead,
       brief,

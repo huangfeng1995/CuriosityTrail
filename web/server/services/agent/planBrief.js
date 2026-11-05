@@ -1183,6 +1183,81 @@ async function generatePlanBrief({ provider, systemPrompt, instruction, options 
   return { brief: null, raw: lastRaw, errors: lastErrors, reason: 'invalid', usage: lastUsage };
 }
 
+/**
+ * 制度词与结论词：判断「悬念有没有被解释掉」。
+ *
+ * 不靠模型打分：同一拍里同时出现两个制度词、并且出现一个结论词，
+ * 才判违规。只写符传形制、不给人「该不该/对不对」的结论，不会触发。
+ */
+const WITHHOLD_TERMS = ['私辟', '传诏', '符传', '逾制', '司空', '符节', '印玺'];
+const WITHHOLD_CONCLUSION_RE = /不该|不对|少见|没见过|反常|用不着|更不会|哪有|不合制/;
+
+/**
+ * 悬念自检：mustWithhold 项映射到拍，看正文有没有把结论讲出来。
+ *
+ * 规则是确定性的，证据句直接取自正文：
+ *   1. 把 brief 的 mustWithhold 项按关键词映射到拍；
+ *   2. 同一拍内出现 >=2 个制度词，且出现 >=1 个结论词；
+ *   3. 取含结论词的句子作为证据，逐字返回，供作者复核与定向重写。
+ *
+ * @param {Object} brief
+ * @param {string} body
+ * @param {Object} plan
+ * @returns {{applicable: boolean, total: number, violations: Array, itemBeats: Object}}
+ */
+function checkMustWithhold(brief, body, plan) {
+  const items = ((brief && brief.items) || []).filter((item) => item.kind === 'mustWithhold');
+  const beats = (plan && plan.beats) || [];
+  const paragraphs = splitBodyParagraphs(body);
+
+  if (!items.length || !beats.length || !paragraphs.length) {
+    return { applicable: false, total: items.length, violations: [], itemBeats: {} };
+  }
+
+  const ranges = paragraphRanges(beats, paragraphs.length);
+  const itemBeats = {};
+  for (const item of items) {
+    itemBeats[item.id] = beats
+      .filter((beat) => itemHit(item, beatHaystack(beat)))
+      .map((beat) => beat.id);
+  }
+
+  const violations = [];
+  for (let index = 0; index < beats.length; index += 1) {
+    const beat = beats[index];
+    const [from, to] = ranges[index];
+    const beatText = paragraphs.slice(from, to).join('\n');
+    if (!beatText) continue;
+
+    const terms = WITHHOLD_TERMS.filter((term) => beatText.includes(term));
+    if (terms.length < 2) continue;
+
+    const conclusionSentences = splitSentences(beatText).filter((sentence) =>
+      WITHHOLD_CONCLUSION_RE.test(sentence)
+    );
+    if (!conclusionSentences.length) continue;
+
+    const best =
+      conclusionSentences.find(
+        (sentence) => WITHHOLD_TERMS.filter((term) => sentence.includes(term)).length >= 2
+      ) || conclusionSentences[0];
+
+    const mapped = items
+      .filter((item) => (itemBeats[item.id] || []).includes(beat.id))
+      .map((item) => item.id);
+
+    violations.push({
+      id: beat.id,
+      sentence: best,
+      sentences: conclusionSentences,
+      terms,
+      itemIds: mapped.length ? mapped : items.map((item) => item.id),
+    });
+  }
+
+  return { applicable: true, total: items.length, violations, itemBeats };
+}
+
 module.exports = {
   KINDS,
   HARD_KINDS,
@@ -1197,5 +1272,7 @@ module.exports = {
   placeHandoverInPlan,
   handoverBeatId,
   findHandoverDuplicates,
+  checkMustWithhold,
+  WITHHOLD_TERMS,
   generatePlanBrief,
 };

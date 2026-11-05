@@ -389,6 +389,37 @@ test('缺拍只重写对应组，其他组正文原样保留', async () => {
   assert.match(rewritten.content, /章末抬出一口箱子/);
 });
 
+test('悬念违规只重写违规拍所在组，不整章重来', async () => {
+  const plan = makePlan(4);
+  const draftRunner = makeRunner([body('甲', 8), body('乙', 8)]);
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: draftRunner });
+
+  const beforeGroup = draft.groups[0].content;
+  const rewriteRunner = makeRunner(['重写这一组：\n\n' + body('乙改', 8, '章末抬出一口箱子。')]);
+
+  const rewritten = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups: draft.groups,
+    coverage: { covered: [], missing: [], weak: [] },
+    mustWithholdIds: ['B4'],
+    runSegment: rewriteRunner,
+    callCount: draft.callCount,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(rewriteRunner.seen.length, 1, '只对违规拍所在的组发起一次重写');
+  assert.strictEqual(rewriteRunner.seen[0].group.index, 1);
+  assert.strictEqual(rewritten.rewroteGroups, 1);
+  assert.match(
+    rewriteRunner.seen[0].instruction,
+    /B4：本拍只写形制细节与人物反应，不写制度结论，不替读者解释/
+  );
+  assert.match(rewriteRunner.seen[0].instruction, /只重写这一组/);
+  assert.strictEqual(rewritten.groups[0].content, beforeGroup, '违规拍之外的组不能被改写');
+  assert.match(rewritten.content, /甲第1段/, '第一组原样保留');
+  assert.match(rewritten.content, /乙改第1段/, '第二组换成重写版');
+});
+
 test('续写只补差额，不再按 105% 硬线裁剪正文', async () => {
   const plan = makePlan(4);
   const runner = makeRunner([

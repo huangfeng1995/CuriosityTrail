@@ -331,6 +331,13 @@ function buildRewriteInstruction(plan, coverage, mustReveal = [], handover = {})
       `以下拍已经重复交付，必须删掉完整形态，只保留预备动作：${dupIds.join('、')}。`
     );
   }
+  const withholdIds = (handover && handover.mustWithholdIds) || [];
+  for (const id of withholdIds) {
+    lines.push(
+      `- ${id}：本拍只写形制细节与人物反应，不写制度结论，不替读者解释；` +
+        '删掉所有关于私辟/传诏/符传/逾制/该不该的判断句。'
+    );
+  }
 
   for (const id of coverage.missing) {
     const beat = byId.get(id);

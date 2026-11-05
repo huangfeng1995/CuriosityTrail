@@ -24,6 +24,8 @@ const {
   placeHandoverInPlan,
   handoverBeatId,
   findHandoverDuplicates,
+  checkMustWithhold,
+  WITHHOLD_TERMS,
   generatePlanBrief,
 } = require('../services/agent/planBrief');
 const { validateBeatPlan } = require('../services/agent/beatPlan');
@@ -1024,4 +1026,133 @@ test('handover 拍号：门口交接拍不抢离场拍，交付落在 B7', () =>
   const brief = handoverBrief();
   const plan = departurePlan();
   assert.strictEqual(handoverBeatId(brief, plan), 'B7');
+});
+
+// ---- 悬念自检（后置、确定性）----
+
+/** 六拍计划，每拍一段权重；checkMustWithhold 只认段落切分与节拍字段。 */
+function withholdPlan() {
+  const beat = (id) => ({
+    id,
+    type: '行动',
+    goal: `${id}目标`,
+    obstacle: `${id}阻碍`,
+    cost: `${id}代价`,
+    delta: { variable: '处境', from: `${id}起点`, to: `${id}终点` },
+    infoGain: `${id}信息`,
+    paragraphs: 1,
+    endHook: `${id}钩子`,
+  });
+  return {
+    chapterGoal: '把符传送到曹操手上',
+    beats: ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].map(beat),
+  };
+}
+
+function withholdBrief() {
+  return {
+    items: [
+      {
+        id: 'MW1',
+        kind: 'mustWithhold',
+        text: '不得解释私辟为何要用符传、为何称传诏',
+        keywords: ['私辟', '符传', '传诏'],
+        source: '设定',
+        inferred: false,
+      },
+      {
+        id: 'MW2',
+        kind: 'mustWithhold',
+        text: '不得解释司空府征辟的越制之处',
+        keywords: ['司空', '逾制'],
+        source: '设定',
+        inferred: false,
+      },
+    ],
+  };
+}
+
+test('悬念自检：v17 A 原文「私辟 + 符传 + 不该」被判违规，证据句逐字返回', () => {
+  const body = [
+    '杨平把箱笼从车上搬下来，箱角磕在石阶上。',
+    '堂里点着两盏灯，灯芯剪得很短。',
+    '司马防让他先坐下，又让人把门合上。',
+    '家兵把符传放在案上，木牍边缘磨得发亮。',
+    '私辟的掾属，不该有符传；有了符传，也不该称传诏。',
+    '车帘外的风把灯焰压下去一截。',
+  ].join('\n');
+
+  const result = checkMustWithhold(withholdBrief(), body, withholdPlan());
+  assert.ok(result.applicable);
+  assert.strictEqual(result.total, 2);
+  assert.strictEqual(result.violations.length, 1, '只应命中含结论词的这一拍');
+  const violation = result.violations[0];
+  assert.strictEqual(violation.id, 'B5');
+  assert.ok(violation.terms.includes('私辟'));
+  assert.ok(violation.terms.includes('符传'));
+  assert.ok(violation.terms.includes('传诏'));
+  assert.ok(
+    violation.sentence.includes('不该有符传'),
+    `证据句必须逐字取自原文，实际：${violation.sentence}`
+  );
+});
+
+test('悬念自检：v17 B 原文「司空 + 私辟 + 用不着 + 更不会」被判违规', () => {
+  const body = [
+    '司马朗把文书摊在案上，印泥还没干透。',
+    '杨俊站在阶下，手一直拢在袖子里。',
+    '司空府是曹操的幕府，征辟掾属向来是私辟，发一道征辟的文书就够了，用不着符传，更不会称传诏。',
+    '杨平没有接话，只把目光落在文书边角。',
+    '门外的家兵换了岗，甲叶碰在一起响了一声。',
+    '车马在巷口等着，车轭上还挂着霜。',
+  ].join('\n');
+
+  const result = checkMustWithhold(withholdBrief(), body, withholdPlan());
+  assert.strictEqual(result.violations.length, 1);
+  const violation = result.violations[0];
+  assert.strictEqual(violation.id, 'B3');
+  assert.ok(
+    violation.sentence.includes('用不着符传，更不会称传诏'),
+    `证据句必须逐字取自原文，实际：${violation.sentence}`
+  );
+});
+
+test('悬念自检：只写形制、不写制度结论，不判违规', () => {
+  const body = [
+    '他把符传递过去，木牍边缘磨得发亮。',
+    '隶书小字一排排压着骑缝，墨色已经发灰。',
+    '堂上没人说话，只有灯芯爆了一下。',
+    '司马防把符传翻过来，看了一眼背面的刻痕。',
+    '门外有人咳了一声，脚步又远了。',
+    '杨平把箱笼重新扣上。',
+  ].join('\n');
+
+  const result = checkMustWithhold(withholdBrief(), body, withholdPlan());
+  assert.strictEqual(result.violations.length, 0, '只写形制不能误杀');
+});
+
+test('悬念自检：同一拍两个制度词但没有结论词，不判违规', () => {
+  const body = [
+    '符传是两片木牍，合起来骑缝处盖着司空府的印。',
+    '边角磨得发亮，穿绳的地方有一道旧裂。',
+    '杨平把符传翻过来，背面的刻痕比正面的字还深。',
+    '堂里两盏灯都剪得很短，光只照到案沿。',
+    '司马防把符传合上，手指在骑缝上按了一下。',
+    '车马在巷口等着，车轭上还挂着霜。',
+  ].join('\n');
+
+  const result = checkMustWithhold(withholdBrief(), body, withholdPlan());
+  assert.strictEqual(result.violations.length, 0, '两个制度词但无结论词不能误杀');
+});
+
+test('悬念自检：没有 mustWithhold 项时不适用，也不扫正文', () => {
+  const brief = { items: [{ id: 'L1', kind: 'loss', text: '交出犀角弓' }] };
+  const result = checkMustWithhold(
+    brief,
+    '私辟的掾属，不该有符传；有了符传，也不该称传诏。',
+    withholdPlan()
+  );
+  assert.strictEqual(result.applicable, false);
+  assert.strictEqual(result.violations.length, 0);
+  assert.ok(WITHHOLD_TERMS.includes('符传'), '制度词表可被外部复核');
 });
