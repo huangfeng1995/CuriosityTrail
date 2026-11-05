@@ -1487,6 +1487,14 @@ function mergeDerivedOpponent(brief, { instruction = '', settings = [], facts = 
 const INVARIANT_KEYWORD_WINDOW = 12;
 
 /**
+ * 「寄养起始年龄」的句子上下文：必须是在说进门/寄养这件事。
+ *
+ * 否则「这把弓是他十岁那年给的」会被「那年」这个锚词拉进寄养起始年龄，
+ * 把弓的赠予年龄误判成进门年龄。
+ */
+const FOSTER_ENTRY_RE = /进门|进府|到(我|这|府|家)|来(到|了|温县|司马|府)|寄养|领进|收养|收留|接来|住进|送(来|到)/;
+
+/**
  * 同章数值一致性检查。
  *
  * 只看有 numeric + unit + keywords 的不变项。每个数字按「离它最近的锚词」
@@ -1539,6 +1547,15 @@ function checkInvariantConsistency(brief, body, plan) {
           }
         }
         if (!best || numeric === best.invariant.numeric) continue;
+        // 寄养起始年龄只认进门/寄养语义的句子，避免把「十岁那年给的弓」算成进门年龄。
+        if (best.invariant.key === 'fosterStartAge' && !FOSTER_ENTRY_RE.test(sentence)) continue;
+        // 同一句里已经写明该不变项的期望值时，同单位的其他数字属于另一个量
+        // （如「七岁进门，今年十八」里的七岁不是年龄），不能反判成冲突。
+        const expectedStated = tokens.some((other) => {
+          if (other.invariant.unit !== token.invariant.unit) return false;
+          return parseNumberToken(other.match[1]) === best.invariant.numeric;
+        });
+        if (expectedStated) continue;
         const key = `${beat.id}|${best.invariant.key}|${token.text}`;
         if (seen.has(key)) continue;
         seen.add(key);

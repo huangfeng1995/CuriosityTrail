@@ -1266,6 +1266,32 @@ test('一致性自检：v17 B 原文「十五年/十年 vs 十一年」被抓到
   );
 });
 
+test('一致性自检：同一句里已写明期望年龄时，七岁不能反判成年龄冲突', () => {
+  const brief = {
+    invariants: [
+      { key: 'age', label: '年龄', value: '十八岁', numeric: 18, unit: '岁', keywords: ['今年', '十八岁'] },
+      { key: 'fosterStartAge', label: '寄养起始年龄', value: '七岁', numeric: 7, unit: '岁', keywords: ['进门', '那年'] },
+      { key: 'fosterYears', label: '寄养年数', value: '十一年', numeric: 11, unit: '年', keywords: ['住了'] },
+    ],
+  };
+  // 取自最终样本 B5：同一句里「七岁进门」「今年十八」都对，不能把七岁算成年龄冲突。
+  const body = '可这孩子在我这儿住了十一年，七岁进门，今年十八，我总得当着你的面，把他交出去。';
+  const result = checkInvariantConsistency(brief, body, { beats: [{ id: 'B5' }] });
+  assert.strictEqual(result.violations.length, 0);
+});
+
+test('一致性自检：赠弓的十岁那年不能算成寄养起始年龄', () => {
+  const brief = {
+    invariants: [
+      { key: 'fosterStartAge', label: '寄养起始年龄', value: '七岁', numeric: 7, unit: '岁', keywords: ['进门', '那年'] },
+    ],
+  };
+  // 取自最终样本 B5：这句在说弓是哪年给的，不是在说几岁进门。
+  const body = '这是司马防在他十岁那年给的，说男子汉该有张自己的弓。';
+  const result = checkInvariantConsistency(brief, body, { beats: [{ id: 'B5' }] });
+  assert.strictEqual(result.violations.length, 0);
+});
+
 // ---- 对手兜底（P4）----
 
 test('对手兜底：输入里有传车与时限时，从输入补出外部压力并写来源', () => {
