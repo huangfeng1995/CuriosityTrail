@@ -1374,11 +1374,16 @@ function mergeInvariants(brief, derived = []) {
   return { ...brief, invariants: Array.from(byKey.values()) };
 }
 
+/** 数值必须落在锚词的邻近范围内，否则「三年」会被「住了一夜」这种词误抓。 */
+const INVARIANT_KEYWORD_WINDOW = 12;
+
 /**
  * 同章数值一致性检查。
  *
- * 只看有 numeric + unit + keywords 的不变项：同一不变量在正文里出现另一个数，
- * 就判冲突。返回逐字证据句与所在拍，供分组重写定位。
+ * 只看有 numeric + unit + keywords 的不变项。每个数字按「离它最近的锚词」
+ * 归属到某一个不变项，再和该不变项的期望值比；锚词窗口外的数字不算。
+ * 这样既能抓到「六岁/七岁」「十二年/十一年」，又不会把「三年前」按到「住了一夜」上。
+ * 返回逐字证据句与所在拍，供分组重写定位。
  */
 function checkInvariantConsistency(brief, body, plan) {
   const invariants = ((brief && brief.invariants) || []).filter(
@@ -1400,24 +1405,42 @@ function checkInvariantConsistency(brief, body, plan) {
     if (!beatText) continue;
 
     for (const sentence of splitSentences(beatText)) {
+      const tokens = [];
       for (const invariant of invariants) {
-        if (!invariant.keywords.some((keyword) => sentence.includes(keyword))) continue;
         const pattern = new RegExp(`([一二三四五六七八九十百零〇两0-9]+)(${invariant.unit})`, 'g');
         for (const match of sentence.matchAll(pattern)) {
-          const actual = parseNumberToken(match[1]);
-          if (!Number.isInteger(actual) || actual === invariant.numeric) continue;
-          const key = `${beat.id}|${invariant.key}|${match[0]}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          violations.push({
-            beatId: beat.id,
-            key: invariant.key,
-            label: invariant.label,
-            expected: invariant.value,
-            actual: match[0],
-            sentence,
-          });
+          tokens.push({ invariant, match, index: match.index, text: match[0] });
         }
+      }
+
+      for (const token of tokens) {
+        const numeric = parseNumberToken(token.match[1]);
+        if (!Number.isInteger(numeric)) continue;
+        let best = null;
+        for (const invariant of invariants.filter((item) => item.unit === token.invariant.unit)) {
+          for (const keyword of invariant.keywords) {
+            let at = sentence.indexOf(keyword);
+            while (at >= 0) {
+              const distance = Math.abs(at - token.index);
+              if (distance <= INVARIANT_KEYWORD_WINDOW && (!best || distance < best.distance)) {
+                best = { invariant, distance };
+              }
+              at = sentence.indexOf(keyword, at + 1);
+            }
+          }
+        }
+        if (!best || numeric === best.invariant.numeric) continue;
+        const key = `${beat.id}|${best.invariant.key}|${token.text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        violations.push({
+          beatId: beat.id,
+          key: best.invariant.key,
+          label: best.invariant.label,
+          expected: best.invariant.value,
+          actual: token.text,
+          sentence,
+        });
       }
     }
   }

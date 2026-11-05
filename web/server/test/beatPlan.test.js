@@ -459,6 +459,57 @@ test('篇幅配比：模型给齐且合计接近 100 时保留原目标', () => 
   assert.deepStrictEqual(result.plan.beats.map((b) => b.wordShare), [10, 14, 30, 46]);
 });
 
+test('篇幅配比：按范文六段功能套用目标份额，识别不出的拍保留原份额', () => {
+  const goals = [
+    '杨平在雪地山中打猎，放走母鹿',
+    '两人下山回城，途中议论河内形势',
+    '杨平回城到家，交代身世与寄养旧事',
+    '父亲持符传突然到司马府',
+    '在门前告别，司马防托付给杨俊',
+    '杨平启程，登车离开温县',
+  ];
+  const base = makePlan().beats;
+  const plan = makePlan({
+    beats: [
+      ...base.map((beat, index) => ({ ...beat, goal: goals[index] })),
+      { ...base[3], id: 'B5', type: '决定', goal: goals[4] },
+      { ...base[3], id: 'B6', type: '决定', goal: goals[5] },
+    ],
+  });
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(result.plan.shareMissing, []);
+  assert.deepStrictEqual(
+    result.plan.beats.map((b) => [b.id, b.shareRole, b.wordShare]),
+    [
+      ['B1', 'opening', 9],
+      ['B2', 'discussion', 14],
+      ['B3', 'identity', 30],
+      ['B4', 'father', 15.5],
+      ['B5', 'farewell', 25],
+      ['B6', 'departure', 6.5],
+    ]
+  );
+});
+
+test('篇幅配比：同类功能有多拍时按段数分摊该功能总份额', () => {
+  const plan = makePlan({
+    beats: makePlan().beats.map((beat, index) => ({
+      ...beat,
+      goal: index === 2 || index === 3 ? '回城交代身世' : beat.goal,
+      paragraphs: index === 2 ? 6 : index === 3 ? 4 : beat.paragraphs,
+    })),
+  });
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, true);
+  const identity = result.plan.beats.filter((b) => b.shareRole === 'identity');
+  assert.deepStrictEqual(identity.map((b) => b.wordShare), [18, 12]);
+  assert.ok(
+    result.plan.shareMissing.includes('father') || result.plan.shareMissing.includes('opening'),
+    '未覆盖的功能要记在 shareMissing 里，不能静默'
+  );
+});
+
 test('计划校验拒绝：回城/身世并进过渡拍且份额低于 20%', () => {
   const plan = makePlan({
     beats: makePlan().beats.map((beat, index) => ({

@@ -41,8 +41,61 @@ const MAX_TOTAL_PARAGRAPHS = 80;
 const EMPTY_HOOKS = ['且听下回分解', '欲知后事', '下回分解'];
 
 /** 回城/身世是本章的承重拍：并进「过渡」拍且份额过低，等于把身世交代糊过去。 */
-const ARC_BEAT_RE = /回城|到家|进城|身世|寄养|旧事|年龄|籍贯|来历/;
+const ARC_BEAT_RE = /回城|到家|进城|身世|寄养|旧事|年龄|籍贯/;
 const ARC_MIN_SHARE = 20;
+
+/**
+ * 范文实测的六段功能配比（百分点）。
+ *
+ * 按拍的功能识别，不按拍序硬编码：模型可以写 5–8 拍，但每一类功能的
+ * 目标份额是固定的；同类功能有多拍时按计划段数分摊。
+ */
+const SHARE_ROLES = [
+  { role: 'departure', label: '启程', target: 6.5, re: /启程|出城|上路|动身|登车|上车|离开温县|随父亲登/ },
+  { role: 'farewell', label: '告别托付', target: 25, re: /告别|辞行|拜别|道别|托付|嘱|交给/ },
+  { role: 'father', label: '父至符传', target: 15.5, re: /符传|传诏|征辟|赴召/ },
+  { role: 'discussion', label: '下山议论', target: 14, re: /下山|途中|路上|议论|形势/ },
+  { role: 'identity', label: '回城身世', target: 30, re: ARC_BEAT_RE },
+  { role: 'opening', label: '开篇', target: 9, re: /山中|雪地|打猎|猎|母鹿|放走|开篇/ },
+];
+
+function classifyShareRole(beat) {
+  const narrative = beatNarrative(beat);
+  const hit = SHARE_ROLES.find((rule) => rule.re.test(narrative));
+  return hit ? hit.role : '';
+}
+
+/**
+ * 按功能给每拍套用范文配比。
+ *
+ * 同类功能有多拍时按 paragraphs 权重分摊该功能的总份额；
+ * 识别不出的拍保留模型/段落折算出来的原始份额。
+ */
+function applyReferenceShares(beats) {
+  const byRole = new Map();
+  for (const beat of beats) {
+    beat.shareRole = classifyShareRole(beat);
+    if (!beat.shareRole) continue;
+    const rows = byRole.get(beat.shareRole) || [];
+    rows.push(beat);
+    byRole.set(beat.shareRole, rows);
+  }
+
+  for (const rule of SHARE_ROLES) {
+    const rows = byRole.get(rule.role);
+    if (!rows || !rows.length) continue;
+    const totalParagraphs = rows.reduce((sum, beat) => sum + Math.max(1, beat.paragraphs || 1), 0);
+    for (const beat of rows) {
+      const weight = Math.max(1, beat.paragraphs || 1);
+      beat.wordShare = Math.round(rule.target * (weight / totalParagraphs) * 10) / 10;
+    }
+  }
+
+  const shareMissing = SHARE_ROLES.filter((rule) => !(byRole.get(rule.role) || []).length).map(
+    (rule) => rule.role
+  );
+  return shareMissing;
+}
 
 /** 完整交付的机械识别：把某人交给某人。预备动作（递、接、握住手）不算。 */
 const DELIVERY_FULL_RE = /把[\u4e00-\u9fa5]{2,4}交给[\u4e00-\u9fa5]{2,4}/;
@@ -218,7 +271,11 @@ function validateBeatPlan(candidate) {
     } else {
       beat.wordShare = Math.round((100 / Math.max(1, beats.length)) * 10) / 10;
     }
+    beat.plannedShare = beat.wordShare;
   }
+
+  // 范文配比优先：识别出功能的拍改用实测目标，识别不出的保留原份额。
+  const shareMissing = applyReferenceShares(beats);
 
   if (beats.length && (totalParagraphs < MIN_TOTAL_PARAGRAPHS || totalParagraphs > MAX_TOTAL_PARAGRAPHS)) {
     errors.push(`全章段落数必须在 ${MIN_TOTAL_PARAGRAPHS}–${MAX_TOTAL_PARAGRAPHS} 之间，收到 ${totalParagraphs}`);
@@ -227,11 +284,12 @@ function validateBeatPlan(candidate) {
     errors.push('mainType 必须与某一个节拍的 type 相同');
   }
 
-  // 回城/身世不能并进过渡拍：份额低于 20% 说明这一拍只是顺带提一句。
+  // 回城/身世不能并进过渡拍：计划份额低于 20% 说明这一拍只是顺带提一句。
   for (const beat of beats) {
-    if (beat.type === '过渡' && ARC_BEAT_RE.test(beatNarrative(beat)) && beat.wordShare < ARC_MIN_SHARE) {
+    const planned = Number.isFinite(beat.plannedShare) ? beat.plannedShare : beat.wordShare;
+    if (beat.type === '过渡' && ARC_BEAT_RE.test(beatNarrative(beat)) && planned < ARC_MIN_SHARE) {
       errors.push(
-        `${beat.id}把回城/身世并进了过渡拍（目标份额仅 ${beat.wordShare}%，应 ≥${ARC_MIN_SHARE}%），` +
+        `${beat.id}把回城/身世并进了过渡拍（计划份额仅 ${planned}%，应 ≥${ARC_MIN_SHARE}%），` +
           '回城与身世必须单独成拍'
       );
     }
@@ -259,6 +317,7 @@ function validateBeatPlan(candidate) {
       mainType,
       beats,
       totalParagraphs,
+      shareMissing,
     },
     errors: [],
   };
