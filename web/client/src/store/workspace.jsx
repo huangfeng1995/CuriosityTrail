@@ -8,7 +8,7 @@ import React, {
   useMemo,
 } from 'react';
 import api from '../api/client';
-import { convertBlock as convertBlockData } from '../components/Editor/blocks';
+import { convertBlock as convertBlockData, splitBlockForMark } from '../components/Editor/blocks';
 
 /**
  * 工作区全局状态。
@@ -332,6 +332,23 @@ export function WorkspaceProvider({ children }) {
     [pushHistory]
   );
 
+  /**
+   * 按选区重标块类型（把一段正文里的某句标成对白/独白）。
+   *
+   * 中间可能切出三块，但撤销必须是一步——三次 insert 会让作者按三次 ⌘Z 才回到原样。
+   * 所以这里一次性算好整组 blocks，只记一个撤销点。
+   */
+  const markBlock = useCallback(
+    (id, start, end, type) => {
+      const next = splitBlockForMark(stateRef.current.blocks, id, start, end, type);
+      if (!next) return;
+      dirtyRef.current = true;
+      pushHistory(stateRef.current.blocks);
+      dispatch({ type: 'blocks/set', blocks: next });
+    },
+    [pushHistory]
+  );
+
   const moveBlock = useCallback(
     (id, offset) => {
       dirtyRef.current = true;
@@ -414,6 +431,7 @@ export function WorkspaceProvider({ children }) {
       insertBlock,
       removeBlock,
       convertBlock,
+      markBlock,
       moveBlock,
       undo,
       redo,
@@ -428,6 +446,7 @@ export function WorkspaceProvider({ children }) {
       insertBlock,
       removeBlock,
       convertBlock,
+      markBlock,
       moveBlock,
       undo,
       redo,

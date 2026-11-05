@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Button, Space, message, Modal, Input, Tooltip } from 'antd';
 import { SaveOutlined, UndoOutlined, RedoOutlined, HistoryOutlined } from '@ant-design/icons';
 import { Maximize2, Minimize2 } from 'lucide-react';
@@ -7,6 +14,7 @@ import { useFocus } from '../../store/focus';
 import { createBlock } from './blocks';
 import { collectCriticFindings } from '../Assistant/findings';
 import { countBlockWords, formatWords } from '../../utils/wordCount';
+import { getTextareaSelectionRect, placeSelectionToolbar } from '../../utils/selectionRect';
 import Block from './Block';
 import BlockPalette from './BlockPalette';
 import BlockToolbar from './BlockToolbar';
@@ -24,6 +32,19 @@ const SAVE_LABEL = {
   error: '保存失败',
 };
 
+// 位置没变就不要 setState，否则滚动时每一帧都重渲染整段正文。
+function sameToolbarPos(a, b) {
+  if (!a || !b) return a === b;
+  return (
+    a.top === b.top &&
+    a.left === b.left &&
+    a.clamped === b.clamped &&
+    a.ready === b.ready &&
+    a.visible === b.visible &&
+    a.menuUp === b.menuUp
+  );
+}
+
 /**
  * 章节块编辑器。
  *
@@ -39,6 +60,7 @@ export default function ChapterEditor() {
     insertBlock,
     removeBlock,
     convertBlock,
+    markBlock,
     moveBlock,
     undo,
     redo,
@@ -51,8 +73,18 @@ export default function ChapterEditor() {
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [activeFindingKey, setActiveFindingKey] = useState('');
   const [toolbarPos, setToolbarPos] = useState(null);
+  // 工具条的实际尺寸：按钮增减、窄屏折行都会变，位置要按真实尺寸算。
+  const [toolbarSize, setToolbarSize] = useState({ width: 0, height: 0 });
   const [historyOpen, setHistoryOpen] = useState(false);
   const editorRef = useRef(null);
+  // 工具条挂在 .ct-editor 上（不随正文滚动），坐标以它为原点。
+  const frameRef = useRef(null);
+  const toolbarRef = useRef(null);
+  const toolbarRoRef = useRef(null);
+  // 选区所在块的类型：工具条据此决定「标记」能不能用、当前类型那一项是否置灰。
+  const selectedBlockType = selection
+    ? blocks.find((b) => b.id === selection.blockId)?.type
+    : '';
   // 放不下三栏时（工作区改成抽屉布局）没有侧栏可藏，专注模式不成立。
   const isNarrow = useIsNarrow();
   const { focusMode, enterFocus, exitFocus } = useFocus();
@@ -91,30 +123,149 @@ export default function ChapterEditor() {
     );
   }, []);
 
+  // 量工具条自身的实际尺寸。窄屏折行、块类型变化导致「标记」按钮增减时，
+  // 高度都会变；定位必须按真实尺寸算，不能假设固定 33px。
+  // 用回调 ref：工具条是按需挂载的，effect 依赖 selection 时会在「已选中但还没挂载」
+  // 的那一帧错过它，导致尺寸一直是 0、工具条永远不显示。
+  const bindToolbar = useCallback((el) => {
+    if (toolbarRoRef.current) {
+      toolbarRoRef.current.disconnect();
+      toolbarRoRef.current = null;
+    }
+    toolbarRef.current = el;
+    if (!el) return;
+    const sync = () => {
+      const next = { width: el.offsetWidth, height: el.offsetHeight };
+      setToolbarSize((prev) =>
+        prev.width === next.width && prev.height === next.height ? prev : next
+      );
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    toolbarRoRef.current = ro;
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (toolbarRoRef.current) toolbarRoRef.current.disconnect();
+    },
+    []
+  );
+
   // 选区变化时，计算工具条的浮层位置
-  useEffect(() => {
+  //
+  // 三件事必须对齐，否则工具条会「看着没反应」：
+  //
+  // 1) 贴的是选区，不是整块。工具条要浮在作者刚选中的那几行上方；
+  //    贴整块的话，长段落里选中间几句，工具条会飘到段首，压住不相干的正文。
+  //
+  // 2) 工具条挂在 .ct-editor 上，而不是 .ct-editor-scroll 里。
+  //    挂在滚动容器里看似省事，但绝对定位元素会一起被滚动，还会把自己
+  //    算进 scrollHeight（工具条越靠下，滚动条越长），造成位置反馈漂移；
+  //    挂在不滚动的外层，坐标只跟「可见窗口」有关，滚动时重算一次即可。
+  //
+  // 3) 选区滚出可视区就不显示，别贴边飘在无关正文上。
+  //    上下都放不下时贴边夹取（见 placeSelectionToolbar）。
+  const placeToolbar = useCallback(() => {
+    if (!selection) return null;
+    const host = editorRef.current;
+    const frame = frameRef.current;
+    const el = host?.querySelector(`[data-block-id="${selection.blockId}"]`);
+    if (!host || !frame || !el) return null;
+
+    const ta = el.querySelector('textarea');
+    const selRect = ta
+      ? getTextareaSelectionRect(ta, selection.start, selection.end)
+      : null;
+
+    // 量不到选区（少数字体/结构）就退回整块的位置，至少别不显示。
+    const rect = selRect || el.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    const frameRect = frame.getBoundingClientRect();
+
+    // 统一换算成 .ct-editor 坐标：选区矩形、滚动区可见范围都在同一套坐标里。
+    const viewport = {
+      top: hostRect.top - frameRect.top,
+      bottom: hostRect.bottom - frameRect.top,
+      left: hostRect.left - frameRect.left,
+      right: hostRect.right - frameRect.left,
+    };
+    const local = {
+      top: rect.top - frameRect.top,
+      bottom: rect.bottom - frameRect.top,
+      left: rect.left - frameRect.left,
+    };
+
+    const pos = placeSelectionToolbar({
+      selection: local,
+      viewport,
+      size: toolbarSize,
+    });
+
+    return {
+      ...pos,
+      ready: toolbarSize.height > 0,
+      // 工具条离可视区下沿不足一个二级菜单的高度时，菜单改为向上展开，
+      // 否则「换语气 / 标记」里的小菜单会被遮住，看得到点不到。
+      menuUp:
+        pos.visible &&
+        toolbarSize.height > 0 &&
+        pos.top + toolbarSize.height + 180 > viewport.bottom,
+    };
+  }, [selection, toolbarSize.width, toolbarSize.height]);
+
+  const applyToolbarPos = useCallback(() => {
+    const next = placeToolbar();
+    setToolbarPos((prev) => (sameToolbarPos(prev, next) ? prev : next));
+  }, [placeToolbar]);
+
+  // 布局阶段算，赶在绘制之前落位；尺寸还没量到时先隐藏，避免露出一帧错误位置。
+  useLayoutEffect(() => {
     if (!selection) {
       setToolbarPos(null);
       return;
     }
-    const el = document.querySelector(`[data-block-id="${selection.blockId}"]`);
-    if (!el) {
-      setToolbarPos(null);
-      return;
-    }
-    const rect = el.getBoundingClientRect();
-    const host = editorRef.current?.getBoundingClientRect();
-    if (!host) return;
+    applyToolbarPos();
+  }, [applyToolbarPos, selection]);
 
-    setToolbarPos({
-      top: rect.top - host.top - 40,
-      left: Math.max(0, rect.left - host.left + 40),
-    });
-  }, [selection]);
+  // 工具条不随内容滚动，正文一滚就要重算：选区跟着正文走，工具条跟着选区走。
+  useEffect(() => {
+    if (!selection) return undefined;
+    const host = editorRef.current;
+    if (!host) return undefined;
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(applyToolbarPos);
+    };
+    host.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      host.removeEventListener('scroll', onScroll);
+    };
+  }, [selection, applyToolbarPos]);
+
+  // 窗口或栏宽变化：重新夹取，避免工具条被挤出可视区。
+  useEffect(() => {
+    if (!selection) return undefined;
+    const host = editorRef.current;
+    if (!host) return undefined;
+    const ro = new ResizeObserver(applyToolbarPos);
+    ro.observe(host);
+    window.addEventListener('resize', applyToolbarPos);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', applyToolbarPos);
+    };
+  }, [selection, applyToolbarPos]);
 
   // 点击编辑区空白处收起工具条
   useEffect(() => {
     const onClick = (e) => {
+      // 工具条已经挪到 .ct-editor 外层（不再被正文滚动带走），
+      // 点它时必须单独豁免，否则 mousedown 会先清空选区、按钮的 click 来不及执行。
+      if (toolbarRef.current && toolbarRef.current.contains(e.target)) return;
       if (editorRef.current && !editorRef.current.contains(e.target)) {
         dispatch({ type: 'selection/set', selection: null });
       }
@@ -159,6 +310,21 @@ export default function ChapterEditor() {
       setActiveBlockId(block.id);
     },
     [blocks.length, insertBlock]
+  );
+
+  /**
+   * 行内标记：把选区标成正文 / 对白 / 独白。
+   *
+   * 拆块逻辑在 store 里，这里只负责把选区坐标递过去再收起工具条——
+   * 标记完选区就失效了，留着工具条会让作者以为还能对旧选区继续操作。
+   */
+  const handleMark = useCallback(
+    (type) => {
+      if (!selection) return;
+      markBlock(selection.blockId, selection.start, selection.end, type);
+      dispatch({ type: 'selection/set', selection: null });
+    },
+    [selection, markBlock, dispatch]
   );
 
   /**
@@ -264,7 +430,7 @@ export default function ChapterEditor() {
   const wordCount = countBlockWords(blocks);
 
   return (
-    <div className="ct-editor">
+    <div ref={frameRef} className="ct-editor">
       {/* 章节头 */}
       <header className="ct-editor-head">
         <div className="ct-editor-head-row">
@@ -368,16 +534,21 @@ export default function ChapterEditor() {
 
           <BlockPalette onAdd={(type) => handleAdd(type)} />
         </div>
-
-        {toolbarPos && (
-          <BlockToolbar
-            selection={selection}
-            position={toolbarPos}
-            onRun={runInline}
-            onClose={() => dispatch({ type: 'selection/set', selection: null })}
-          />
-        )}
       </div>
+
+      {/* 选区工具条挂在编辑器外层，不随正文滚动，也不进文档流、不占高度 */}
+      {selection && toolbarPos && (
+        <BlockToolbar
+          selection={selection}
+          blockType={selectedBlockType}
+          position={toolbarPos}
+          menuUp={toolbarPos?.menuUp}
+          toolbarRef={bindToolbar}
+          onRun={runInline}
+          onMark={handleMark}
+          onClose={() => dispatch({ type: 'selection/set', selection: null })}
+        />
+      )}
 
       <VersionHistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </div>

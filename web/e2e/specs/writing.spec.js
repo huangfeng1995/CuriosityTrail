@@ -55,4 +55,35 @@ test.describe('章节写作', () => {
       expect(chapter.title).toBe('E2E 改过的标题');
     }).toPass({ timeout: 15000 });
   });
+
+  test('选中段中一句可标为对白，一次撤销还原', async ({ page }) => {
+    const text = page.locator('textarea[placeholder="正文…"]');
+    await text.fill('第一句。第二句。第三句。');
+
+    // textarea 是自绘内容，没有 DOM Range：设字符下标后补一对鼠标事件，
+    // React 的 onSelect 是靠 mousedown/mouseup 这一路构造出来的，原生 select 事件触发不了。
+    await text.evaluate((el) => {
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      el.focus();
+      el.setSelectionRange(4, 8);
+      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    });
+
+    await expect(page.locator('.ct-inline-toolbar')).toBeVisible();
+    await button(page, '标记').click();
+    await page.locator('.ct-tone-menu').locator('button', { hasText: '对白' }).click();
+
+    // 前段 / 对白 / 后段：原段落被切成三块，对白块带说话人输入框
+    await expect(page.locator('[data-block-id]')).toHaveCount(3);
+    const blocks = page.locator('[data-block-id]');
+    await expect(blocks.nth(0).locator('textarea')).toHaveValue('第一句。');
+    await expect(blocks.nth(1).locator('input[placeholder="说话人"]')).toBeVisible();
+    await expect(blocks.nth(1).locator('textarea')).toHaveValue('第二句。');
+    await expect(blocks.nth(2).locator('textarea')).toHaveValue('第三句。');
+
+    // 一组拆块只记一个撤销点：按一次就回到原段落
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+    await expect(page.locator('[data-block-id]')).toHaveCount(1);
+    await expect(text).toHaveValue('第一句。第二句。第三句。');
+  });
 });

@@ -1480,6 +1480,8 @@ body.ct-resizing * {
   height: 100%;
   display: flex;
   flex-direction: column;
+  /* 选区工具条的定位参照：挂在编辑器外层，不跟着正文滚动。 */
+  position: relative;
 }
 
 /* ---------- 章节头 ---------- */
@@ -1979,6 +1981,10 @@ body.ct-resizing * {
   align-items: center;
   gap: 2px;
   padding: 4px;
+  /* 窄屏放不下一整排按钮时折行，而不是顶出正文栏外被裁掉。
+     宽度上限跟着滚动容器走，实际尺寸由组件量出来后再定位。 */
+  flex-wrap: wrap;
+  max-width: calc(100% - 16px);
   background: var(--ink-0);
   border-radius: 8px;
   box-shadow: var(--shadow-float);
@@ -2024,6 +2030,11 @@ body.ct-resizing * {
 }
 .ct-tone-menu .ct-inline-btn {
   text-align: left;
+}
+/* 工具条贴近可视区下沿时，二级菜单向上展开，避免被滚动容器裁掉。 */
+.ct-inline-toolbar.is-menu-up .ct-tone-menu {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 /* ---------- 建议气泡 ---------- */
