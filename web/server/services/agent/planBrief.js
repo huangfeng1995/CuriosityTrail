@@ -119,12 +119,15 @@ const HANDOVER_OBJECT_RE = /赠|送给|交给|留给|塞给|递|带上|收着/;
  */
 const HARD_KINDS = ['loss', 'mustPresent', 'mustWithhold'];
 
+/** 悬念条目可归属的场景（与节拍 function 枚举一致），也接受具体拍号 B3。 */
+const MW_SLOT_FUNCTIONS = ['opening', 'discussion', 'identity', 'father', 'farewell', 'departure'];
+
 const MAX_ITEMS_PER_KIND = 6;
 const MAX_KEYWORDS = 6;
 
 const BRIEF_PROMPT = `你是章节分场 brief 规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 任务：根据本章大纲、作品大纲、人物卡、设定、素材与上一章结尾，回答「这一章必须发生哪些动作」。
-输出格式：{"items":[{"kind":"loss|mustPresent|mustWithhold|mustReveal|evidence|opponent","text":"具体动作，写到物、写到人","keywords":["能在正文或节拍表里被逐字命中的词"],"source":"本章大纲|作品大纲|人物卡|设定|素材|上一章","inferred":false,"handover":false}],
+输出格式：{"items":[{"kind":"loss|mustPresent|mustWithhold|mustReveal|evidence|opponent","text":"具体动作，写到物、写到人","keywords":["能在正文或节拍表里被逐字命中的词"],"slot":"opening|discussion|identity|father|farewell|departure","source":"本章大纲|作品大纲|人物卡|设定|素材|上一章","inferred":false,"handover":false}],
 "invariants":[{"key":"age|hometown|fosterStartAge|fosterYears|keyItemOwner","value":"正文里该怎么说，如十八岁/河内获嘉/十一年","numeric":18,"unit":"岁|年","keywords":["正文里能逐字命中的定位词"],"source":"人物卡|设定|素材|背景事实","inferred":false}]}
 六类含义：
 - loss：不可逆损失/交出物/说出口的话/做出的决定。必须具体到物，如「交出犀角弓」。
@@ -132,6 +135,9 @@ const BRIEF_PROMPT = `你是章节分场 brief 规划器。只输出一个 JSON 
   只有「把主角托付给他人、或养父/师父等长辈在告别时交付」的场景，才加 "handover":true，
   表示此人必须当场交付一句可引用的话或一件物；人物只是到场、只是接走主角，不要加。
 - mustWithhold：本章必须隐瞒、不得解释的信息，防止人物把悬念解释掉。写清「不得解释什么」。
+  每条必须填 slot：这条信息属于哪个场景（opening 开场 / discussion 议论 / identity 身世 /
+  father 长辈到场 / farewell 告别 / departure 启程），按语义归属填，不要按关键词猜；
+  这条 slot 决定正文自检在哪些拍里查「有没有把悬念解释掉」，留空等于没有守卫目标。
 - mustReveal：必须交代的背景信息，如年龄、籍贯、寄养原因。每项要能一句话说清。
 - evidence：物证或制度异常，如符传形制、逾制信号。
 - opponent：本章对抗、牵制主角的具体外部主体，写成「谁/哪个势力 + 用什么方式阻碍」，
@@ -256,6 +262,18 @@ function normalizeItem(raw, index, dropped) {
     ? text(raw.handoverKind)
     : '';
 
+  /**
+   * 悬念条目的场景归属。
+   *
+   * mustWithhold 的关键词经常落不到节拍表（「逾制」「私辟」在计划里根本不会写），
+   * 只按关键词判覆盖会让整条悬念没有守卫目标。这里允许模型按语义给出 slot，
+   * 供覆盖校验与正文自检定位；关键词只作为次要兜底。
+   */
+  const rawSlot = text(raw.slot);
+  const slot = kind === 'mustWithhold' && (MW_SLOT_FUNCTIONS.includes(rawSlot) || /^B\d+$/i.test(rawSlot))
+    ? rawSlot
+    : '';
+
   return {
     id: `${kind[0].toUpperCase()}${index + 1}`,
     kind,
@@ -264,6 +282,7 @@ function normalizeItem(raw, index, dropped) {
     source: inferred && !source ? 'inferred' : source,
     inferred,
     handover,
+    ...(slot ? { slot } : {}),
     ...(handover ? { to: handoverTo, handoverKind, once: true } : {}),
   };
 }
@@ -703,17 +722,96 @@ function openingOpponentCoverage(brief, plan) {
   return { status, opponents, openingBeatId, obstacle, missing };
 }
 
+/**
+ * 悬念条目归到哪几拍。
+ *
+ * 关键词不可靠：A3 的 MW1 关键词是「逾制/私辟」，节拍表里一个字都不会出现，
+ * 于是整条悬念被判未覆盖，正文自检也就没有映射目标。
+ * 这里按语义归属：先认 brief 显式 slot（opening/discussion/... 或 B3），
+ * 再按条目文本与各拍叙述共享的最长短语定场景（共享词在过半拍都出现的不算）。
+ *
+ * @param {Object} item mustWithhold 条目
+ * @param {Array<Object>} beats
+ * @returns {{beats: Array<Object>, term: string}}
+ */
+function withholdSceneBeats(item, beats) {
+  const list = Array.isArray(beats) ? beats.filter((beat) => beat && typeof beat === 'object') : [];
+  const slot = text(item && item.slot);
+  if (slot) {
+    const bySlot = list.filter(
+      (beat) => (beat.function && beat.function === slot) || text(beat.id).toLowerCase() === slot.toLowerCase()
+    );
+    if (bySlot.length) return { beats: bySlot, term: slot };
+  }
+
+  const narratives = list.map((beat) => beatNarrative(beat));
+  if (!narratives.length) return { beats: [], term: '' };
+  const source = text(item && item.text).replace(/\s+/g, '');
+  const seen = new Map();
+  const chars = Array.from(source);
+  for (let len = 4; len >= 2; len -= 1) {
+    for (let i = 0; i + len <= chars.length; i += 1) {
+      const term = chars.slice(i, i + len).join('');
+      if (/[，。、；：？！,.;:?!「」“”（）()]/u.test(term)) continue;
+      const hits = [];
+      narratives.forEach((narrative, index) => {
+        if (narrative.includes(term)) hits.push(index);
+      });
+      // 过半拍都出现的短语是通用词（人名、主角称呼），不能拿来定位场景。
+      if (!hits.length || hits.length > Math.floor(list.length / 2)) continue;
+      const prev = seen.get(term);
+      if (!prev || prev.length > len) seen.set(term, { len, hits });
+    }
+  }
+
+  let best = 0;
+  const beatSet = new Set();
+  for (const { len, hits } of seen.values()) {
+    if (len > best) {
+      best = len;
+      beatSet.clear();
+      hits.forEach((index) => beatSet.add(index));
+    } else if (len === best) {
+      hits.forEach((index) => beatSet.add(index));
+    }
+  }
+  const terms = Array.from(seen.entries()).find(([, info]) => info.len === best);
+  return { beats: Array.from(beatSet).map((index) => list[index]), term: terms ? terms[0] : '' };
+}
+
 function briefCoverage(brief, plan) {
   const hard = groupByKind(brief, HARD_KINDS).filter((item) => item.handover !== true);
+  // 悬念不走关键词覆盖：它要由 withholdSceneBeats 按场景归属单独判。
+  const nonWithhold = hard.filter((item) => item.kind !== 'mustWithhold');
   const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
   const haystacks = beats.map(beatHaystack);
 
   const covered = [];
   const missing = [];
-  for (const item of hard) {
+  for (const item of nonWithhold) {
     const hit = haystacks.some((haystack) => itemHit(item, haystack));
     if (hit) covered.push(item.id);
     else missing.push({ id: item.id, kind: item.kind, text: item.text });
+  }
+
+  // ---- 悬念：按场景归属，不按关键词；归不到任何拍的写 withhold:unmapped ----
+  const withholds = groupByKind(brief, ['mustWithhold']);
+  const withholdUnmapped = [];
+  for (const item of withholds) {
+    const scene = withholdSceneBeats(item, beats);
+    if (scene.beats.length) {
+      covered.push(item.id);
+    } else {
+      missing.push({
+        id: item.id,
+        kind: 'mustWithhold',
+        text: item.text,
+        slot: item.slot || '',
+        unmapped: true,
+        missingParts: ['没有可归属的场景'],
+      });
+      withholdUnmapped.push(item.id);
+    }
   }
 
   // ---- 开场对手：只认 function=opening 拍（无 function 的老表退回第一拍）的 obstacle ----
@@ -766,6 +864,7 @@ function briefCoverage(brief, plan) {
     opponent,
     openingBeatId: opponentCoverage.openingBeatId,
     handover: handoverStatus,
+    withholdUnmapped,
   };
 }
 
@@ -1743,74 +1842,114 @@ const WITHHOLD_TERMS = ['私辟', '传诏', '符传', '逾制', '司空', '符�
 const WITHHOLD_CONCLUSION_RE = /不该|不对|少见|没见过|反常|用不着|更不会|哪有|不合制|不发|不称|岂能|怎么会/;
 
 /**
- * 悬念自检：mustWithhold 项映射到拍，看正文有没有把结论讲出来。
+ * 悬念自检：mustWithhold 项按场景归属到拍，再逐段找「制度词 + 结论词」。
  *
- * 规则是确定性的，证据句直接取自正文：
- *   1. 把 brief 的 mustWithhold 项按关键词映射到拍；
- *   2. 同一拍内出现 >=2 个制度词，且出现 >=1 个结论词；
- *   3. 取含结论词的句子作为证据，逐字返回，供作者复核与定向重写。
+ * 规则是确定性的，证据直接取自正文：
+ *   1. 条目按 slot / 语义归属映射到拍（不按关键词；关键词落空不等于没覆盖）；
+ *   2. 只查被映射到的拍，逐段扫描；
+ *   3. 同一段出现 >=1 个制度词，且出现 >=1 个结论词，判违规；
+ *   4. 证据段与证据句逐字返回，供作者复核与定向重写；
+ *   5. 归不到任何拍（或 brief 根本没有 mustWithhold）时 passed=false，
+ *      不能让「0 条违规」被读成「检查通过」。
  *
  * @param {Object} brief
  * @param {string} body
  * @param {Object} plan
- * @returns {{applicable: boolean, total: number, violations: Array, itemBeats: Object}}
+ * @returns {{applicable: boolean, total: number, violations: Array, itemBeats: Object,
+ *            unmapped: Array<string>, passed: boolean, reason: string}}
  */
 function checkMustWithhold(brief, body, plan) {
+  const hasBrief = Boolean(brief && Array.isArray(brief.items) && brief.items.length);
   const items = ((brief && brief.items) || []).filter((item) => item.kind === 'mustWithhold');
   const beats = (plan && plan.beats) || [];
   const paragraphs = splitBodyParagraphs(body);
 
-  if (!items.length || !beats.length || !paragraphs.length) {
-    return { applicable: false, total: items.length, violations: [], itemBeats: {} };
+  if (!hasBrief) {
+    return {
+      applicable: false,
+      total: 0,
+      violations: [],
+      itemBeats: {},
+      unmapped: [],
+      passed: false,
+      reason: 'no_brief',
+    };
+  }
+  if (!beats.length || !paragraphs.length) {
+    return {
+      applicable: false,
+      total: items.length,
+      violations: [],
+      itemBeats: {},
+      unmapped: [],
+      passed: false,
+      reason: 'no_body',
+    };
+  }
+  if (!items.length) {
+    // 没有悬念条目就没有映射目标，不能报「0 违规 = 通过」。
+    return {
+      applicable: true,
+      total: 0,
+      violations: [],
+      itemBeats: {},
+      unmapped: ['none'],
+      passed: false,
+      reason: 'brief 未列出 mustWithhold',
+    };
   }
 
   const ranges = paragraphRanges(beats, paragraphs.length);
   const itemBeats = {};
   for (const item of items) {
-    itemBeats[item.id] = beats
-      .filter((beat) => itemHit(item, beatHaystack(beat)))
-      .map((beat) => beat.id);
+    itemBeats[item.id] = withholdSceneBeats(item, beats).beats.map((beat) => beat.id);
   }
+  const unmapped = items.filter((item) => !(itemBeats[item.id] || []).length).map((item) => item.id);
 
   const violations = [];
   for (let index = 0; index < beats.length; index += 1) {
     const beat = beats[index];
-    const [from, to] = ranges[index];
-    const beatText = paragraphs.slice(from, to).join('\n');
-    if (!beatText) continue;
-
-    const terms = WITHHOLD_TERMS.filter((term) => beatText.includes(term));
-    if (terms.length < 2) continue;
-
-    const conclusionSentences = splitSentences(beatText).filter((sentence) =>
-      WITHHOLD_CONCLUSION_RE.test(sentence)
-    );
-    // 证据句必须自己带制度词：拍内两个制度词散在不同段落、结论句只说
-    // 「静得不对」「不该问」，不是在解释制度，不能算解释掉悬念。
-    const evidenceSentences = conclusionSentences.filter((sentence) =>
-      WITHHOLD_TERMS.some((term) => sentence.includes(term))
-    );
-    if (!evidenceSentences.length) continue;
-
-    const best =
-      evidenceSentences.find(
-        (sentence) => WITHHOLD_TERMS.filter((term) => sentence.includes(term)).length >= 2
-      ) || evidenceSentences[0];
-
     const mapped = items
       .filter((item) => (itemBeats[item.id] || []).includes(beat.id))
       .map((item) => item.id);
+    // 有悬念条目归不到场景时，不能因此跳过整章：扫描全部拍，同时记 unmapped。
+    const fallback = !unmapped.length
+      ? []
+      : items.filter((item) => !(itemBeats[item.id] || []).length).map((item) => item.id);
+    if (!mapped.length && !fallback.length) continue;
 
-    violations.push({
-      id: beat.id,
-      sentence: best,
-      sentences: conclusionSentences,
-      terms,
-      itemIds: mapped.length ? mapped : items.map((item) => item.id),
+    const [from, to] = ranges[index];
+    const beatParagraphs = paragraphs.slice(from, to);
+    let hit = null;
+    beatParagraphs.forEach((paragraph, offset) => {
+      if (hit) return;
+      const terms = WITHHOLD_TERMS.filter((term) => paragraph.includes(term));
+      if (!terms.length) return;
+      if (!WITHHOLD_CONCLUSION_RE.test(paragraph)) return;
+      const sentences = splitSentences(paragraph);
+      const evidence = sentences.find((sentence) => WITHHOLD_CONCLUSION_RE.test(sentence)) || paragraph;
+      hit = {
+        sentence: evidence,
+        sentences,
+        terms,
+        paragraph,
+        paragraphIndex: from + offset,
+      };
     });
+    if (!hit) continue;
+
+    violations.push({ id: beat.id, ...hit, itemIds: [...mapped, ...fallback] });
   }
 
-  return { applicable: true, total: items.length, violations, itemBeats };
+  return {
+    applicable: true,
+    total: items.length,
+    violations,
+    itemBeats,
+    unmapped,
+    passed: violations.length === 0 && unmapped.length === 0,
+    reason: unmapped.length ? 'withhold:unmapped' : '',
+  };
 }
 
 module.exports = {
@@ -1831,6 +1970,7 @@ module.exports = {
   handoverBeatId,
   findHandoverDuplicates,
   checkMustWithhold,
+  withholdSceneBeats,
   WITHHOLD_TERMS,
   deriveInvariants,
   mergeInvariants,

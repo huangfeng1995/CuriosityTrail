@@ -1212,9 +1212,9 @@ test('悬念自检：同一拍两个制度词但没有结论词，不判违规',
   assert.strictEqual(result.violations.length, 0, '两个制度词但无结论词不能误杀');
 });
 
-test('悬念自检：制度词与结论词不在同一句，不拿「不对」「不该问」当证据', () => {
-  // 取自 v21-p3-b 的真实误报：B3 拍内另有「符传/司空」，结论句只是
-  // 「院里静得不对」；B4 拍内有「符传/印玺」，结论句只是「不该问」。
+test('悬念自检：同段内制度词与结论词即判违规（逐段扫描，不要求同句）', () => {
+  // 看的是「这一段有没有把制度说成结论」：同一段里出现符传/司空府，
+  // 又出现「静得不对」「不该问」，就够判；证据段与证据句逐字返回。
   const body = [
     '杨平把箱笼从车上搬下来，箱角磕在石阶上。',
     '堂里点着两盏灯，灯芯剪得很短。',
@@ -1225,19 +1225,91 @@ test('悬念自检：制度词与结论词不在同一句，不拿「不对」�
   ].join('\n');
 
   const result = checkMustWithhold(withholdBrief(), body, withholdPlan());
-  assert.strictEqual(result.violations.length, 0, '证据句必须同时带制度词和结论词');
+  assert.strictEqual(result.violations.length, 2, 'B3、B4 各有一段同时含制度词与结论词');
+  assert.strictEqual(result.violations[0].id, 'B3');
+  assert.match(result.violations[0].paragraph, /符传与司空府的印信/);
+  assert.match(result.violations[1].paragraph, /符传和印玺/);
 });
 
-test('悬念自检：没有 mustWithhold 项时不适用，也不扫正文', () => {
+test('悬念自检：没有 mustWithhold 项时明确 unmapped，不能判通过', () => {
   const brief = { items: [{ id: 'L1', kind: 'loss', text: '交出犀角弓' }] };
   const result = checkMustWithhold(
     brief,
     '私辟的掾属，不该有符传；有了符传，也不该称传诏。',
     withholdPlan()
   );
-  assert.strictEqual(result.applicable, false);
-  assert.strictEqual(result.violations.length, 0);
+  assert.strictEqual(result.applicable, true, '有 brief 就要给出明确结论');
+  assert.deepStrictEqual(result.unmapped, ['none']);
+  assert.strictEqual(result.passed, false, '0 条违规不能读成检查通过');
   assert.ok(WITHHOLD_TERMS.includes('符传'), '制度词表可被外部复核');
+});
+
+test('悬念覆盖：关键词落空但语义可归属 → 仍算覆盖，不进 unmapped', () => {
+  const brief = {
+    items: [
+      {
+        id: 'MW1',
+        kind: 'mustWithhold',
+        text: '不得解释司空府为何逾制发符传、曹操为何征辟杨俊',
+        keywords: ['逾制', '私辟'],
+        source: '设定',
+      },
+    ],
+  };
+  const plan = {
+    beats: [
+      { id: 'B1', function: 'opening', goal: '山中猎鹿', obstacle: '山道被封', infoGain: '木牌' },
+      { id: 'B2', function: 'discussion', goal: '议论河内形势', obstacle: '无话可说', infoGain: '袁绍曹操' },
+      {
+        id: 'B3',
+        function: 'identity',
+        goal: '交代身世',
+        obstacle: '记不清获嘉',
+        infoGain: '寄养旧事',
+      },
+      {
+        id: 'B4',
+        function: 'father',
+        goal: '杨俊持司空符传到府',
+        obstacle: '司马防不肯放人',
+        infoGain: '符传尾部绘北斗，封司空印',
+      },
+      { id: 'B5', function: 'farewell', goal: '司马防托付', obstacle: '司马朗不肯收弓', infoGain: '保他平安' },
+      { id: 'B6', function: 'departure', goal: '出城', obstacle: '雪深', infoGain: '北斗刻痕' },
+    ],
+  };
+
+  const coverage = briefCoverage(brief, plan);
+  assert.ok(coverage.covered.includes('MW1'), '关键词一个字没命中，也要按场景算覆盖');
+  assert.deepStrictEqual(coverage.withholdUnmapped, []);
+
+  const guard = checkMustWithhold(brief, '雪停了。', plan);
+  assert.ok(guard.itemBeats.MW1.includes('B4'), '必须归到含符传/司空的场景');
+  assert.deepStrictEqual(guard.unmapped, []);
+});
+
+test('悬念覆盖：归不到任何场景 → withholdUnmapped，自检不通过', () => {
+  const brief = {
+    items: [
+      {
+        id: 'MW1',
+        kind: 'mustWithhold',
+        text: '不得解释许都方面的局势',
+        keywords: ['许都'],
+        source: '素材',
+      },
+    ],
+  };
+  const plan = {
+    beats: [{ id: 'B1', function: 'opening', goal: '山中猎鹿', obstacle: '山道被封', infoGain: '木牌' }],
+  };
+  const coverage = briefCoverage(brief, plan);
+  assert.ok(coverage.missing.some((item) => item.id === 'MW1' && item.unmapped === true));
+  assert.deepStrictEqual(coverage.withholdUnmapped, ['MW1']);
+
+  const guard = checkMustWithhold(brief, '雪停了。', plan);
+  assert.deepStrictEqual(guard.unmapped, ['MW1']);
+  assert.strictEqual(guard.passed, false);
 });
 
 // ---- 全章不变项 ----
