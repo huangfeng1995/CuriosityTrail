@@ -8,10 +8,10 @@
 - [x] 提交 1
 
 ## T4 知情扫描确定性
-- [ ] `knowledgeScan.js`：`collectCandidates` / `detectPossibleLeaks` / 模型只看候选 / 空候选不调模型 / pending 幂等 / possible_leak 进 pending
-- [ ] `test/knowledgeScanDeterminism.test.js`：3 次一致、空候选零调用、possible_leak
-- [ ] 回归 `test/pipelineKnowledgeScan.test.js`
-- [ ] 提交 2
+- [x] `knowledgeScan.js`：`collectCandidates` / `detectPossibleLeaks` / 模型只看候选 / 空候选不调模型 / pending 幂等 / possible_leak 进 pending
+- [x] `test/knowledgeScanDeterminism.test.js`：3 次一致、空候选零调用、possible_leak
+- [x] 回归 `test/pipelineKnowledgeScan.test.js`
+- [x] 提交 2
 
 ## T5 背景事实
 - [ ] `database.js`：`fact_type` 列 + `SCHEMA_VERSION=13`
