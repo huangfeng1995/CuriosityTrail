@@ -517,13 +517,6 @@ export default function Materials() {
                   opacity: item.status === 'retracted' ? 0.55 : 1,
                   paddingLeft: 12,
                 }}
-                avatar={
-                  <Checkbox
-                    checked={selected.includes(item.id)}
-                    onChange={() => toggle(item.id)}
-                    aria-label={`选择素材 ${item.title}`}
-                  />
-                }
                 actions={[
                   <EditOutlined key="edit" onClick={() => openEditor(item)} />,
                   item.status !== 'retracted' ? (
@@ -545,7 +538,17 @@ export default function Materials() {
                   </Popconfirm>,
                 ]}
               >
+                {/* 勾选框是 Meta 的 avatar，不是 List.Item 的：List.Item 没有
+                    avatar 这个 prop，antd 会把它当未知属性透传到 <li>
+                    （li 上出现 avatar="[object Object]"），Checkbox 根本不挂载。 */}
                 <List.Item.Meta
+                  avatar={
+                    <Checkbox
+                      checked={selected.includes(item.id)}
+                      onChange={() => toggle(item.id)}
+                      aria-label={`选择素材 ${item.title}`}
+                    />
+                  }
                   title={
                     <span className="ct-material-title">
                       {item.title}
