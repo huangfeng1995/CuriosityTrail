@@ -169,6 +169,11 @@ export default function AssistantSidebar() {
         findings: [],
         roleLabel: sendRole ? `${sendRole.icon} ${sendRole.name}` : '',
         applied: false,
+        // 规划与章末检查的结构化结果：卡片上用小徽标展示，
+        // 不塞进正文，也不改变正文列宽。
+        beatCheck: null,
+        planDegraded: '',
+        anchorViolations: [],
         // 记住这次问了什么：重新生成时要拿它重发
         prompt: content,
         memoryRefs: [],
@@ -304,6 +309,9 @@ export default function AssistantSidebar() {
                   // 审稿人的结构化锚点。旧后端没有这个字段时保持空数组，
                   // 前端照旧按纯文本渲染。
                   findings: Array.isArray(event.findings) ? event.findings : [],
+                  // 节拍覆盖与规划降级：只做结构化徽标，不改正文。
+                  beatCheck: event.beatCheck || null,
+                  planDegraded: event.planDegraded || '',
                   // 工具过程的最终态：以 action 事件里的 skills 为准，
                   // 它是落库的同一份数据，重载消息时也能恢复。
                   //
@@ -328,6 +336,16 @@ export default function AssistantSidebar() {
                   thinking: '',
                 },
               });
+            } else if (event.type === 'anchor_violation') {
+              // 章末锚点检查的冲突列表。单独事件先到，
+              // 存到消息上，卡片的「史实冲突」徽标再点开看原句与定位。
+              dispatch({
+                type: 'message/update',
+                id: assistantId,
+                patch: {
+                  anchorViolations: Array.isArray(event.violations) ? event.violations : [],
+                },
+              });
             } else if (event.type === 'done') {
               dispatch({
                 type: 'conversation/set',
@@ -340,6 +358,10 @@ export default function AssistantSidebar() {
                 patch: {
                   serverMessageId: event.messageId || '',
                   regenerating: false,
+                  // done 里再带一份冲突列表，避免事件顺序变化时漏掉徽标
+                  ...(Array.isArray(event.anchorViolations)
+                    ? { anchorViolations: event.anchorViolations }
+                    : {}),
                 },
               });
               // 用户消息的服务端 id 同样要留着：作者可以给自己的提问
@@ -707,6 +729,10 @@ export default function AssistantSidebar() {
             reason: m.reason || '',
             citations: m.citations || [],
             findings: Array.isArray(m.findings) ? m.findings : [],
+            // 历史消息也保留节拍/降级/冲突徽标：payload 里存了同一份结构化结果。
+            beatCheck: m.beatCheck || null,
+            planDegraded: m.planDegraded || '',
+            anchorViolations: Array.isArray(m.anchorViolations) ? m.anchorViolations : [],
             roleLabel:
               m.roleLabel || (role ? `${role.icon} ${role.name}` : ''),
             toolTrace: m.toolTrace || [],
@@ -803,6 +829,7 @@ export default function AssistantSidebar() {
           onRegenerate={regenerate}
           onRemember={rememberMessage}
           findingsByMessage={findingsByMessage}
+          chapterSeq={chapter?.seq}
           activeFindingKey={activeFindingKey}
           adoptedFindingKeys={adoptedFindingKeys}
           onAdoptFindings={adoptFindings}

@@ -3839,3 +3839,78 @@ body.ct-resizing * {
 .ct-boundary-line.is-unknown .ct-boundary-facts {
   color: var(--text-quaternary);
 }
+
+/* ---------- 结构化结果徽标（节拍覆盖 / 规划降级 / 史实冲突） ---------- */
+/* 徽标只占输出卡片内的一行元信息，不进入正文、不参与正文 34px 格线。 */
+.ct-action-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 10px 0;
+}
+
+.ct-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.ct-badge.is-ok {
+  color: var(--bamboo);
+  border-color: var(--bamboo);
+  background: var(--bamboo-dim);
+}
+
+.ct-badge.is-warn {
+  color: var(--amber);
+  border-color: var(--amber);
+  background: var(--amber-dim);
+}
+
+.ct-badge.is-bad {
+  color: var(--cinnabar);
+  border-color: var(--cinnabar);
+  background: var(--cinnabar-dim);
+  cursor: pointer;
+}
+
+.ct-badge.is-bad:hover {
+  border-color: var(--cinnabar-bright);
+}
+
+.ct-violation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.ct-violation-item {
+  padding: 6px 8px;
+  border-left: 2px solid var(--cinnabar);
+  border-radius: 4px;
+  background: var(--cinnabar-dim);
+}
+
+.ct-violation-quote {
+  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.ct-violation-loc,
+.ct-violation-rule {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}

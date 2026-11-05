@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Checkbox } from 'antd';
+import { Button, Checkbox, Popover } from 'antd';
 import { CheckOutlined, RollbackOutlined } from '@ant-design/icons';
 import { REASON_LABEL } from './findings';
 
@@ -10,6 +10,50 @@ const ACTION_LABEL = {
   comment: '建议',
   none: '回复',
 };
+
+const PLAN_DEGRADED_LABEL = {
+  invalid: '格式不合格',
+  failed: '规划失败',
+  timeout: '规划超时',
+  error: '规划出错',
+};
+
+const ANCHOR_RULE_LABEL = {
+  presence_forbidden: '人物出场禁区',
+  event_forbidden: '事件禁区',
+  term_forbidden: '称谓禁区',
+  chronology: '时间线',
+  blank_guard: '空白区护栏',
+  manual_only: '需人工核对',
+};
+
+/**
+ * 冲突徽标点开后的明细：每条都给原句与定位。
+ * 定位优先用块 ID；生成稿还没落到块上时，用本章正文的字符偏移。
+ */
+function AnchorViolationList({ violations, chapterSeq }) {
+  return (
+    <div className="ct-violation-list">
+      {violations.map((violation, index) => (
+        <div
+          className="ct-violation-item"
+          key={`${violation.anchorId || 'a'}-${violation.offset}-${index}`}
+        >
+          <div className="ct-violation-quote">原句：{violation.quote || '（未记录原句）'}</div>
+          <div className="ct-violation-loc">
+            定位：{violation.blockId ? `块 ${violation.blockId}` : '本章正文'}
+            {Number.isFinite(violation.offset) ? ` · 字符偏移 ${violation.offset}` : ''}
+            {chapterSeq ? ` · 第 ${chapterSeq} 章` : ''}
+          </div>
+          <div className="ct-violation-rule">
+            {ANCHOR_RULE_LABEL[violation.ruleType] || violation.ruleType || '规则冲突'}
+            {violation.severity === 'block' ? ' · 必须处理' : ' · 可标记有意改写'}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /**
  * 结构化输出卡片。
@@ -30,6 +74,10 @@ export default function ActionCard({
   onApply,
   onRevert,
   findings = [],
+  beatCheck = null,
+  planDegraded = '',
+  anchorViolations = [],
+  chapterSeq,
   activeFindingKey = '',
   adoptedFindingKeys,
   onAdoptFindings,
@@ -39,6 +87,13 @@ export default function ActionCard({
   // 空正文不渲染占位文案：卡片的 reason / findings 已经说明了情况，
   // 「（本次没有返回内容）」对作者没有信息量。
   const body = (content || '').trim();
+
+  // 节拍与章末检查的结构化结果。徽标只占卡片内的一行元信息，
+  // 不进入正文、不参与正文 34px 格线，也不改变正文列宽。
+  const missingBeats = Array.isArray(beatCheck?.missing) ? beatCheck.missing : [];
+  const coveredBeats = Array.isArray(beatCheck?.covered) ? beatCheck.covered.length : 0;
+  const totalBeats = coveredBeats + missingBeats.length;
+  const hasMeta = Boolean(planDegraded) || totalBeats > 0 || anchorViolations.length > 0;
 
   // 勾选顺序就是发给写手的顺序：用数组保存，Set 会丢掉顺序。
   const [selectedKeys, setSelectedKeys] = useState([]);
@@ -86,6 +141,39 @@ export default function ActionCard({
           </>
         )}
       </div>
+
+      {hasMeta && (
+        <div className="ct-action-meta">
+          {planDegraded && (
+            <span className="ct-badge is-warn">
+              规划降级（{PLAN_DEGRADED_LABEL[planDegraded] || planDegraded}）
+            </span>
+          )}
+          {totalBeats > 0 && (
+            <span className={`ct-badge ${missingBeats.length ? 'is-warn' : 'is-ok'}`}>
+              节拍 {coveredBeats}/{totalBeats}
+              {missingBeats.length > 0 && ` · 缺拍 ${missingBeats.join('、')}`}
+            </span>
+          )}
+          {anchorViolations.length > 0 && (
+            <Popover
+              trigger="click"
+              placement="top"
+              title="史实冲突"
+              content={
+                <AnchorViolationList
+                  violations={anchorViolations}
+                  chapterSeq={chapterSeq}
+                />
+              }
+            >
+              <button type="button" className="ct-badge is-bad">
+                史实冲突 {anchorViolations.length}
+              </button>
+            </Popover>
+          )}
+        </div>
+      )}
 
       {body && <div className="ct-action-body">{body}</div>}
 

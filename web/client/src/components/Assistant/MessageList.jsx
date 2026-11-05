@@ -56,6 +56,7 @@ export default function MessageList({
   onRegenerate,
   onRemember,
   findingsByMessage,
+  chapterSeq,
   activeFindingKey,
   adoptedFindingKeys,
   onAdoptFindings,
@@ -129,6 +130,10 @@ export default function MessageList({
                   onApply={() => onApply?.(msg)}
                   onRevert={() => onRevert?.(msg)}
                   findings={findingsByMessage?.get(msg.id) || []}
+                  beatCheck={msg.beatCheck}
+                  planDegraded={msg.planDegraded}
+                  anchorViolations={msg.anchorViolations || []}
+                  chapterSeq={chapterSeq}
                   activeFindingKey={activeFindingKey}
                   adoptedFindingKeys={adoptedFindingKeys}
                   onAdoptFindings={onAdoptFindings}

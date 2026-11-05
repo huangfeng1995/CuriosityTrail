@@ -1787,6 +1787,9 @@ router.post('/chat', async (req, res) => {
       }
     }
 
+    // 章末冲突随消息落库：重载旧对话时「史实冲突」徽标仍可点开看原句。
+    payload.anchorViolations = anchorViolations;
+
     // 保存助手消息
     const messageId = crypto.randomUUID();
     await run(
@@ -2103,6 +2106,13 @@ router.get('/conversations/:id/messages', async (req, res) => {
         target: (payload && payload.target) || '',
         reason: (payload && payload.reason) || '',
         citations,
+        // 节拍覆盖与规划降级随消息读回：切回旧对话时徽标不能凭空消失
+        beatCheck: (payload && payload.beatCheck) || null,
+        planDegraded: (payload && payload.planDegraded) || '',
+        // 章末冲突随消息读回：切回旧对话时「史实冲突」徽标仍可点开看原句
+        anchorViolations: Array.isArray(payload && payload.anchorViolations)
+          ? payload.anchorViolations
+          : [],
         // 审稿意见的锚点随消息一起读回；旧消息没有这个字段时为空数组
         findings: Array.isArray(payload && payload.findings) ? payload.findings : [],
         // 工具过程落库在 payload.skills 里，重载时一并还原：
