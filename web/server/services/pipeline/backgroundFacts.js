@@ -255,7 +255,27 @@ function mustRevealForChapter({
   if (!variants.some((name) => current.includes(name))) return empty;
 
   const check = checkMustReveal({ facts, body });
-  return { applicable: check.total > 0, protagonist, ...check };
+
+  // 库里一条背景事实都没有时，不能因为「没有可检查项」就静默放过：
+  // 主角首次出场章必须让作者看见「背景事实还没入库」，否则正文会继续缺年龄/籍贯/寄养原因。
+  if (check.total === 0) {
+    return {
+      applicable: true,
+      protagonist,
+      total: 0,
+      covered: 0,
+      missing: [
+        {
+          id: 'background-not-ingested',
+          content: '主角背景事实（年龄/籍贯/寄养原因）尚未入库',
+          keywords: [],
+          notIngested: true,
+        },
+      ],
+    };
+  }
+
+  return { applicable: true, protagonist, ...check };
 }
 
 /** 交付徽标：重写后仍缺时挂到 reason 前，作者一眼能看到。 */
@@ -284,14 +304,17 @@ function mergeIntoBrief(brief, facts = []) {
 
   const items = brief && Array.isArray(brief.items) ? [...brief.items] : [];
   const existing = new Set(items.map((item) => `${item.kind}|${item.text}`));
+  // 与 planBrief 的 id 前缀一致：背景事实一律落在 mustReveal，用 MR 计数。
+  let revealCount = items.filter((item) => item.kind === 'mustReveal').length;
 
   for (const fact of background) {
     const content = normalizeText(fact.content);
     const key = `mustReveal|${content}`;
     if (!content || existing.has(key)) continue;
     existing.add(key);
+    revealCount += 1;
     items.push({
-      id: `M${items.length + 1}`,
+      id: `MR${revealCount}`,
       kind: 'mustReveal',
       text: content,
       keywords: factTerms(fact).slice(0, 4),

@@ -60,7 +60,7 @@ async function seedWork(name) {
   return work;
 }
 
-test('没有任何背景事实：mustReveal 不适用', () => {
+test('没有任何背景事实：首次出场章标出「背景事实尚未入库」', () => {
   const check = backgroundFacts.checkMustReveal({ facts: [], body: '杨平跟着父亲上车。' });
   assert.strictEqual(check.total, 0);
   assert.deepStrictEqual(check.missing, []);
@@ -72,8 +72,10 @@ test('没有任何背景事实：mustReveal 不适用', () => {
     priorBodies: [],
     body: '杨平跟着父亲上车。',
   });
-  assert.strictEqual(chapter.applicable, false);
-  assert.deepStrictEqual(chapter.missing, []);
+  assert.strictEqual(chapter.applicable, true, '首次出场章必须让作者看到缺失');
+  assert.strictEqual(chapter.missing.length, 1);
+  assert.strictEqual(chapter.missing[0].notIngested, true);
+  assert.match(chapter.missing[0].content, /尚未入库/);
 });
 
 test('有背景事实但正文不交代：逐项报缺，触发 beatCheck 标出', () => {

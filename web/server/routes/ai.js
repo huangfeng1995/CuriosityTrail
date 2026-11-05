@@ -1485,7 +1485,10 @@ router.post('/chat', async (req, res) => {
     };
 
     await loadRevealCheck(payload.content);
-    const revealMissing = revealCheck.applicable ? revealCheck.missing : [];
+    const revealAllMissing = revealCheck.applicable ? revealCheck.missing : [];
+    // 「背景事实尚未入库」不是写手能补的：只报给作者（beatCheck + 徽标），
+    // 不发起重写，否则等于逼写手编造年龄/籍贯。
+    const revealMissing = revealAllMissing.filter((item) => !item.notIngested);
 
     // 缺拍重写：最多一次。
     //
