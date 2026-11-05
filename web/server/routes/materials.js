@@ -24,6 +24,7 @@ const { ownedMaterial } = require('../services/scope');
 const localSearch = require('../services/search/local');
 const documentText = require('../services/documentText');
 const citations = require('../services/citations');
+const materialStore = require('../services/materials/store');
 
 const router = express.Router();
 const now = () => new Date().toISOString();
@@ -71,26 +72,39 @@ const upload = multer({
  * 列表只给一段预览，正文在详情接口里按需取。
  */
 router.get('/', async (req, res) => {
-  const { search } = req.query;
+  const { search, status } = req.query;
+  // 默认视图不展示已撤回的条目；管理页可以显式按状态查
+  const statusFilter = materialStore.STATUS_VALUES.includes(String(status || ''))
+    ? String(status)
+    : '';
   try {
+    // 「查不到」的缺口标记默认排在后面，不跟有出处/可推定的素材混排
+    const columns = `id, title, substr(body, 1, ?) AS preview, source, source_url, tags,
+                work_id, provenance, confidence, origin, status, created_by, search_log,
+                char_count, page_count, file_path, created_at, modified_at`;
+    const order = `ORDER BY CASE WHEN confidence = 'missing' THEN 1 ELSE 0 END, modified_at DESC`;
     let rows;
     if (search) {
+      const where = statusFilter
+        ? 'AND status = ?'
+        : "AND status != 'retracted'";
       rows = await all(
-        `SELECT id, title, substr(body, 1, ?) AS preview, source, source_url, tags,
-                char_count, page_count, file_path, created_at, modified_at
+        `SELECT ${columns}
          FROM materials
-         WHERE user_id = ? AND (title LIKE ? OR body LIKE ? OR tags LIKE ?)
-         ORDER BY modified_at DESC`,
-        [PREVIEW_LEN, req.userId, `%${search}%`, `%${search}%`, `%${search}%`]
+         WHERE user_id = ? AND (title LIKE ? OR body LIKE ? OR tags LIKE ?) ${where}
+         ${order}`,
+        statusFilter
+          ? [PREVIEW_LEN, req.userId, `%${search}%`, `%${search}%`, `%${search}%`, statusFilter]
+          : [PREVIEW_LEN, req.userId, `%${search}%`, `%${search}%`, `%${search}%`]
       );
     } else {
+      const where = statusFilter ? 'AND status = ?' : "AND status != 'retracted'";
       rows = await all(
-        `SELECT id, title, substr(body, 1, ?) AS preview, source, source_url, tags,
-                char_count, page_count, file_path, created_at, modified_at
+        `SELECT ${columns}
          FROM materials
-         WHERE user_id = ?
-         ORDER BY modified_at DESC`,
-        [PREVIEW_LEN, req.userId]
+         WHERE user_id = ? ${where}
+         ${order}`,
+        statusFilter ? [PREVIEW_LEN, req.userId, statusFilter] : [PREVIEW_LEN, req.userId]
       );
     }
     // 页码标记是内部记号，列表里不显示；页码单独用 page_count 字段
@@ -133,26 +147,45 @@ router.get('/search', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { title, body, source, sourceUrl, tags } = req.body || {};
+  const { title, body, source, sourceUrl, tags, provenance, confidence, workId } = req.body || {};
   if (!title || !String(title).trim()) {
     return res.status(400).json({ error: '标题不能为空' });
   }
 
   try {
+    // 手工录入同样过机械约束：sourced 必须有出处，missing 必须写待补。
+    // 但作者本人录入就是一次确认，不再进待确认队列。
+    const item = materialStore.normalizeItem(
+      { title, body, source: source || '手记', sourceUrl, tags, provenance, confidence, workId, origin: 'user' },
+      req.userId,
+      { createdBy: 'user', workId }
+    );
+    item.status = 'active';
+
     const id = crypto.randomUUID();
     const ts = now();
     await run(
-      `INSERT INTO materials (id, user_id, title, body, source, source_url, tags, char_count, created_at, modified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO materials
+         (id, user_id, work_id, title, body, source, source_url, tags, provenance,
+          confidence, origin, status, created_by, search_log, char_count, page_count,
+          created_at, modified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       [
         id,
         req.userId,
-        String(title).trim(),
-        body || '',
-        source || '手记',
-        sourceUrl || '',
-        tags || '',
-        (body || '').length,
+        item.work_id,
+        item.title,
+        item.body,
+        item.source,
+        item.source_url,
+        item.tags,
+        item.provenance,
+        item.confidence,
+        item.origin,
+        item.status,
+        item.created_by,
+        item.search_log,
+        item.body.length,
         ts,
         ts,
       ]
@@ -161,7 +194,33 @@ router.post('/', async (req, res) => {
     await localSearch.indexMaterial(created);
     res.json(created);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+/**
+ * 批量确认：把 pending 的素材一次转成 active。
+ *
+ * 一条一条确认会把作者赶回逐条勾选的老路，所以这里只收一批 id。
+ */
+router.post('/confirm', async (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  if (!ids.length) return res.status(400).json({ error: '没有待确认的条目' });
+  try {
+    const confirmed = await materialStore.confirmBatch(req.userId, ids);
+    res.json({ confirmed });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+/** 撤回一条素材：立刻不再进检索与默认列表。 */
+router.post('/:id/retract', async (req, res) => {
+  try {
+    const row = await materialStore.retract(req.userId, req.params.id);
+    res.json(row);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -280,15 +339,35 @@ router.get('/:id/locate', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { title, body, source, sourceUrl, tags } = req.body || {};
+  const { title, body, source, sourceUrl, tags, provenance, confidence } = req.body || {};
   try {
     const existing = await ownedMaterial(req.params.id, req.userId);
     if (!existing) return res.status(404).json({ error: '素材不存在' });
 
     const nextBody = body !== undefined ? body : existing.body;
+    const nextConfidence = confidence !== undefined ? String(confidence) : existing.confidence;
+    const nextProvenance =
+      provenance !== undefined ? String(provenance).trim() : existing.provenance;
+
+    // 与入库同一套机械约束，避免编辑绕过去
+    if (!materialStore.CONFIDENCE_VALUES.includes(nextConfidence)) {
+      return res.status(400).json({ error: '置信档取值不合法' });
+    }
+    if (nextConfidence === 'sourced' && !nextProvenance) {
+      return res.status(400).json({ error: '有出处的条目必须填 provenance' });
+    }
+    if (nextConfidence === 'missing') {
+      if (nextProvenance) {
+        return res.status(400).json({ error: '待补条目不能标出处' });
+      }
+      if (!materialStore.hasTodoLine(nextBody)) {
+        return res.status(400).json({ error: '待补条目正文首行必须写成「待补：<缺什么>」' });
+      }
+    }
+
     await run(
       `UPDATE materials SET title = ?, body = ?, source = ?, source_url = ?, tags = ?,
-         char_count = ?, modified_at = ?
+         provenance = ?, confidence = ?, char_count = ?, modified_at = ?
        WHERE id = ?`,
       [
         title !== undefined ? String(title).trim() : existing.title,
@@ -296,6 +375,8 @@ router.put('/:id', async (req, res) => {
         source !== undefined ? source : existing.source,
         sourceUrl !== undefined ? sourceUrl : existing.source_url,
         tags !== undefined ? tags : existing.tags,
+        nextProvenance,
+        nextConfidence,
         nextBody.length,
         now(),
         req.params.id,

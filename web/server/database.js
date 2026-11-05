@@ -31,8 +31,9 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 7 → 8：历史悬疑模板开关（works.template）与锚点三表。
  * 版本 8 → 9：人物卡正史/立场/底线/弱点，秘密/事实/知情矩阵/证据四表。
  * 版本 9 → 10：知情扫描待确认表（knowledge_pending）。
+ * 版本 10 → 11：素材出处/置信/来源/状态列（agent 整理素材的机械约束）。
  */
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 /**
  * 版本号之前的老库遗留表。
@@ -247,6 +248,20 @@ CREATE TABLE IF NOT EXISTS materials (
   source_url   TEXT,
   file_path    TEXT,
   tags         TEXT,
+  -- 素材归到哪部作品。空串 = 全库通用，不绑作品。
+  work_id      TEXT,
+  -- 出处（书名/篇目/网页标题）。标 sourced 时非空，missing 时必须为空。
+  provenance   TEXT NOT NULL DEFAULT '',
+  -- sourced / inferable / missing。老数据迁移后一律 inferable，绝不冒充有出处。
+  confidence   TEXT NOT NULL DEFAULT 'inferable',
+  -- web / model / internal / user。web 必须有可核的 search_log。
+  origin       TEXT NOT NULL DEFAULT 'user',
+  -- active / pending / retracted。pending 需用户批量确认后才进检索。
+  status       TEXT NOT NULL DEFAULT 'active',
+  -- user / agent。
+  created_by   TEXT NOT NULL DEFAULT 'user',
+  -- 联网检索记录（JSON）：query、返回条数、命中 URL、抓取成败。
+  search_log   TEXT NOT NULL DEFAULT '',
   char_count   INTEGER DEFAULT 0,
   page_count   INTEGER DEFAULT 0,
   created_at   TEXT NOT NULL,
@@ -589,6 +604,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_pending_work
 const USER_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_works_user ON works(user_id, modified_at);
 CREATE INDEX IF NOT EXISTS idx_materials_user ON materials(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_materials_user_status ON materials(user_id, status, modified_at);
 CREATE INDEX IF NOT EXISTS idx_inspirations_user ON inspirations(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at);
 `;
@@ -701,6 +717,15 @@ async function migrate(fromVersion) {
   }
   await ensureColumn('users', 'role', "TEXT DEFAULT 'user'");
   await ensureColumn('materials', 'page_count', 'INTEGER DEFAULT 0');
+  // 10 → 11：素材的出处/置信/来源/状态。老行没有可核出处，
+  // confidence 默认 inferable（可推定），绝不默认成 sourced。
+  await ensureColumn('materials', 'work_id', 'TEXT');
+  await ensureColumn('materials', 'provenance', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('materials', 'confidence', "TEXT NOT NULL DEFAULT 'inferable'");
+  await ensureColumn('materials', 'origin', "TEXT NOT NULL DEFAULT 'user'");
+  await ensureColumn('materials', 'status', "TEXT NOT NULL DEFAULT 'active'");
+  await ensureColumn('materials', 'created_by', "TEXT NOT NULL DEFAULT 'user'");
+  await ensureColumn('materials', 'search_log', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('prompt_overrides', 'model', 'TEXT');
   await ensureColumn('prompt_overrides', 'thinking', 'INTEGER');
   await ensureColumn('chapters', 'outline', 'TEXT');

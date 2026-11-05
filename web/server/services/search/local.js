@@ -289,7 +289,11 @@ async function search(query, options = {}) {
 
   const results = [];
   for (const row of rows) {
-    const material = await get('SELECT * FROM materials WHERE id = ?', [row.material_id]);
+    // 撤回与待补的条目不进写作检索：撤回即失效，待补只是缺口标记
+    const material = await get(
+      "SELECT * FROM materials WHERE id = ? AND status = 'active' AND confidence != 'missing'",
+      [row.material_id]
+    );
     if (!material) continue;
     const located = locateSnippet(material.body, terms);
     results.push({
@@ -350,7 +354,10 @@ async function searchLoose(query, options = {}) {
   // 打分：命中词元越多越相关，标题与标签命中权重更高
   const scored = [];
   for (const row of rows) {
-    const material = await get('SELECT * FROM materials WHERE id = ?', [row.material_id]);
+    const material = await get(
+      "SELECT * FROM materials WHERE id = ? AND status = 'active' AND confidence != 'missing'",
+      [row.material_id]
+    );
     if (!material) continue;
 
     const title = (material.title || '').toLowerCase();
@@ -454,7 +461,9 @@ async function rebuildIndex() {
 async function recent(limit = 3, userId) {
   if (!userId) return [];
   const rows = await all(
-    'SELECT * FROM materials WHERE user_id = ? ORDER BY modified_at DESC LIMIT ?',
+    `SELECT * FROM materials
+     WHERE user_id = ? AND status = 'active' AND confidence != 'missing'
+     ORDER BY modified_at DESC LIMIT ?`,
     [userId, limit]
   );
   return rows.map((material) => ({
