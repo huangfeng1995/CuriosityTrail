@@ -49,11 +49,11 @@
 - [x] 提交 `fix(knowledge): allow literal-evidence model_only transitions into pending`
 
 ## T6 对手与托付（2026-11-06）
-- [ ] `planBrief.js`：`opponent` kind、`none` 语义、内部状态拒绝、`mustPresent.handover`
-- [ ] `planBrief.js`：开场对手 / 告别托付两条硬校验；`partitionCoverage` 落点；`planDegraded` 带 slot
-- [ ] `planBrief.js`：`mergeHandoverIntoBrief`（人物卡 relations / 设定关键词）
-- [ ] `routes/ai.js`：读取 characters/settings 并入 brief；日志与 payload 透出
-- [ ] `test/planBrief.test.js`：对手/托付/注册/回落五组断言
-- [ ] 真实样本 `MODE=same` 重跑，落 `2026-11-06-v13-brief-opponent-handover.md`（不提交）
-- [ ] B1/B6 改前 vs 改后对比 + 「输入缺项 / 规划没排进去」结论
-- [ ] 提交 3、4（与 P0 分开）
+- [x] `planBrief.js`：`opponent` kind、`none` 语义、内部状态拒绝、`mustPresent.handover`
+- [x] `planBrief.js`：开场对手 / 告别托付两条硬校验；`partitionCoverage` 落点；`planDegraded` 带 slot
+- [x] `planBrief.js`：`mergeHandoverIntoBrief`（人物卡 relations / 设定关键词）
+- [x] `routes/ai.js`：读取 characters/settings 并入 brief；日志与 payload 透出
+- [x] `test/planBrief.test.js`：对手/托付/注册/回落五组断言
+- [x] 真实样本 `MODE=same` 重跑，落 `2026-11-05-v13-brief-opponent-handover.md`（不提交）
+- [x] B1/B6 改前 vs 改后对比 + 「输入缺项 / 规划没排进去」结论
+- [x] 提交 3、4（与 P0 分开）
