@@ -532,6 +532,7 @@ function buildGroupRewriteInstruction({
   weakIds = [],
   handoverDupIds = [],
   mustWithholdIds = [],
+  invariantConflicts = [],
   tail,
   nextHead,
   brief = null,
@@ -541,12 +542,32 @@ function buildGroupRewriteInstruction({
   const weak = new Set(weakIds || []);
   const dup = new Set(handoverDupIds || []);
   const withhold = new Set(mustWithholdIds || []);
+  const conflicts = new Map();
+  for (const conflict of invariantConflicts || []) {
+    if (!conflict || !conflict.beatId) continue;
+    const rows = conflicts.get(conflict.beatId) || [];
+    rows.push(`${conflict.label}应写「${conflict.expected}」，正文写成了「${conflict.actual}」`);
+    conflicts.set(conflict.beatId, rows);
+  }
   const handoverBeat = brief && typeof brief.handoverBeat === 'string' ? brief.handoverBeat.trim() : '';
   const briefBlock = briefWriterBlock(brief);
   const revealLines = (mustReveal || []).map((fact) => `- ${fact}`);
   const problems = group.beats
-    .filter((b) => wanted.has(b.id) || weak.has(b.id) || dup.has(b.id) || withhold.has(b.id))
+    .filter(
+      (b) =>
+        wanted.has(b.id) ||
+        weak.has(b.id) ||
+        dup.has(b.id) ||
+        withhold.has(b.id) ||
+        conflicts.has(b.id)
+    )
     .map((b) => {
+      if (conflicts.has(b.id)) {
+        return (
+          `- ${b.id}：本拍数值与全章不变项冲突（${conflicts.get(b.id).join('；')}）；` +
+          '同一事实只保留一个数，改成 brief 不变项里的值，删掉其余矛盾表述。'
+        );
+      }
       if (withhold.has(b.id)) {
         return (
           `- ${b.id}：本拍只写形制细节与人物反应，不写制度结论，不替读者解释；` +
@@ -996,6 +1017,7 @@ async function rewriteMissingGroups({
   brief = null,
   mustReveal = [],
   mustWithholdIds = [],
+  invariantConflicts = [],
   log = () => {},
   progress = () => {},
 }) {
@@ -1009,11 +1031,13 @@ async function rewriteMissingGroups({
 
   const weakIds = (coverage?.weak || []).map((w) => w.id);
   const dupIds = coverage?.handoverDuplicated || [];
+  const conflictIds = (invariantConflicts || []).map((conflict) => conflict.beatId);
   const missingIds = [
     ...(coverage?.missing || []),
     ...weakIds,
     ...dupIds,
     ...(mustWithholdIds || []),
+    ...conflictIds,
   ];
   const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
   const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
@@ -1042,6 +1066,7 @@ async function rewriteMissingGroups({
       weakIds: factsOnly ? [] : weakIds,
       handoverDupIds: factsOnly ? [] : (coverage?.handoverDuplicated || []),
       mustWithholdIds: factsOnly ? [] : (mustWithholdIds || []),
+      invariantConflicts: factsOnly ? [] : (invariantConflicts || []),
       tail: tailParagraphs(before || existingBody, 3),
       nextHead,
       brief,

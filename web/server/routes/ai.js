@@ -38,6 +38,7 @@ const {
   formatBeatPlan,
   buildRewriteInstruction,
   beatBadge,
+  checkWordShares,
 } = require('../services/agent/beatPlan');
 const planBrief = require('../services/agent/planBrief');
 const backgroundFacts = require('../services/pipeline/backgroundFacts');
@@ -962,6 +963,16 @@ router.post('/chat', async (req, res) => {
               characters: characterCards,
               settings: settingRows,
             });
+            // 全章不变项：人物卡/设定/背景事实里能确定的数值先落地，
+            // 模型给的寄养起始年龄留作 inferred 补充，避免同一事实前后两个数。
+            brief = planBrief.mergeInvariants(
+              brief,
+              planBrief.deriveInvariants({
+                characters: characterCards,
+                settings: settingRows,
+                facts: backgroundFactRows,
+              })
+            );
           } catch (err) {
             console.error('[ai] 托付关系并入 brief 失败，沿用原 brief:', err.message);
           }
@@ -1529,11 +1540,32 @@ router.post('/chat', async (req, res) => {
     // 交付只允许一次：确定性扫正文，不依赖模型自检。
     const handoverDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
     if (beatCheck) beatCheck.handoverDuplicated = handoverDup.beatIds;
+    // 交付记账：计划指定的拍必须等于正文实际交付所在拍，不一致不能静默。
+    if (beatCheck) {
+      const designated = brief && brief.handoverBeat
+        ? String(brief.handoverBeat)
+        : planBrief.handoverBeatId(brief, beatPlan);
+      const actual = handoverDup.evidence.length ? handoverDup.evidence[0].id : '';
+      beatCheck.handoverBeatMismatch = designated && actual && designated !== actual
+        ? { designated, actual }
+        : null;
+    }
     // 悬念自检：确定性扫正文，同一拍里制度词和结论词同时出现就判「把悬念解释掉」。
     // 与覆盖自检独立：模型说拍子写完了，但把制度结论讲完，仍然算违规。
     let withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
     if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
     const withholdIds = withholdCheck.violations.map((v) => v.id);
+    // 同章一致性：同一不变项在正文里出现两个数（十年/十五年、六岁/七岁）即判冲突。
+    let invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
+    const invariantConflicts = invariantCheck.violations;
+    const invariantIds = invariantCheck.beatIds;
+    if (beatCheck) beatCheck.invariantConflicts = invariantConflicts;
+    // 篇幅配比只记账：按纯汉字量，与每拍 wordShare 目标比，超出 ±5pp 就列出拍号。
+    if (beatCheck && beatPlan) {
+      const wordShares = checkWordShares(beatPlan, payload.content);
+      beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
+      beatCheck.wordShareOutOfRange = wordShares.outOfRange;
+    }
     const revealAllMissing = revealCheck.applicable ? revealCheck.missing : [];
     // 「背景事实尚未入库」不是写手能补的：只报给作者（beatCheck + 徽标），
     // 不发起重写，否则等于逼写手编造年龄/籍贯。
@@ -1554,8 +1586,9 @@ router.post('/chat', async (req, res) => {
           ...beatCheck.weak.map((w) => w.id),
           ...(beatCheck.handoverDuplicated || []),
           ...withholdIds,
+          ...invariantIds,
         ]
-      : withholdIds;
+      : [...withholdIds, ...invariantIds];
     if (
       segmented &&
       beatPlan &&
@@ -1611,6 +1644,7 @@ router.post('/chat', async (req, res) => {
             brief,
             mustReveal: revealMissing.map((fact) => fact.content),
             mustWithholdIds: withholdIds,
+            invariantConflicts,
             runSegment: segmentRun,
             maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
             callCount: segmented.callCount,
@@ -1694,9 +1728,25 @@ router.post('/chat', async (req, res) => {
             await loadRevealCheck(payload.content);
             const recheckDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
             if (beatCheck) beatCheck.handoverDuplicated = recheckDup.beatIds;
+            if (beatCheck) {
+              const designated = brief && brief.handoverBeat
+                ? String(brief.handoverBeat)
+                : planBrief.handoverBeatId(brief, beatPlan);
+              const actual = recheckDup.evidence.length ? recheckDup.evidence[0].id : '';
+              beatCheck.handoverBeatMismatch = designated && actual && designated !== actual
+                ? { designated, actual }
+                : null;
+            }
             // 重写后再判一次：仍违规就交付当前稿，只打徽标，不无限重写。
             withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
             if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
+            invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
+            if (beatCheck) {
+              beatCheck.invariantConflicts = invariantCheck.violations;
+              const wordShares = checkWordShares(beatPlan, payload.content);
+              beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
+              beatCheck.wordShareOutOfRange = wordShares.outOfRange;
+            }
 
             console.log(
               JSON.stringify({
@@ -1712,7 +1762,10 @@ router.post('/chat', async (req, res) => {
                 hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
                 chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
                 handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
+                handoverBeatMismatch: beatCheck ? beatCheck.handoverBeatMismatch : null,
                 mustWithholdViolations: withholdCheck.violations.map((v) => v.id),
+                invariantConflicts: invariantCheck.violations.map((v) => `${v.beatId}:${v.label}:${v.actual}`),
+                wordShareOutOfRange: beatCheck ? beatCheck.wordShareOutOfRange : [],
                 rewrote: true,
                 usage: recheckOut.usage || null,
               })
@@ -1731,6 +1784,7 @@ router.post('/chat', async (req, res) => {
       (beatCheck.missing.length ||
         (beatCheck.handoverDuplicated || []).length ||
         withholdIds.length ||
+        invariantIds.length ||
         revealMissing.length) &&
       !roundSignal.aborted &&
       ROUND_BUDGET_MS - (Date.now() - startedAt) >= WRITE_TIMEOUT_MS + CHECK_TIMEOUT_MS
@@ -1749,6 +1803,7 @@ router.post('/chat', async (req, res) => {
           {
             handoverBeat: brief && brief.handoverBeat ? brief.handoverBeat : '',
             mustWithholdIds: withholdIds,
+            invariantConflicts,
           }
         );
         const rewriteResult = await runChat(
@@ -1799,8 +1854,24 @@ router.post('/chat', async (req, res) => {
           await loadRevealCheck(payload.content);
           const recheckDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
           if (beatCheck) beatCheck.handoverDuplicated = recheckDup.beatIds;
+          if (beatCheck) {
+            const designated = brief && brief.handoverBeat
+              ? String(brief.handoverBeat)
+              : planBrief.handoverBeatId(brief, beatPlan);
+            const actual = recheckDup.evidence.length ? recheckDup.evidence[0].id : '';
+            beatCheck.handoverBeatMismatch = designated && actual && designated !== actual
+              ? { designated, actual }
+              : null;
+          }
           withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
           if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
+          invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
+          if (beatCheck) {
+            beatCheck.invariantConflicts = invariantCheck.violations;
+            const wordShares = checkWordShares(beatPlan, payload.content);
+            beatCheck.wordShares = wordShares.applicable ? wordShares.beats : [];
+            beatCheck.wordShareOutOfRange = wordShares.outOfRange;
+          }
 
           console.log(
             JSON.stringify({
@@ -1816,7 +1887,10 @@ router.post('/chat', async (req, res) => {
               hookPresent: recheckOut.coverage ? recheckOut.coverage.hookPresent : null,
               chapterGoalMet: recheckOut.coverage ? recheckOut.coverage.chapterGoalMet : null,
               handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
+              handoverBeatMismatch: beatCheck ? beatCheck.handoverBeatMismatch : null,
               mustWithholdViolations: withholdCheck.violations.map((v) => v.id),
+              invariantConflicts: invariantCheck.violations.map((v) => `${v.beatId}:${v.label}:${v.actual}`),
+              wordShareOutOfRange: beatCheck ? beatCheck.wordShareOutOfRange : [],
               rewrote: true,
               usage: recheckOut.usage || null,
             })
@@ -1874,6 +1948,31 @@ router.post('/chat', async (req, res) => {
       );
     }
 
+    // 一致性徽标：重写后仍有矛盾数值才挂，附上哪个不变项、写成了什么。
+    const invariantBadge = invariantCheck.violations.length
+      ? `【一致性自检：第${invariantCheck.violations
+          .map((v) => `${String(v.beatId).replace(/^B/i, '')}拍${v.label}写成${v.actual}`)
+          .join('、')}】`
+      : '';
+    if (invariantCheck.applicable) {
+      console.log(
+        JSON.stringify({
+          event: 'ai_invariant_check',
+          traceId,
+          userId: req.userId,
+          total: invariantCheck.total,
+          violations: invariantCheck.violations.map((v) => ({
+            beat: v.beatId,
+            key: v.key,
+            expected: v.expected,
+            actual: v.actual,
+            sentence: v.sentence,
+          })),
+          rewrote: beatRewrite,
+        })
+      );
+    }
+
     const badge = beatPlan
       ? beatBadge({
           coverage: beatCheck,
@@ -1888,13 +1987,14 @@ router.post('/chat', async (req, res) => {
       segmented && segmented.truncated
         ? `【字数安全上限 ${segmentWriter.MAX_CHAPTER_CHARS}：已截到最后一个完整段】`
         : '';
-    if (segmentBadge || truncationBadge || badge || revealBadge || withholdBadge) {
+    if (segmentBadge || truncationBadge || badge || revealBadge || withholdBadge || invariantBadge) {
       payload.reason = [
         segmentBadge,
         truncationBadge,
         badge,
         revealBadge,
         withholdBadge,
+        invariantBadge,
         payload.reason,
       ]
         .filter(Boolean)

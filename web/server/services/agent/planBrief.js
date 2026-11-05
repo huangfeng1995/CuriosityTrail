@@ -124,7 +124,8 @@ const MAX_KEYWORDS = 6;
 
 const BRIEF_PROMPT = `你是章节分场 brief 规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 任务：根据本章大纲、作品大纲、人物卡、设定、素材与上一章结尾，回答「这一章必须发生哪些动作」。
-输出格式：{"items":[{"kind":"loss|mustPresent|mustWithhold|mustReveal|evidence|opponent","text":"具体动作，写到物、写到人","keywords":["能在正文或节拍表里被逐字命中的词"],"source":"本章大纲|作品大纲|人物卡|设定|素材|上一章","inferred":false,"handover":false}]}
+输出格式：{"items":[{"kind":"loss|mustPresent|mustWithhold|mustReveal|evidence|opponent","text":"具体动作，写到物、写到人","keywords":["能在正文或节拍表里被逐字命中的词"],"source":"本章大纲|作品大纲|人物卡|设定|素材|上一章","inferred":false,"handover":false}],
+"invariants":[{"key":"age|hometown|fosterStartAge|fosterYears|keyItemOwner","value":"正文里该怎么说，如十八岁/河内获嘉/十一年","numeric":18,"unit":"岁|年","keywords":["正文里能逐字命中的定位词"],"source":"人物卡|设定|素材|背景事实","inferred":false}]}
 六类含义：
 - loss：不可逆损失/交出物/说出口的话/做出的决定。必须具体到物，如「交出犀角弓」。
 - mustPresent：关键人物必须到场，尤其长辈、托付人、见证人。写清是谁、来做什么。
@@ -138,6 +139,10 @@ const BRIEF_PROMPT = `你是章节分场 brief 规划器。只输出一个 JSON 
   不接受「心软」「犹豫」「内心挣扎」「恐惧」这类主角内部状态。
   如果输入里确实没有外部对手，输出 {"kind":"opponent","none":true,"reason":"为什么没有","source":"本章大纲"}，
   不要硬编一个。
+invariants 的五类含义：age（年龄）、hometown（籍贯）、fosterStartAge（寄养起始年龄）、
+fosterYears（寄养年数）、keyItemOwner（关键物归属）。值必须逐字来自人物卡/设定/素材/背景事实；
+由两个已知值算出来的（如寄养年数=年龄-起始年龄）要标 inferred:true。numeric 只填阿拉伯数字，
+unit 只填「岁」或「年」，keywords 给 1–4 个正文里能定位到这句的锚词（如「今年」「住了」「那年」）。
 每条必须能追溯到给定输入：source 填来源，或 inferred 填 true。inferred=true 只表示你的推断，
 只能作为建议，不能当成硬约束；不要为了凑数编造人物、器物或事件。
 每条 keywords 给 1–4 个能在文本中逐字命中的词，优先用器物名、人名、地名、制度名。`;
@@ -264,10 +269,100 @@ function normalizeItem(raw, index, dropped) {
 }
 
 /**
+ * 全章不变项：同一事实在正文里前后必须一致。
+ *
+ * 只收五类可机械核对的：年龄、籍贯、寄养起始年龄、寄养年数、关键物归属。
+ * 数值不是来自模型打分，而是来自人物卡/设定/素材，或由两个已知值算得并标 inferred。
+ */
+const INVARIANT_KEYS = ['age', 'hometown', 'fosterStartAge', 'fosterYears', 'keyItemOwner'];
+const INVARIANT_LABELS = {
+  age: '年龄',
+  hometown: '籍贯',
+  fosterStartAge: '寄养起始年龄',
+  fosterYears: '寄养年数',
+  keyItemOwner: '关键物归属',
+};
+const INVARIANT_UNITS = { age: '岁', fosterStartAge: '岁', fosterYears: '年' };
+const CN_NUM_DIGITS = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+
+/** 中文数字转整数：只处理常见写法（十八、二十、二十五、一百）。 */
+function cnNumber(value) {
+  const chars = Array.from(String(value || '').trim());
+  if (!chars.length) return null;
+  let total = 0;
+  let current = 0;
+  for (const ch of chars) {
+    if (ch === '十') {
+      total += (current || 1) * 10;
+      current = 0;
+    } else if (ch === '百') {
+      total += (current || 1) * 100;
+      current = 0;
+    } else if (CN_NUM_DIGITS[ch] !== undefined) {
+      current = CN_NUM_DIGITS[ch];
+    } else {
+      return null;
+    }
+  }
+  return total + current;
+}
+
+function parseNumberToken(token) {
+  const raw = String(token || '').trim();
+  if (!raw) return null;
+  return /^[0-9]+$/.test(raw) ? Number(raw) : cnNumber(raw);
+}
+
+function normalizeInvariant(raw, index, dropped) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    dropped.push(`不变项第 ${index + 1} 条不是对象`);
+    return null;
+  }
+  const key = text(raw.key);
+  if (!INVARIANT_KEYS.includes(key)) {
+    dropped.push(`不变项第 ${index + 1} 条 key 不合法：${key || '空'}`);
+    return null;
+  }
+  const value = text(raw.value);
+  if (!value) {
+    dropped.push(`不变项 ${key} 的 value 为空`);
+    return null;
+  }
+  const inferred = raw.inferred === true;
+  const source = text(raw.source);
+  if (!source && !inferred) {
+    dropped.push(`不变项 ${key} 没有来源且未标 inferred`);
+    return null;
+  }
+
+  const unit = ['岁', '年'].includes(text(raw.unit))
+    ? text(raw.unit)
+    : INVARIANT_UNITS[key] || '';
+  const valueMatch = value.match(/([一二三四五六七八九十百零〇两0-9]+)(岁|年)/);
+  const numericRaw = Number(raw.numeric);
+  const numeric = Number.isInteger(numericRaw) && numericRaw > 0
+    ? numericRaw
+    : valueMatch
+      ? parseNumberToken(valueMatch[1])
+      : null;
+
+  return {
+    key,
+    label: INVARIANT_LABELS[key],
+    value,
+    numeric: numeric && numeric > 0 ? numeric : null,
+    unit: valueMatch ? valueMatch[2] : unit,
+    keywords: normalizeKeywords(raw.keywords),
+    source: inferred && !source ? 'inferred' : source,
+    inferred,
+  };
+}
+
+/**
  * 校验并归一化一份分场 brief。
  *
  * @param {Object|string} candidate 模型输出（对象或 JSON 原文）
- * @returns {{ok: boolean, brief: {items: Array, dropped: string[]}|null, errors: string[]}}
+ * @returns {{ok: boolean, brief: {items: Array, invariants: Array, dropped: string[]}|null, errors: string[]}}
  */
 function validatePlanBrief(candidate) {
   const data = typeof candidate === 'string' ? parseModelJson(candidate) : candidate;
@@ -303,9 +398,21 @@ function validatePlanBrief(candidate) {
     limited.push({ ...item, id: `${KIND_ID_PREFIX[item.kind]}${count + 1}` });
   }
 
+  const rawInvariants = Array.isArray(data.invariants) ? data.invariants : [];
+  const invariants = [];
+  const seenKeys = new Set();
+  for (let index = 0; index < rawInvariants.length; index++) {
+    const invariant = normalizeInvariant(rawInvariants[index], index, dropped);
+    if (!invariant) continue;
+    if (seenKeys.has(invariant.key)) continue;
+    seenKeys.add(invariant.key);
+    invariants.push(invariant);
+    if (invariants.length >= INVARIANT_KEYS.length) break;
+  }
+
   return {
     ok: true,
-    brief: { items: limited, dropped },
+    brief: { items: limited, invariants, dropped },
     errors,
   };
 }
@@ -375,6 +482,15 @@ function formatPlanBrief(brief) {
 
   for (const item of opponentNone) {
     lines.push(`- 本章没有明确的外部对手（${item.reason}）；不要把主角的内心状态当对手，也不要硬编一个。`);
+  }
+
+  const invariants = Array.isArray(brief.invariants) ? brief.invariants : [];
+  if (invariants.length) {
+    lines.push('全章不变项（同一事实前后数值/归属必须一致，不得改动）：');
+    for (const invariant of invariants) {
+      const origin = invariant.source ? `（来源：${invariant.source}）` : '';
+      lines.push(`- ${invariant.label}：${invariant.value}${origin}`);
+    }
   }
 
   if (inferred.length) {
@@ -645,6 +761,15 @@ function briefWriterBlock(brief) {
   if (evidence.length) lines.push(`- 必须落地的物证/制度异常：${evidence.map((x) => x.text).join('；')}`);
   if (opponentNone.length) {
     lines.push(`- 本章没有明确的外部对手（${opponentNone.map((x) => x.reason).join('；')}）；不要硬编一个。`);
+  }
+
+  const invariants = Array.isArray(brief.invariants) ? brief.invariants : [];
+  if (invariants.length) {
+    lines.push(
+      `- 全章不变项（前后数值/归属必须一致，不得改动）：${invariants
+        .map((x) => `${x.label}=${x.value}${x.source ? `（${x.source}）` : ''}`)
+        .join('；')}`
+    );
   }
 
   const inferred = brief.items.filter((item) => item.inferred === true);
@@ -1117,6 +1242,194 @@ function mergeHandoverIntoBrief(brief, { characters = [], settings = [] } = {}) 
   return { ...brief, items: items.concat(added) };
 }
 
+const HOMETOWN_RE = /(?:^|[，,；;。：:\s]|是|为)([\u4e00-\u9fa5]{2,6})人(?:[，,；;。]|$|\s)/;
+const AGE_RE = /(?:今年|今年年方|年方|时年)?([一二三四五六七八九十百零〇两0-9]+)岁/;
+const GIFT_RE = /赠|赐|所留|留给|传给他|交给他/;
+
+/**
+ * 从人物卡/设定/背景事实里确定性提取不变项。
+ *
+ * 只提取能逐字找到出处的：年龄、籍贯、关键物归属。
+ * 寄养起始年龄/年数在输入里常只有「自幼」「十余年」这类模糊说法，
+ * 交给 brief 模型标注来源或 inferred，不在这里硬编一个数。
+ */
+function deriveInvariants({ characters = [], settings = [], facts = [] } = {}) {
+  const derived = [];
+  const cards = Array.isArray(characters) ? characters : [];
+  const protagonist = cards.find((card) => text(card.role).includes('主角')) || null;
+
+  const identitySources = [];
+  if (protagonist) {
+    identitySources.push({ content: text(protagonist.identity), source: '人物卡' });
+  }
+  for (const fact of Array.isArray(facts) ? facts : []) {
+    const content = text(fact && fact.content);
+    if (content) identitySources.push({ content, source: '背景事实' });
+  }
+
+  for (const { content, source } of identitySources) {
+    if (!content) continue;
+    if (!derived.some((item) => item.key === 'age')) {
+      const age = content.match(AGE_RE);
+      if (age) {
+        const numeric = parseNumberToken(age[1]);
+        if (numeric && numeric > 0 && numeric < 120) {
+          derived.push({
+            key: 'age',
+            label: INVARIANT_LABELS.age,
+            value: `${age[1]}岁`,
+            numeric,
+            unit: '岁',
+            keywords: ['今年', `${age[1]}岁`],
+            source,
+            inferred: false,
+          });
+        }
+      }
+    }
+    if (!derived.some((item) => item.key === 'hometown')) {
+      const hometown = content.match(HOMETOWN_RE);
+      if (hometown) {
+        derived.push({
+          key: 'hometown',
+          label: INVARIANT_LABELS.hometown,
+          value: hometown[1],
+          numeric: null,
+          unit: '',
+          keywords: [hometown[1]],
+          source,
+          inferred: false,
+        });
+      }
+    }
+  }
+
+  for (const setting of Array.isArray(settings) ? settings : []) {
+    if (derived.some((item) => item.key === 'keyItemOwner')) break;
+    const content = text(setting && setting.content);
+    const itemName = text(setting && setting.name);
+    if (!content || !itemName || !GIFT_RE.test(content)) continue;
+    // 归属人必须是人物卡里登记过的人名，不能靠「为X所赠」猜一个代词或受赠者。
+    const donor = cards.find(
+      (card) =>
+        text(card.name) &&
+        text(card.name).length >= 2 &&
+        !(protagonist && text(card.name) === text(protagonist.name)) &&
+        content.includes(text(card.name))
+    );
+    if (donor) {
+      derived.push({
+        key: 'keyItemOwner',
+        label: INVARIANT_LABELS.keyItemOwner,
+        value: text(donor.name),
+        numeric: null,
+        unit: '',
+        keywords: [itemName],
+        source: '设定',
+        inferred: false,
+      });
+    }
+  }
+
+  return derived;
+}
+
+/**
+ * 将确定性提取的不变项并入 brief。
+ *
+ * 同一 key 以确定性提取为准；寄养年数如果 brief 没给、而年龄和起始年龄都已知，
+ * 就按差值算一个并标 inferred。
+ */
+function mergeInvariants(brief, derived = []) {
+  if (!brief) return brief;
+  const existing = Array.isArray(brief.invariants) ? brief.invariants : [];
+  const byKey = new Map();
+  for (const invariant of existing) {
+    if (INVARIANT_KEYS.includes(invariant.key)) byKey.set(invariant.key, invariant);
+  }
+  for (const invariant of derived) {
+    if (INVARIANT_KEYS.includes(invariant.key)) byKey.set(invariant.key, invariant);
+  }
+
+  if (!byKey.has('fosterYears')) {
+    const age = byKey.get('age');
+    const start = byKey.get('fosterStartAge');
+    if (age && start && Number.isInteger(age.numeric) && Number.isInteger(start.numeric)) {
+      const years = age.numeric - start.numeric;
+      if (years > 0) {
+        byKey.set('fosterYears', {
+          key: 'fosterYears',
+          label: INVARIANT_LABELS.fosterYears,
+          value: `${years}年`,
+          numeric: years,
+          unit: '年',
+          keywords: ['住了', '那之后', '这一递', '吃了'],
+          source: '由年龄与寄养起始年龄推算',
+          inferred: true,
+        });
+      }
+    }
+  }
+
+  return { ...brief, invariants: Array.from(byKey.values()) };
+}
+
+/**
+ * 同章数值一致性检查。
+ *
+ * 只看有 numeric + unit + keywords 的不变项：同一不变量在正文里出现另一个数，
+ * 就判冲突。返回逐字证据句与所在拍，供分组重写定位。
+ */
+function checkInvariantConsistency(brief, body, plan) {
+  const invariants = ((brief && brief.invariants) || []).filter(
+    (item) => Number.isInteger(item.numeric) && item.unit && (item.keywords || []).length
+  );
+  const beats = (plan && plan.beats) || [];
+  const paragraphs = splitBodyParagraphs(body);
+  if (!invariants.length || !beats.length || !paragraphs.length) {
+    return { applicable: false, total: invariants.length, violations: [], beatIds: [] };
+  }
+
+  const ranges = paragraphRanges(beats, paragraphs.length);
+  const violations = [];
+  const seen = new Set();
+  for (let index = 0; index < beats.length; index += 1) {
+    const beat = beats[index];
+    const [from, to] = ranges[index];
+    const beatText = paragraphs.slice(from, to).join('\n');
+    if (!beatText) continue;
+
+    for (const sentence of splitSentences(beatText)) {
+      for (const invariant of invariants) {
+        if (!invariant.keywords.some((keyword) => sentence.includes(keyword))) continue;
+        const pattern = new RegExp(`([一二三四五六七八九十百零〇两0-9]+)(${invariant.unit})`, 'g');
+        for (const match of sentence.matchAll(pattern)) {
+          const actual = parseNumberToken(match[1]);
+          if (!Number.isInteger(actual) || actual === invariant.numeric) continue;
+          const key = `${beat.id}|${invariant.key}|${match[0]}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          violations.push({
+            beatId: beat.id,
+            key: invariant.key,
+            label: invariant.label,
+            expected: invariant.value,
+            actual: match[0],
+            sentence,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    applicable: true,
+    total: invariants.length,
+    violations,
+    beatIds: unique(violations.map((violation) => violation.beatId)),
+  };
+}
+
 /**
  * 分场 brief 调用。失败返回 brief=null，由路由回落到「无 brief」的旧链路。
  *
@@ -1274,5 +1587,9 @@ module.exports = {
   findHandoverDuplicates,
   checkMustWithhold,
   WITHHOLD_TERMS,
+  deriveInvariants,
+  mergeInvariants,
+  checkInvariantConsistency,
+  INVARIANT_KEYS,
   generatePlanBrief,
 };

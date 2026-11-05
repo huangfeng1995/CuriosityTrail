@@ -420,6 +420,31 @@ test('悬念违规只重写违规拍所在组，不整章重来', async () => {
   assert.match(rewritten.content, /乙改第1段/, '第二组换成重写版');
 });
 
+test('不变项数值冲突只重写冲突拍所在组，指令点名期望值与实际值', async () => {
+  const plan = makePlan(4);
+  const draftRunner = makeRunner([body('甲', 8), body('乙', 8)]);
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: draftRunner });
+
+  const rewriteRunner = makeRunner(['重写这一组：\n\n' + body('乙改', 8, '章末抬出一口箱子。')]);
+  const rewritten = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups: draft.groups,
+    coverage: { covered: [], missing: [], weak: [] },
+    invariantConflicts: [
+      { beatId: 'B4', label: '寄养年数', expected: '十一年', actual: '十五年' },
+    ],
+    runSegment: rewriteRunner,
+    callCount: draft.callCount,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(rewriteRunner.seen.length, 1);
+  assert.strictEqual(rewriteRunner.seen[0].group.index, 1);
+  assert.match(rewriteRunner.seen[0].instruction, /B4：本拍数值与全章不变项冲突/);
+  assert.match(rewriteRunner.seen[0].instruction, /寄养年数应写「十一年」，正文写成了「十五年」/);
+  assert.strictEqual(rewritten.groups[0].content, draft.groups[0].content, '未冲突的组不改写');
+});
+
 test('续写只补差额，不再按 105% 硬线裁剪正文', async () => {
   const plan = makePlan(4);
   const runner = makeRunner([

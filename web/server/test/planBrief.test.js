@@ -26,6 +26,9 @@ const {
   findHandoverDuplicates,
   checkMustWithhold,
   WITHHOLD_TERMS,
+  deriveInvariants,
+  mergeInvariants,
+  checkInvariantConsistency,
   generatePlanBrief,
 } = require('../services/agent/planBrief');
 const { validateBeatPlan } = require('../services/agent/beatPlan');
@@ -1155,4 +1158,93 @@ test('悬念自检：没有 mustWithhold 项时不适用，也不扫正文', () 
   assert.strictEqual(result.applicable, false);
   assert.strictEqual(result.violations.length, 0);
   assert.ok(WITHHOLD_TERMS.includes('符传'), '制度词表可被外部复核');
+});
+
+// ---- 全章不变项 ----
+
+test('不变项提取：年龄、籍贯、关键物归属逐字来自人物卡/设定/事实', () => {
+  const cards = [
+    {
+      name: '杨平',
+      role: '主角',
+      identity: '杨俊之子，自幼寄养在温县司马防家；建安四年十八岁，河内获嘉人。',
+    },
+    { name: '司马防', role: '配角', identity: '司马氏家主，温县人。' },
+  ];
+  const facts = [{ content: '杨平今年十八岁，河内获嘉人。' }];
+  const settings = [{ name: '犀角弓', content: '司马防所赠，弓身黑里透红。' }];
+
+  const invariants = deriveInvariants({ characters: cards, settings, facts });
+  const byKey = Object.fromEntries(invariants.map((item) => [item.key, item]));
+  assert.strictEqual(byKey.age.value, '十八岁');
+  assert.strictEqual(byKey.age.numeric, 18);
+  assert.strictEqual(byKey.age.source, '人物卡');
+  assert.strictEqual(byKey.hometown.value, '河内获嘉');
+  assert.strictEqual(byKey.keyItemOwner.value, '司马防');
+  assert.deepStrictEqual(byKey.keyItemOwner.keywords, ['犀角弓']);
+  assert.ok(invariants.every((item) => item.inferred === false), '确定性提取的值不是推断');
+});
+
+test('不变项合并：年龄与寄养起始年龄已知时，寄养年数按差值推算并标 inferred', () => {
+  const brief = {
+    items: [],
+    invariants: [
+      { key: 'age', label: '年龄', value: '十八岁', numeric: 18, unit: '岁', keywords: ['今年'], source: '人物卡', inferred: false },
+      { key: 'fosterStartAge', label: '寄养起始年龄', value: '七岁', numeric: 7, unit: '岁', keywords: ['那年'], source: '设定', inferred: false },
+    ],
+  };
+  const merged = mergeInvariants(brief, []);
+  const years = merged.invariants.find((item) => item.key === 'fosterYears');
+  assert.strictEqual(years.value, '11年');
+  assert.strictEqual(years.numeric, 11);
+  assert.strictEqual(years.inferred, true);
+  assert.match(years.source, /推算/);
+});
+
+test('一致性自检：v17 A 原文「六岁/十二年 vs 七岁/十一年」被抓到', () => {
+  const brief = {
+    invariants: [
+      { key: 'fosterYears', label: '寄养年数', value: '十一年', numeric: 11, unit: '年', keywords: ['住了', '那之后', '这一递', '吃了'] },
+      { key: 'fosterStartAge', label: '寄养起始年龄', value: '七岁', numeric: 7, unit: '岁', keywords: ['几岁', '那年', '收你进门'] },
+    ],
+  };
+  const body = [
+    '司马防接过他，只问了一句「几岁了」，杨俊说「六岁」，司马防就把他领进了后院。那之后，十二年。',
+    '风从山坳里灌过来，带着松脂的涩味。',
+    '这间厢房他住了十一年，案上一方砚，砚池里的墨已经干成一层皮。',
+    '院里有人扫雪，竹帚刮过砖缝，声音一阵一阵。',
+    '那年你才七岁，河内打成什么样，你不记得。我爹收你进门，不是施舍。',
+    '车马在巷口等着，车轭上还挂着霜。',
+  ].join('\n');
+
+  const result = checkInvariantConsistency(brief, body, withholdPlan());
+  assert.strictEqual(result.applicable, true);
+  assert.deepStrictEqual(result.beatIds, ['B1']);
+  assert.strictEqual(result.violations.length, 2);
+  const actuals = result.violations.map((v) => v.actual).sort();
+  assert.deepStrictEqual(actuals, ['十二年', '六岁'].sort());
+  assert.ok(result.violations.every((v) => v.sentence.includes(v.actual)));
+});
+
+test('一致性自检：v17 B 原文「十五年/十年 vs 十一年」被抓到', () => {
+  const brief = {
+    invariants: [
+      { key: 'fosterYears', label: '寄养年数', value: '十一年', numeric: 11, unit: '年', keywords: ['住了', '这一递', '吃了'] },
+    ],
+  };
+  const body = [
+    '他今年十八了，在温县住了十五年，司马防待他跟自家子侄一样。',
+    '案上的灯芯剪得很短，光只照到案沿。',
+    '你爹把你往我手里一递，转头就进山了。这一递，十年。',
+    '门外家兵换了岗，甲叶碰在一起响了一声。',
+    '这孩子在我这儿吃了十年饭。我不管你是奉谁的召，保他平安。',
+    '车马在巷口等着，车轭上还挂着霜。',
+  ].join('\n');
+
+  const result = checkInvariantConsistency(brief, body, withholdPlan());
+  assert.deepStrictEqual(result.beatIds, ['B1', 'B3', 'B5']);
+  assert.deepStrictEqual(
+    result.violations.map((v) => v.actual).sort(),
+    ['十五年', '十年', '十年'].sort()
+  );
 });

@@ -21,6 +21,7 @@ const {
   beatBadge,
   generateBeatPlan,
   checkBeatCoverage,
+  checkWordShares,
 } = require('../services/agent/beatPlan');
 
 /**
@@ -438,6 +439,77 @@ test('规划：信号已取消时不再发起请求', async () => {
 
   assert.strictEqual(called, false);
   assert.strictEqual(out.reason, 'timeout');
+});
+
+test('篇幅配比：模型没给 wordShare 时按段落权重折算，合计 100', () => {
+  const result = validateBeatPlan(makePlan());
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(result.plan.beats.map((b) => b.wordShare), [25, 25, 25, 25]);
+});
+
+test('篇幅配比：模型给齐且合计接近 100 时保留原目标', () => {
+  const plan = makePlan({
+    beats: makePlan().beats.map((beat, index) => ({
+      ...beat,
+      wordShare: [10, 14, 30, 46][index],
+    })),
+  });
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(result.plan.beats.map((b) => b.wordShare), [10, 14, 30, 46]);
+});
+
+test('计划校验拒绝：回城/身世并进过渡拍且份额低于 20%', () => {
+  const plan = makePlan({
+    beats: makePlan().beats.map((beat, index) => ({
+      ...beat,
+      wordShare: [30, 30, 10, 30][index],
+      ...(index === 2 ? { type: '过渡', goal: '回城路上顺带交代身世' } : {}),
+    })),
+  });
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, false);
+  assert.ok(
+    result.errors.some((error) => error.includes('回城/身世并进了过渡拍')),
+    `应拒绝合并回城/身世，实际：${result.errors.join('；')}`
+  );
+});
+
+test('计划校验拒绝：两拍都写完整交付', () => {
+  const plan = makePlan({
+    beats: makePlan().beats.map((beat, index) => {
+      if (index === 2) return { ...beat, goal: '在门前把杨平交给杨俊' };
+      if (index === 3) return { ...beat, infoGain: '司马防把杨平交给杨俊，话说完就上车' };
+      return beat;
+    }),
+  });
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, false);
+  assert.ok(
+    result.errors.some((error) => error.includes('两拍都写了完整交付')),
+    `应拒绝重复交付，实际：${result.errors.join('；')}`
+  );
+});
+
+test('篇幅配比自检：正文纯汉字份额超出 ±5pp 的拍被列出', () => {
+  const plan = validateBeatPlan(makePlan()).plan;
+  const body = [
+    '甲乙丙丁戊己庚辛壬癸',
+    '子丑寅卯辰巳午未申酉',
+    '一二三四五六七八九十'.repeat(5),
+    '天地玄黄宇宙洪荒日月盈昃'.repeat(3),
+  ].join('\n\n');
+
+  const shares = checkWordShares(plan, body);
+  assert.strictEqual(shares.applicable, true);
+  assert.strictEqual(shares.total, 10 + 10 + 50 + 36);
+  assert.deepStrictEqual(
+    shares.beats.map((row) => row.share),
+    [9.4, 9.4, 47.2, 34]
+  );
+  assert.ok(shares.outOfRange.includes('B1'));
+  assert.ok(shares.outOfRange.includes('B3'));
+  assert.ok(shares.outOfRange.includes('B4'));
 });
 
 test('自检：超时返回 null 与 timeout，正文留空不发起请求', async () => {

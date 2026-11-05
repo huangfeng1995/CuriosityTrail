@@ -40,6 +40,17 @@ const MAX_TOTAL_PARAGRAPHS = 80;
 /** 空钩子话术，出现即判不合格 */
 const EMPTY_HOOKS = ['且听下回分解', '欲知后事', '下回分解'];
 
+/** 回城/身世是本章的承重拍：并进「过渡」拍且份额过低，等于把身世交代糊过去。 */
+const ARC_BEAT_RE = /回城|到家|进城|身世|寄养|旧事|年龄|籍贯|来历/;
+const ARC_MIN_SHARE = 20;
+
+/** 完整交付的机械识别：把某人交给某人。预备动作（递、接、握住手）不算。 */
+const DELIVERY_FULL_RE = /把[\u4e00-\u9fa5]{2,4}交给[\u4e00-\u9fa5]{2,4}/;
+
+function beatNarrative(beat) {
+  return [beat.goal, beat.obstacle, beat.cost, beat.infoGain, beat.endHook].join('\n');
+}
+
 /** 覆盖证据的长度上限：够定位原句，又不至于把正文抄一遍 */
 const MAX_EVIDENCE_CHARS = 30;
 
@@ -50,8 +61,11 @@ const MAX_EVIDENCE_CHARS = 30;
 const PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
 beats 4–8 个；每拍含 id（B1…Bn）、type（行动|转折|冲突|揭示|决定|过渡）、goal、obstacle、cost、
-delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–10）、endHook（这一拍结束时的悬念或钩子）。
+delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–10）、wordShare、endHook（这一拍结束时的悬念或钩子）。
 单章是 5000 字量级的长章：按内容需要给每拍估段数，长章大致 35–60 段即可，不必凑固定段数。
+wordShare 是这一拍占全章正文的百分比整数，各拍合计约 100。长章范文实测配比：
+开篇 8–10、途中议论 14、回城与身世约 30、父亲持符传到 15–16、告别托付 25、启程 6–7；
+允许 ±5 个百分点的浮动。回城/身世这一拍不能并进过渡拍，目标份额低于 20 会被判不合格。
 每个节拍必须让至少一个变量发生改变，必须写出代价，禁止空转抒情段。
 mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不新增未提供的人物或设定。`;
 
@@ -175,6 +189,7 @@ function validateBeatPlan(candidate) {
       totalParagraphs += paragraphs;
     }
 
+    const rawShare = Number(beat.wordShare);
     beats.push({
       id,
       type,
@@ -184,15 +199,50 @@ function validateBeatPlan(candidate) {
       delta: { variable, from, to },
       infoGain,
       paragraphs: Number.isInteger(paragraphs) ? paragraphs : 0,
+      wordShare: Number.isFinite(rawShare) && rawShare > 0 && rawShare <= 100 ? rawShare : null,
       endHook,
     });
   });
+
+  // wordShare：模型给齐了就按它的配比；缺项或合计明显不对，就按段落权重折算，
+  // 保证每拍都有目标份额，而不是让某一拍静默缺失。
+  const totalParagraphsForShare = beats.reduce((sum, b) => sum + (b.paragraphs || 0), 0);
+  const rawShareTotal = beats.reduce((sum, b) => sum + (b.wordShare || 0), 0);
+  const usableRawShare =
+    beats.every((b) => b.wordShare !== null) && rawShareTotal >= 90 && rawShareTotal <= 110;
+  for (const beat of beats) {
+    if (usableRawShare) {
+      beat.wordShare = Math.round(beat.wordShare * 10) / 10;
+    } else if (totalParagraphsForShare > 0) {
+      beat.wordShare = Math.round(((beat.paragraphs || 0) / totalParagraphsForShare) * 1000) / 10;
+    } else {
+      beat.wordShare = Math.round((100 / Math.max(1, beats.length)) * 10) / 10;
+    }
+  }
 
   if (beats.length && (totalParagraphs < MIN_TOTAL_PARAGRAPHS || totalParagraphs > MAX_TOTAL_PARAGRAPHS)) {
     errors.push(`全章段落数必须在 ${MIN_TOTAL_PARAGRAPHS}–${MAX_TOTAL_PARAGRAPHS} 之间，收到 ${totalParagraphs}`);
   }
   if (mainType && beats.length && !beats.some((b) => b.type === mainType)) {
     errors.push('mainType 必须与某一个节拍的 type 相同');
+  }
+
+  // 回城/身世不能并进过渡拍：份额低于 20% 说明这一拍只是顺带提一句。
+  for (const beat of beats) {
+    if (beat.type === '过渡' && ARC_BEAT_RE.test(beatNarrative(beat)) && beat.wordShare < ARC_MIN_SHARE) {
+      errors.push(
+        `${beat.id}把回城/身世并进了过渡拍（目标份额仅 ${beat.wordShare}%，应 ≥${ARC_MIN_SHARE}%），` +
+          '回城与身世必须单独成拍'
+      );
+    }
+  }
+
+  // 完整交付只能有一拍；两拍都写「把某人交给某人」就是重复交付。
+  const deliveryBeats = beats.filter((beat) => DELIVERY_FULL_RE.test(beatNarrative(beat)));
+  if (deliveryBeats.length > 1) {
+    errors.push(
+      `${deliveryBeats.map((b) => b.id).join('、')} 两拍都写了完整交付；交付全章只写一次`
+    );
   }
 
   if (errors.length) return { ok: false, plan: null, errors };
@@ -336,6 +386,13 @@ function buildRewriteInstruction(plan, coverage, mustReveal = [], handover = {})
     lines.push(
       `- ${id}：本拍只写形制细节与人物反应，不写制度结论，不替读者解释；` +
         '删掉所有关于私辟/传诏/符传/逾制/该不该的判断句。'
+    );
+  }
+  for (const conflict of (handover && handover.invariantConflicts) || []) {
+    if (!conflict || !conflict.beatId) continue;
+    lines.push(
+      `- ${conflict.beatId}：${conflict.label}应写「${conflict.expected}」，正文写成了「${conflict.actual}」；` +
+        '同一事实只保留一个数，改成 brief 不变项里的值。'
     );
   }
 
@@ -504,12 +561,75 @@ async function checkBeatCoverage({ provider, plan, body, options = {} }) {
   }
 }
 
+/** 纯汉字计数：篇幅配比只看正文汉字，不含标点与空白。 */
+function cjkCount(value) {
+  return Array.from(String(value || '')).filter((ch) => /[\u4e00-\u9fff]/.test(ch)).length;
+}
+
+function shareParagraphRanges(beats, paragraphCount) {
+  const weights = beats.map((beat) => Math.max(1, Number(beat.paragraphs) || 1));
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const ranges = [];
+  let from = 0;
+  for (let i = 0; i < beats.length; i += 1) {
+    const last = i === beats.length - 1;
+    const to = last
+      ? paragraphCount
+      : Math.min(paragraphCount, Math.max(from, from + Math.round((weights[i] / totalWeight) * paragraphCount)));
+    ranges.push([from, to]);
+    from = to;
+  }
+  return ranges;
+}
+
+/**
+ * 正文实际篇幅配比：逐拍量纯汉字，和目标 wordShare 比，超过 ±5pp 就记账。
+ *
+ * 只报告、不改写——配比是规划问题，重写逃不出一份本来就失衡的节拍表。
+ *
+ * @param {Object} plan 已校验节拍表
+ * @param {string} body 正文
+ * @param {number} [tolerance=5] 允许偏离的百分点
+ * @returns {{applicable: boolean, total: number, beats: Array, outOfRange: string[]}}
+ */
+function checkWordShares(plan, body, tolerance = 5) {
+  const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
+  const paragraphs = String(body || '')
+    .split(/\n+/)
+    .map((row) => row.trim())
+    .filter(Boolean);
+  if (!beats.length || !paragraphs.length) {
+    return { applicable: false, total: 0, beats: [], outOfRange: [] };
+  }
+
+  const ranges = shareParagraphRanges(beats, paragraphs.length);
+  const rows = [];
+  const total = cjkCount(paragraphs.join(''));
+  for (let i = 0; i < beats.length; i += 1) {
+    const [from, to] = ranges[i];
+    const chars = to > from ? cjkCount(paragraphs.slice(from, to).join('')) : 0;
+    const share = total > 0 ? Math.round((chars / total) * 1000) / 10 : 0;
+    const target = Number(beats[i].wordShare);
+    rows.push({
+      id: beats[i].id,
+      target: Number.isFinite(target) ? target : null,
+      share,
+      delta: Number.isFinite(target) ? Math.round((share - target) * 10) / 10 : null,
+    });
+  }
+  const outOfRange = rows
+    .filter((row) => row.target !== null && Math.abs(row.delta) > tolerance)
+    .map((row) => row.id);
+  return { applicable: true, total, beats: rows, outOfRange };
+}
+
 module.exports = {
   BEAT_TYPES,
   DELTA_VARIABLES,
   PLAN_PROMPT,
   COVERAGE_PROMPT,
   validateBeatPlan,
+  checkWordShares,
   validateCoverage,
   formatBeatPlan,
   buildRewriteInstruction,
