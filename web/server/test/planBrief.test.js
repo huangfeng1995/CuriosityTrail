@@ -1367,6 +1367,19 @@ test('一致性自检：大两岁是年龄差，不能判成实际年龄两岁',
   assert.strictEqual(result.violations.length, 0);
 });
 
+test('一致性自检：「十一岁那年河内乱起来」是事件年龄，不算今年年龄冲突', () => {
+  const brief = {
+    invariants: [
+      { key: 'age', label: '年龄', value: '十八岁', numeric: 18, unit: '岁', keywords: ['今年', '十八'] },
+    ],
+  };
+  // v27 A 重跑的真实句：今年十八，十一岁那年是寄养起点，不是年龄冲突。
+  const body =
+    '他今年十八，获嘉人，十一岁那年河内乱起来，董卓的兵从北边压下来，袁绍的兵又往南边顶，他爹杨俊带着族里人往山里躲，把他送到温县司马防门上。';
+  const result = checkInvariantConsistency(brief, body, { beats: [{ id: 'B3' }] });
+  assert.strictEqual(result.violations.length, 0);
+});
+
 // ---- 对手兜底（P4）----
 
 test('对手兜底：输入里有传车与时限时，从输入补出外部压力并写来源', () => {
@@ -1404,6 +1417,44 @@ test('对手兜底：brief 已有具体对手时不改动', () => {
   };
   const out = mergeDerivedOpponent(brief, { instruction: '传车已在门外。' });
   assert.strictEqual(out, brief);
+});
+
+test('托付落位：goal 里没有离场词时，按显式 function=farewell 落拍', () => {
+  const brief = {
+    items: [
+      {
+        id: 'MP4',
+        kind: 'mustPresent',
+        text: '司马防在告别拍把杨平交给杨俊，并留一句可引用的话',
+        keywords: ['司马防'],
+        to: '杨俊',
+        handover: true,
+        inferred: false,
+      },
+    ],
+  };
+  // 样本 B5 的真实形状：function 明确是 farewell，但 goal 写的是「把弓还给司马家」。
+  const plan = {
+    beats: [
+      { id: 'B4', function: 'father', goal: '杨平问父亲为何急着走', infoGain: '看到符传' },
+      {
+        id: 'B5',
+        function: 'farewell',
+        goal: '杨平想把犀角弓还给司马家',
+        obstacle: '司马朗不肯收',
+        cost: '只带走弓弦',
+        infoGain: '司马防对杨俊说：「保他平安。」',
+      },
+      { id: 'B6', function: 'departure', goal: '随传车出城', infoGain: '北斗刻痕硌着腰' },
+    ],
+  };
+
+  assert.strictEqual(handoverBeatId(brief, plan), 'B5');
+  const placement = placeHandoverInPlan(plan, {
+    missing: [{ ...brief.items[0], slot: 'handover', handoverKind: '话' }],
+  });
+  assert.deepStrictEqual(placement.placed, ['B5']);
+  assert.deepStrictEqual(placement.unplaced, [], '不能因为 goal 没有离场词就报「没有告别/离场拍」');
 });
 
 test('对手兜底：模型说「本章没有对手」但输入有官威时，用输入的外部压力替换', () => {

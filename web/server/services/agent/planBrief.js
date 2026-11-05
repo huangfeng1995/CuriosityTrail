@@ -543,16 +543,19 @@ function beatNarrative(beat) {
 }
 
 /**
- * 告别/离场拍：所有在 goal / infoGain 里带离场语义的拍。
+ * 告别/离场拍：优先认显式 function=farewell，其次看 goal / infoGain 的离场语义。
  *
- * 只认这两个字段，是因为它们回答「这一拍要做什么、会得到什么」；
- * 不再回落到末拍——末拍通常是章末钩子，把托付塞进去正是之前的问题。
+ * 显式分类已在规划层完成，托付落位不能再用关键词二次猜测：B5 的 goal 可能是
+ * 「把犀角弓还给司马家」，一个离场词都没有，但它的 function 就是 farewell。
+ * 没有 function 的老节拍表（测试或回落链路）才退回关键词。
  *
  * @param {Array} beats
  * @returns {Array<Object>}
  */
 function farewellBeats(beats) {
   if (!Array.isArray(beats) || !beats.length) return [];
+  const classified = beats.filter((beat) => beat && beat.function === 'farewell');
+  if (classified.length) return classified;
   return beats.filter((beat) => {
     if (!beat || typeof beat !== 'object') return false;
     return FAREWELL_RE.test(text(beat.goal)) || FAREWELL_RE.test(text(beat.infoGain));
@@ -1628,6 +1631,10 @@ function checkInvariantConsistency(brief, body, plan) {
           }
         }
         if (!best || numeric === best.invariant.numeric) continue;
+        // 「十一岁那年河内乱起来」说的是某件事发生时的年龄，不是今年多大。
+        // 年龄不变项只约束当下年龄，不能把事件年龄当成冲突。
+        const afterToken = sentence.slice(token.index + token.text.length, token.index + token.text.length + 5);
+        if (best.invariant.key === 'age' && /^(那年|那一年|这年|那年头)/.test(afterToken)) continue;
         // 寄养起始年龄只认进门/寄养语义的句子，避免把「十岁那年给的弓」算成进门年龄。
         if (best.invariant.key === 'fosterStartAge' && !FOSTER_ENTRY_RE.test(sentence)) continue;
         // 同一句里已经写明该不变项的期望值时，同单位的其他数字属于另一个量
