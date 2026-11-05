@@ -35,7 +35,9 @@ test.describe('左栏面板', () => {
   });
 
   test('版本历史：手动存档出现在列表', async ({ page }) => {
-    await page.locator('button:has(.anticon-history)').click();
+    // 历史版本收在章节头的「⋯」里
+    await page.locator('button[aria-label="更多章节操作"]').click();
+    await page.locator('.ant-dropdown-menu-item:has-text("历史版本")').click();
     const drawer = page.locator('.ant-drawer').last();
     await expect(drawer).toBeVisible();
 
@@ -45,18 +47,32 @@ test.describe('左栏面板', () => {
     await expect(drawer.getByText('手动').first()).toBeVisible();
   });
 
-  test('进度：设置目标字数', async ({ page }) => {
+  test('作品：在设置「作品」里设置目标字数', async ({ page }) => {
     const f = fixture();
-    await openTab(page, '进度');
-    const pane = activePane(page);
+    // 作品信息与进度已从写作页左栏迁到设置页
+    await page.goto(`/settings?tab=work&work=${f.work.id}`);
+    await expect(page.locator('.ant-tabs-tab-active')).toContainText('作品');
 
-    const input = pane.getByPlaceholder('未设定');
+    const input = page.getByPlaceholder('未设定');
     await input.fill('10000');
-    await input.press('Enter');
-    await expect(page.getByText('已更新目标字数')).toBeVisible();
+    await button(page, '保存作品信息').click();
+    await expect(page.locator('.ant-message').getByText('已保存')).toBeVisible();
 
     const work = await (await page.request.get(`/api/works/${f.work.id}`)).json();
     expect(work.targetWords ?? work.target_words).toBe(10000);
+  });
+
+  test('快捷键：⌘⇧\\ 收左栏、⌘\\ 收右栏', async ({ page }) => {
+    // Shift+\ 在多数布局产出的是 '|'，按 e.key 判定时会失灵；这里用真实按键回归
+    await page.keyboard.press('Meta+Shift+Backslash');
+    await expect(page.locator('.ct-col-left')).toHaveAttribute('data-hidden', 'true');
+    await page.keyboard.press('Meta+Shift+Backslash');
+    await expect(page.locator('.ct-col-left')).not.toHaveAttribute('data-hidden', 'true');
+
+    await page.keyboard.press('Meta+Backslash');
+    await expect(page.locator('.ct-col-right')).toHaveAttribute('data-hidden', 'true');
+    await page.keyboard.press('Meta+Backslash');
+    await expect(page.locator('.ct-col-right')).not.toHaveAttribute('data-hidden', 'true');
   });
 
   test('一致性检查：规则检查可运行', async ({ page }) => {

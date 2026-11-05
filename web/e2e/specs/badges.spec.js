@@ -102,8 +102,9 @@ async function openSeededConversation(page, item) {
   await page.goto(`/works/${work.id}`);
   await expect(page.locator('.ant-input-borderless')).toBeVisible();
 
-  // 历史对话按钮是输入区左侧的第一个图标按钮
-  await page.locator('.ct-ai-actions button').first().click();
+  // 历史对话与清空都收在输入区的「⋯」里
+  await page.locator('button[aria-label="更多对话操作"]').click();
+  await page.locator('.ant-dropdown-menu-item:has-text("历史对话")').click();
   const drawer = page.locator('.ant-drawer').last();
   await expect(drawer).toBeVisible();
   await drawer.locator(`.ct-history-item:has-text("${item.title}")`).click();
@@ -115,37 +116,49 @@ test.beforeAll(async () => {
   for (const item of CASES) await seedConversation(item);
 });
 
-test('节拍覆盖：显示「节拍 3/4 · 缺拍 B4」', async ({ page }) => {
+test('节拍覆盖：详情里显示「节拍覆盖 3/4」与「缺拍 B4」', async ({ page }) => {
   await openSeededConversation(page, CASES[0]);
   const card = page.locator('.ct-action-card').last();
-  const badge = card.locator('.ct-badge.is-warn');
-  await expect(badge).toContainText('节拍 3/4');
-  await expect(badge).toContainText('缺拍 B4');
+  const detail = card.locator('.ct-badge.is-warn');
+  await expect(detail).toContainText('详情');
+
+  await detail.click();
+  const popover = page.locator('.ant-popover').last();
+  await expect(popover).toBeVisible();
+  await expect(popover).toContainText('节拍覆盖：3/4');
+  await expect(popover).toContainText('缺拍 B4');
 
   const shot = path.join(SHOT_DIR, '01-beat-coverage.png');
-  await card.screenshot({ path: shot });
-  console.log('[badge-shot] 节拍覆盖 →', shot, '；点击次数 = 0（纯展示）');
+  await page.screenshot({ path: shot });
+  console.log('[badge-shot] 节拍覆盖（已打开详情）→', shot, '；点击次数 = 1');
 });
 
-test('规划降级：显示「规划降级（格式不合格）」', async ({ page }) => {
+test('规划降级：详情里显示「规划降级：格式不合格」', async ({ page }) => {
   await openSeededConversation(page, CASES[1]);
   const card = page.locator('.ct-action-card').last();
-  await expect(card.locator('.ct-badge.is-warn')).toContainText('规划降级（格式不合格）');
+  const detail = card.locator('.ct-badge.is-warn');
+  await expect(detail).toContainText('详情');
+
+  await detail.click();
+  const popover = page.locator('.ant-popover').last();
+  await expect(popover).toBeVisible();
+  await expect(popover).toContainText('规划降级：格式不合格');
 
   const shot = path.join(SHOT_DIR, '02-plan-degraded.png');
-  await card.screenshot({ path: shot });
-  console.log('[badge-shot] 规划降级 →', shot, '；点击次数 = 0（纯展示）');
+  await page.screenshot({ path: shot });
+  console.log('[badge-shot] 规划降级（已打开详情）→', shot, '；点击次数 = 1');
 });
 
 test('史实冲突：点 1 次徽标看到原句与定位', async ({ page }) => {
   await openSeededConversation(page, CASES[2]);
   const card = page.locator('.ct-action-card').last();
   const badge = card.locator('.ct-badge.is-bad');
-  await expect(badge).toContainText('史实冲突 1');
+  await expect(badge).toContainText('详情');
 
   await badge.click();
   const popover = page.locator('.ant-popover').last();
   await expect(popover).toBeVisible();
+  await expect(popover).toContainText('史实冲突 1 条');
   await expect(popover.locator('.ct-violation-quote')).toContainText(
     '原句：曹操端坐堂上，众客屏息。'
   );

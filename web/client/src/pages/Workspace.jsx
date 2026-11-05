@@ -10,6 +10,7 @@ import EmptyState from '../components/EmptyState';
 import Resizer from '../components/Resizer';
 import { useIsNarrow } from '../hooks/useMediaQuery';
 import useColumnWidths, { LIMITS } from '../hooks/useColumnWidths';
+import { panelCollapseSide } from '../utils/shortcuts';
 import { pendingActions } from '../components/Assistant/pendingActions';
 import WorkTree from '../components/Sidebar/WorkTree';
 import CharacterPanel from '../components/Sidebar/CharacterPanel';
@@ -97,13 +98,16 @@ export default function Workspace() {
   // 桌面端折叠快捷键：⌘/Ctrl + \ 收右栏，⌘/Ctrl + Shift + \ 收左栏。
   // 移动端是抽屉布局，没有可收的两栏；专注模式里两栏已被盖住，
   // 这时按键不该顺手改掉作者平时的折叠偏好。
+  //
+  // 判定交给 panelCollapseSide：它用 e.code（而不是 e.key）认反斜杠，
+  // Shift+\ 产出的 '|' 也能命中左栏快捷键。
   useEffect(() => {
     if (isMobile || focusMode) return;
     const onKeyDown = (e) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key !== '\\') return;
+      const side = panelCollapseSide(e);
+      if (!side) return;
       e.preventDefault();
-      if (e.shiftKey) toggleLeft();
+      if (side === 'left') toggleLeft();
       else toggleRight();
     };
     window.addEventListener('keydown', onKeyDown);
