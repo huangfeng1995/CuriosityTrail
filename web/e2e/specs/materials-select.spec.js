@@ -43,6 +43,15 @@ const MATERIALS = [
     preview: '待补：缺更夫的口音细节',
     char_count: 40,
   },
+  {
+    id: 'mat-pending-2',
+    title: '雨夜巷子（二）',
+    source: '手记',
+    confidence: 'inferable',
+    status: 'pending',
+    preview: '巷口第二场雨……',
+    char_count: 90,
+  },
 ];
 
 async function mockApi(page) {
@@ -53,9 +62,12 @@ async function mockApi(page) {
     }
     await route.fallback();
   });
-  await page.route('**/api/materials/confirm', (route) =>
-    route.fulfill({ json: { confirmed: 2 } })
-  );
+  // 默认回执按请求 ids 长度给「实际确认条数」，模拟后端全部成功
+  await page.route('**/api/materials/confirm', (route) => {
+    const body = route.request().postDataJSON() || {};
+    const ids = Array.isArray(body.ids) ? body.ids : [];
+    return route.fulfill({ json: { confirmed: ids.length } });
+  });
   await page.route('**/api/materials/*/retract', (route) =>
     route.fulfill({ json: { ok: true } })
   );
@@ -64,6 +76,19 @@ async function mockApi(page) {
       json: [{ id: 'w-e2e', title: '测试作品', template: 'history_thriller' }],
     })
   );
+}
+
+// 拿到当前 toast 文案（antd message 会给两个汉字插空格，统一去掉空白）
+async function toastText(page) {
+  const notice = page.locator('.ant-message-notice-content').last();
+  await notice.waitFor();
+  return (await notice.innerText()).replace(/\s+/g, '');
+}
+
+// 从 toast 里取「已确认 N 条 / 已撤回 N 条」的 N
+function toastCount(text, action) {
+  const m = text.match(new RegExp(`${action}(\\d+)条`));
+  return m ? Number(m[1]) : NaN;
 }
 
 test.describe('素材库勾选', () => {
@@ -79,7 +104,7 @@ test.describe('素材库勾选', () => {
     const liAvatarAttrs = await page
       .locator('.ant-list-item')
       .evaluateAll((nodes) => nodes.map((n) => n.getAttribute('avatar')));
-    expect(liAvatarAttrs).toEqual([null, null, null]);
+    expect(liAvatarAttrs).toEqual(MATERIALS.map(() => null));
 
     // 未勾选时三个批量按钮都不渲染
     await expect(button(page, '升格为史实锚点')).toHaveCount(0);
@@ -105,12 +130,12 @@ test.describe('素材库勾选', () => {
     await expect(page.locator('.ant-modal-title').last()).toContainText('升格为史实锚点');
   });
 
-  test('确认入库：可点并发出批量确认', async ({ page }) => {
+  test('确认入库：选 1 条，按钮文案/请求 ids/toast 条数三处一致', async ({ page }) => {
     let confirmedBody = null;
     await mockApi(page);
     await page.route('**/api/materials/confirm', async (route) => {
       confirmedBody = route.request().postDataJSON();
-      await route.fulfill({ json: { confirmed: 2 } });
+      await route.fulfill({ json: { confirmed: confirmedBody.ids.length } });
     });
     await page.goto('/materials');
 
@@ -119,8 +144,53 @@ test.describe('素材库勾选', () => {
     await expect(btn).toBeEnabled();
     await btn.click();
 
-    await expect(page.locator('.ant-message').getByText(/已确认 2 条/)).toBeVisible();
+    const text = await toastText(page);
     expect(confirmedBody).toEqual({ ids: ['mat-pending'] });
+    expect(toastCount(text, '已确认')).toBe(confirmedBody.ids.length);
+    expect(text).toContain('已确认1条');
+  });
+
+  test('确认入库：选 2 条，toast 条数与请求 ids 长度一致', async ({ page }) => {
+    let confirmedBody = null;
+    await mockApi(page);
+    await page.route('**/api/materials/confirm', async (route) => {
+      confirmedBody = route.request().postDataJSON();
+      await route.fulfill({ json: { confirmed: confirmedBody.ids.length } });
+    });
+    await page.goto('/materials');
+
+    const boxes = page.locator('.ant-list-item input[type="checkbox"]');
+    await boxes.nth(1).check();
+    await boxes.nth(3).check();
+    const btn = button(page, '确认入库（2）');
+    await expect(btn).toBeEnabled();
+    await btn.click();
+
+    const text = await toastText(page);
+    expect(confirmedBody).toEqual({ ids: ['mat-pending', 'mat-pending-2'] });
+    expect(toastCount(text, '已确认')).toBe(confirmedBody.ids.length);
+    expect(text).toContain('已确认2条');
+  });
+
+  test('确认入库：后端部分成功时 toast 分开报成功/失败条数', async ({ page }) => {
+    let confirmedBody = null;
+    await mockApi(page);
+    // 发了 2 条，后端只确认上 1 条
+    await page.route('**/api/materials/confirm', async (route) => {
+      confirmedBody = route.request().postDataJSON();
+      await route.fulfill({ json: { confirmed: 1 } });
+    });
+    await page.goto('/materials');
+
+    const boxes = page.locator('.ant-list-item input[type="checkbox"]');
+    await boxes.nth(1).check();
+    await boxes.nth(3).check();
+    await button(page, '确认入库（2）').click();
+
+    const text = await toastText(page);
+    expect(confirmedBody.ids).toHaveLength(2);
+    expect(toastCount(text, '已确认')).toBe(1);
+    expect(text).toContain('失败1条');
   });
 
   test('撤回：可点并逐条发出撤回', async ({ page }) => {
@@ -138,8 +208,33 @@ test.describe('素材库勾选', () => {
     await expect(btn).toBeEnabled();
     await btn.click();
 
-    await expect(page.locator('.ant-message').getByText(/已撤回 2 条/)).toBeVisible();
+    const text = await toastText(page);
+    // toast 数字必须与真实发出的 retract 次数一致，不能取本地选中数
+    expect(toastCount(text, '已撤回')).toBe(calls.length);
     expect(calls).toHaveLength(2);
+  });
+
+  test('撤回：单条失败时 toast 分开报成功/失败条数', async ({ page }) => {
+    let calls = 0;
+    await mockApi(page);
+    await page.route('**/api/materials/*/retract', async (route) => {
+      calls += 1;
+      if (calls === 1) {
+        await route.fulfill({ json: { ok: true } });
+        return;
+      }
+      await route.fulfill({ status: 500, json: { error: '撤回失败' } });
+    });
+    await page.goto('/materials');
+
+    await page.locator('.ant-list-item input[type="checkbox"]').nth(0).check();
+    await page.locator('.ant-list-item input[type="checkbox"]').nth(1).check();
+    await button(page, '撤回（2）').click();
+
+    const text = await toastText(page);
+    expect(calls).toBe(2);
+    expect(toastCount(text, '已撤回')).toBe(1);
+    expect(text).toContain('失败1条');
   });
 
   test('三档底色/图标/边框与出处行仍按原样显示', async ({ page }) => {

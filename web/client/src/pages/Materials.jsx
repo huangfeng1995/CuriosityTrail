@@ -249,7 +249,15 @@ export default function Materials() {
     if (!ids.length) return;
     try {
       const res = await api.post('/materials/confirm', { ids });
-      message.success(`已确认 ${res.data.confirmed} 条，现在可以被写作检索命中`);
+      // 条数以服务端实际更新行数为准：ids 里混进已确认或不属于本用户的，
+      // confirmed 会小于 ids.length，差出来的这部分就是没确认上的。
+      const confirmed = Number(res.data?.confirmed) || 0;
+      const failed = ids.length - confirmed;
+      if (failed > 0) {
+        message.warning(`已确认 ${confirmed} 条，失败 ${failed} 条`);
+      } else {
+        message.success(`已确认 ${confirmed} 条，现在可以被写作检索命中`);
+      }
       setSelected([]);
       load();
     } catch (e) {
@@ -264,8 +272,15 @@ export default function Materials() {
     });
     if (!ids.length) return;
     try {
-      await Promise.all(ids.map((id) => api.post(`/materials/${id}/retract`)));
-      message.success(`已撤回 ${ids.length} 条`);
+      // 逐条撤回，部分失败不该让整批的条数失真
+      const results = await Promise.allSettled(ids.map((id) => api.post(`/materials/${id}/retract`)));
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const failed = ids.length - ok;
+      if (failed > 0) {
+        message.warning(`已撤回 ${ok} 条，失败 ${failed} 条`);
+      } else {
+        message.success(`已撤回 ${ok} 条`);
+      }
       setSelected([]);
       load(filter === 'retracted' ? 'retracted' : '');
     } catch (e) {
