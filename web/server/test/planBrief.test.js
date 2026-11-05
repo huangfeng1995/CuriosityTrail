@@ -20,6 +20,8 @@ const {
   briefWriterBlock,
   partitionCoverage,
   buildReplanInstruction,
+  buildOpeningReplanInstruction,
+  openingOpponentCoverage,
   mergeHandoverIntoBrief,
   placeHandoverInPlan,
   handoverBeatId,
@@ -453,6 +455,39 @@ test('开场对手：只在 B1 的 goal/cost 出现不算覆盖，必须写进 o
   assert.strictEqual(coveredCoverage.opponent, 'covered');
   assert.ok(coveredCoverage.covered.includes('OP1'));
   assert.ok(!coveredCoverage.missing.some((x) => x.slot === 'opening'));
+});
+
+test('开场对手：只认 function=opening 拍，第一拍标成 discussion 时不算覆盖', () => {
+  const brief = opponentBrief();
+  const plan = planWithOpeningAndFarewell({
+    openingObstacle: '张杨征粮的使者守住城门，不交粮就不放行',
+  });
+  plan.beats[0].function = 'discussion';
+  plan.beats[1].function = 'opening';
+
+  const missing = openingOpponentCoverage(brief, plan);
+  assert.strictEqual(missing.status, 'missing');
+  assert.strictEqual(missing.openingBeatId, 'B2');
+  assert.match(missing.missing[0].text, /张杨/);
+
+  // 把同一句对手阻碍放到真正的开场拍，才算落位。
+  plan.beats[1].obstacle = plan.beats[0].obstacle;
+  const covered = openingOpponentCoverage(brief, plan);
+  assert.strictEqual(covered.status, 'covered');
+  assert.strictEqual(covered.openingBeatId, 'B2');
+});
+
+test('开场定向重排：只改 opening 拍的 obstacle，要求先一步打断', () => {
+  const instruction = buildOpeningReplanInstruction({
+    opponents: [{ text: '张杨征粮的使者堵在城门口' }],
+    openingBeatId: 'B2',
+  });
+  assert.match(instruction, /B2/);
+  assert.match(instruction, /只改它的 obstacle/);
+  assert.match(instruction, /先一步打断/);
+  assert.match(instruction, /张杨/);
+  assert.match(instruction, /不许用主角自己的心软/);
+  assert.match(instruction, /其余拍一律原样输出/);
 });
 
 test('告别托付：托付人不在告别拍或没有交付动作都报缺', () => {
@@ -1131,6 +1166,22 @@ test('悬念自检：v17 B 原文「司空 + 私辟 + 用不着 + 更不会」�
     violation.sentence.includes('用不着符传，更不会称传诏'),
     `证据句必须逐字取自原文，实际：${violation.sentence}`
   );
+});
+
+test('悬念自检：结论词表补齐「不发/不称/岂能/怎么会」', () => {
+  const body = [
+    '杨平把箱笼从车上搬下来，箱角磕在石阶上。',
+    '堂里点着两盏灯，灯芯剪得很短。',
+    '私辟的掾属岂能持符传，不发传诏就敢称使者，这种事怎么会合制。',
+    '杨平没有接话，只把目光落在文书边角。',
+    '门外的家兵换了岗，甲叶碰在一起响了一声。',
+    '车马在巷口等着，车轭上还挂着霜。',
+  ].join('\n');
+
+  const result = checkMustWithhold(withholdBrief(), body, withholdPlan());
+  assert.strictEqual(result.violations.length, 1);
+  assert.strictEqual(result.violations[0].id, 'B3');
+  assert.ok(result.violations[0].sentence.includes('岂能持符传'));
 });
 
 test('悬念自检：只写形制、不写制度结论，不判违规', () => {

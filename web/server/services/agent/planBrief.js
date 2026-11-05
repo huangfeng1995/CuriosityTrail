@@ -631,6 +631,75 @@ function handoverTarget(item, candidates) {
  * @returns {{covered: string[], missing: Array<{id,kind,text,slot?}>, hardTotal: number,
  *           opponent: string, handover: string}}
  */
+/**
+ * 开场拍：只认显式 function=opening。
+ *
+ * 旧实现按 beats[0] 判对手，B1 被错标成 departure 时整条对手校验就失效了。
+ * 没有 function 的老节拍表（测试或回落链路）退回第一拍，保持兼容。
+ *
+ * @param {Array} beats
+ * @returns {Object|null}
+ */
+function openingBeat(beats) {
+  const list = Array.isArray(beats) ? beats : [];
+  const hit = list.find((beat) => beat && beat.function === 'opening');
+  if (hit) return hit;
+  const hasFunction = list.some((beat) => beat && beat.function);
+  return hasFunction ? null : list[0] || null;
+}
+
+/**
+ * 对手落位：必须由开场拍的 obstacle 完成，且逐字含 brief 对手关键词。
+ *
+ * @param {{items: Array}|null} brief
+ * @param {Object|null} plan
+ * @returns {{status: 'covered'|'missing'|'none'|'absent', opponents: Array, openingBeatId: string,
+ *           obstacle: string, missing: Array}}
+ */
+function openingOpponentCoverage(brief, plan) {
+  const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
+  const opponents = concreteOpponents(brief);
+  const opponentNone = (brief && Array.isArray(brief.items) ? brief.items : []).some(
+    (item) => item.kind === 'opponent' && item.none === true && item.inferred !== true
+  );
+  const opening = openingBeat(beats);
+  const obstacle = opening ? text(opening.obstacle) : '';
+  const openingBeatId = opening ? text(opening.id) : '';
+  const missing = [];
+
+  let status = 'absent';
+  if (opponents.length) {
+    const hit = Boolean(obstacle) && opponents.some((item) => itemHit(item, obstacle));
+    status = hit ? 'covered' : 'missing';
+    if (!hit) {
+      for (const item of opponents) {
+        missing.push({
+          id: item.id,
+          kind: 'opponent',
+          text: item.text,
+          slot: 'opening',
+          openingBeatId,
+        });
+      }
+    }
+  } else if (opponentNone) {
+    status = 'none';
+  } else if (brief && Array.isArray(brief.items) && brief.items.length) {
+    // 既没给对手、也没说明为什么没有：不能让开场拍悄悄绕过这条硬校验。
+    // brief 本身为空（生成失败、走旧链路）时不打这条，避免把回落也算成降级。
+    status = 'missing';
+    missing.push({
+      id: 'OP0',
+      kind: 'opponent',
+      text: '（brief 未给出对手，也未说明本章为什么没有）',
+      slot: 'opening',
+      openingBeatId,
+    });
+  }
+
+  return { status, opponents, openingBeatId, obstacle, missing };
+}
+
 function briefCoverage(brief, plan) {
   const hard = groupByKind(brief, HARD_KINDS).filter((item) => item.handover !== true);
   const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
@@ -644,36 +713,14 @@ function briefCoverage(brief, plan) {
     else missing.push({ id: item.id, kind: item.kind, text: item.text });
   }
 
-  // ---- 开场对手：只认 beats[0].obstacle，避免「对手出现在 goal/cost」也算覆盖 ----
-  const opponents = concreteOpponents(brief);
-  const opponentNone = (brief && Array.isArray(brief.items) ? brief.items : []).some(
-    (item) => item.kind === 'opponent' && item.none === true && item.inferred !== true
-  );
-  let opponent = 'absent';
-  if (opponents.length) {
-    const obstacle = beats.length ? text(beats[0].obstacle) : '';
-    const hit = Boolean(obstacle) && opponents.some((item) => itemHit(item, obstacle));
-    if (hit) {
-      opponent = 'covered';
-      for (const item of opponents) covered.push(item.id);
-    } else {
-      opponent = 'missing';
-      for (const item of opponents) {
-        missing.push({ id: item.id, kind: 'opponent', text: item.text, slot: 'opening' });
-      }
-    }
-  } else if (opponentNone) {
-    opponent = 'none';
-  } else if (brief && Array.isArray(brief.items) && brief.items.length) {
-    // 既没给对手、也没说明为什么没有：不能让开场拍悄悄绕过这条硬校验。
-    // brief 本身为空（生成失败、走旧链路）时不打这条，避免把回落也算成降级。
-    opponent = 'missing';
-    missing.push({
-      id: 'OP0',
-      kind: 'opponent',
-      text: '（brief 未给出对手，也未说明本章为什么没有）',
-      slot: 'opening',
-    });
+  // ---- 开场对手：只认 function=opening 拍（无 function 的老表退回第一拍）的 obstacle ----
+  // 对手出现在 goal/cost/endHook 都不算覆盖：正文里必须由开场场景动作先一步打断。
+  const opponentCoverage = openingOpponentCoverage(brief, plan);
+  const opponent = opponentCoverage.status;
+  if (opponent === 'covered') {
+    for (const item of opponentCoverage.opponents) covered.push(item.id);
+  } else if (opponent === 'missing') {
+    for (const item of opponentCoverage.missing) missing.push(item);
   }
 
   // ---- 告别托付：托付人、交付动作、交付对象必须同处告别/离场拍 ----
@@ -712,8 +759,9 @@ function briefCoverage(brief, plan) {
   return {
     covered,
     missing,
-    hardTotal: hard.length + opponents.length + handovers.length,
+    hardTotal: hard.length + opponentCoverage.opponents.length + handovers.length,
     opponent,
+    openingBeatId: opponentCoverage.openingBeatId,
     handover: handoverStatus,
   };
 }
@@ -797,9 +845,10 @@ function partitionCoverage(plan, coverage) {
   const farewellCandidates = farewellBeats(beats);
 
   return missing.map((item) => {
-    // 开场对手：只能落到第一拍的 obstacle，且必须写成外部主体施加的阻碍。
+    // 开场对手：只能落到 function=opening 拍的 obstacle，且必须写成外部主体
+    // 「先一步打断」的场景动作（人到了/传唤声/时限到）。
     if (item.slot === 'opening') {
-      const beat = beats[0] || null;
+      const beat = openingBeat(beats);
       // OP0 是「brief 根本没给对手」：这是输入缺项，重排也编不出来，明确让规划器别硬造。
       if (item.id === 'OP0') {
         return {
@@ -812,8 +861,10 @@ function partitionCoverage(plan, coverage) {
         ...item,
         targetBeats: beat ? [beat.id] : [],
         hint: beat
-          ? `必须落到 ${beat.id} 的 obstacle：由外部对手「${item.text}」施加阻碍，不能写成主角自我克服`
-          : '必须新增开场拍，把这一项放进该拍的 obstacle',
+          ? `必须落到 ${beat.id}（function=opening）的 obstacle：由外部对手「${item.text}」先一步打断当前场景——人已经到了、传唤声从门外响起、时限到了、车马已在门外；不能写成主角自我克服或同伴的期待`
+          : '节拍表里没有 function=opening 的拍：新增或改出一拍 function=opening（放在开头），把外部对手「' +
+            item.text +
+            '」写成先一步打断的场景动作放进该拍 obstacle',
       };
     }
     // 告别托付：只能落到告别/离场拍，且托付人、交付动作、交付对象必须在同一拍。
@@ -1047,6 +1098,31 @@ function buildReplanInstruction(partitioned) {
   }
   lines.push('每一项都必须能在某一拍的字段里被逐字命中；不要为了覆盖新增输入里没有的人物或事件。');
   return lines.join('\n');
+}
+
+/**
+ * 开场拍定向重排指令（R2）。
+ *
+ * 只改 function=opening 的那一拍：其余拍必须原样保留（目标、阻碍、代价、
+ * 变量、钩子都不许重写），避免一次修对手把已经合格的六类结构推翻。
+ *
+ * @param {{opponents?: Array, openingBeatId?: string}} params
+ * @returns {string}
+ */
+function buildOpeningReplanInstruction({ opponents = [], openingBeatId = '' } = {}) {
+  const who = opponents.map((item) => text(item.text)).filter(Boolean).join('；') || 'brief 里的外部对手';
+  const target = openingBeatId
+    ? `function=opening 的拍是 ${openingBeatId}；只改它的 obstacle，goal/cost/delta/endHook 原样保留。`
+    : '节拍表里没有 function=opening 的拍：把开头一拍改成 function=opening（或新增一拍放在开头），其余拍原样保留。';
+  return [
+    '（对手落位自检：brief 有外部对手，但开场拍的 obstacle 没有接住。只做一次开场定向重排。）',
+    target,
+    `该拍 obstacle 必须由外部对手「${who}」施加阻碍，并写成「先一步打断」的场景动作：`,
+    '人已经到了、传唤声从门外响起、时限到了、车马已在门外；对手要在这一拍就出现，不能只留在后面的拍。',
+    'obstacle 里必须逐字出现 brief 对手的关键词。',
+    '不许用主角自己的心软、犹豫，或同伴的期待顶替外部对手。',
+    '除这一拍外，其余拍一律原样输出；只输出完整节拍表 JSON，不要解释。',
+  ].join('\n');
 }
 
 function parseRelations(value) {
@@ -1653,7 +1729,7 @@ async function generatePlanBrief({ provider, systemPrompt, instruction, options 
  * 才判违规。只写符传形制、不给人「该不该/对不对」的结论，不会触发。
  */
 const WITHHOLD_TERMS = ['私辟', '传诏', '符传', '逾制', '司空', '符节', '印玺'];
-const WITHHOLD_CONCLUSION_RE = /不该|不对|少见|没见过|反常|用不着|更不会|哪有|不合制/;
+const WITHHOLD_CONCLUSION_RE = /不该|不对|少见|没见过|反常|用不着|更不会|哪有|不合制|不发|不称|岂能|怎么会/;
 
 /**
  * 悬念自检：mustWithhold 项映射到拍，看正文有没有把结论讲出来。
@@ -1733,9 +1809,12 @@ module.exports = {
   validatePlanBrief,
   formatPlanBrief,
   briefCoverage,
+  openingOpponentCoverage,
+  openingBeat,
   briefWriterBlock,
   partitionCoverage,
   buildReplanInstruction,
+  buildOpeningReplanInstruction,
   mergeHandoverIntoBrief,
   placeHandoverInPlan,
   handoverBeatId,
