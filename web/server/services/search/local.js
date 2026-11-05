@@ -305,6 +305,9 @@ async function search(query, options = {}) {
       sourceUrl: material.source_url || '',
       tags: material.tags || '',
       charCount: material.char_count || 0,
+      // 前端要靠这两个字段把「有出处」和「查不到」分开显示
+      confidence: material.confidence || 'inferable',
+      provenance: material.provenance || '',
     });
   }
   return results;
@@ -395,6 +398,8 @@ async function searchLoose(query, options = {}) {
       sourceUrl: material.source_url || '',
       tags: material.tags || '',
       charCount: material.char_count || 0,
+      confidence: material.confidence || 'inferable',
+      provenance: material.provenance || '',
       matchedTerms: hits,
     };
   });

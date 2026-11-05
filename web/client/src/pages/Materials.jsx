@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Button,
   Input,
@@ -11,6 +11,10 @@ import {
   Popconfirm,
   Drawer,
   Spin,
+  Checkbox,
+  Segmented,
+  Select,
+  Tag,
 } from 'antd';
 import {
   PlusOutlined,
@@ -19,6 +23,11 @@ import {
   UploadOutlined,
   SearchOutlined,
   AimOutlined,
+  SafetyCertificateOutlined,
+  QuestionCircleOutlined,
+  BulbOutlined,
+  RollbackOutlined,
+  CheckOutlined,
 } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
@@ -27,12 +36,41 @@ import { useIsMobile } from '../hooks/useMediaQuery';
 
 const { Text } = Typography;
 
+/** 置信档的显示与配色。sourced / missing 必须一眼能分开，不能只靠文案。 */
+const CONFIDENCE_META = {
+  sourced: {
+    label: '有出处',
+    icon: <SafetyCertificateOutlined />,
+    color: 'var(--bamboo)',
+    bg: 'rgba(92, 125, 85, 0.08)',
+    border: '3px solid var(--bamboo)',
+  },
+  inferable: {
+    label: '可推定',
+    icon: <BulbOutlined />,
+    color: 'var(--gold)',
+    bg: 'transparent',
+    border: '3px solid var(--paper-4)',
+  },
+  missing: {
+    label: '查不到',
+    icon: <QuestionCircleOutlined />,
+    color: 'var(--cinnabar)',
+    bg: 'repeating-linear-gradient(135deg, rgba(176, 64, 47, 0.07) 0 6px, transparent 6px 12px)',
+    border: '3px dashed var(--cinnabar-soft)',
+  },
+};
+
+function confidenceMeta(item) {
+  return CONFIDENCE_META[item?.confidence] || CONFIDENCE_META.inferable;
+}
+
 /**
  * 素材库。
  *
- * 素材是 AI 检索的本地语料库：作者自己的积累，比外部搜索更贴合他的风格。
- * 搜索走 FTS5 + bigram 索引（服务端 /api/materials/search），
- * 命中片段会带高亮位置，作者一眼能看出为什么这条被检索到。
+ * agent 整理的素材直接落在这里：有出处的、可推定的、查不到的三种档位
+ * 用底色/边框/图标区分。high-risk（有出处）默认 pending，需要作者一次确认一批；
+ * 撤回后立刻不再被写作检索命中。
  */
 export default function Materials() {
   const isMobile = useIsMobile();
@@ -40,6 +78,8 @@ export default function Materials() {
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [selected, setSelected] = useState([]);
   const [form] = Form.useForm();
   const [params, setParams] = useSearchParams();
 
@@ -54,9 +94,10 @@ export default function Materials() {
   const [locate, setLocate] = useState(null);
   const [locateLoading, setLocateLoading] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (status = '') => {
     try {
-      const res = await api.get('/materials');
+      const url = status === 'retracted' ? '/materials?status=retracted' : '/materials';
+      const res = await api.get(url);
       setItems(res.data);
     } catch (e) {
       message.error('素材加载失败');
@@ -68,7 +109,7 @@ export default function Materials() {
     if (!q) {
       setHits(null);
       setSearch('');
-      load();
+      load(filter === 'retracted' ? 'retracted' : '');
       return;
     }
     setSearching(true);
@@ -81,11 +122,16 @@ export default function Materials() {
     } finally {
       setSearching(false);
     }
-  }, [load]);
+  }, [load, filter]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (filter === 'retracted') {
+      setHits(null);
+      load('retracted');
+    } else {
+      load();
+    }
+  }, [filter, load]);
 
   // 列表接口不返回完整正文（一份 PDF 可能有几十万字），
   // 编辑时按 id 取详情再填表。
@@ -98,6 +144,8 @@ export default function Materials() {
         source: '手记',
         sourceUrl: '',
         tags: '',
+        provenance: '',
+        confidence: 'inferable',
       });
       return;
     }
@@ -111,6 +159,8 @@ export default function Materials() {
         // 接口字段是 source_url，表单字段是 sourceUrl，不映射会丢链接
         sourceUrl: res.data.source_url,
         tags: res.data.tags,
+        provenance: res.data.provenance,
+        confidence: res.data.confidence,
       });
     } catch (e) {
       message.error('素材详情加载失败');
@@ -181,7 +231,73 @@ export default function Materials() {
     }
   };
 
+  /** 撤回：立刻停止注入，但保留记录可查 */
+  const retract = async (item) => {
+    await api.post(`/materials/${item.id}/retract`);
+    message.success('已撤回，这条不再进入写作检索');
+    setSelected((prev) => prev.filter((id) => id !== item.id));
+    if (hits) doSearch(search);
+    else load(filter === 'retracted' ? 'retracted' : '');
+  };
+
+  /** 批量确认：有出处的条目一次点完，不逐条弹 */
+  const confirmSelected = async () => {
+    const ids = selected.filter((id) => {
+      const item = items.find((i) => i.id === id);
+      return item && item.status === 'pending';
+    });
+    if (!ids.length) return;
+    try {
+      const res = await api.post('/materials/confirm', { ids });
+      message.success(`已确认 ${res.data.confirmed} 条，现在可以被写作检索命中`);
+      setSelected([]);
+      load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '确认失败');
+    }
+  };
+
+  const retractSelected = async () => {
+    const ids = selected.filter((id) => {
+      const item = items.find((i) => i.id === id);
+      return item && item.status !== 'retracted';
+    });
+    if (!ids.length) return;
+    try {
+      await Promise.all(ids.map((id) => api.post(`/materials/${id}/retract`)));
+      message.success(`已撤回 ${ids.length} 条`);
+      setSelected([]);
+      load(filter === 'retracted' ? 'retracted' : '');
+    } catch (e) {
+      message.error('撤回失败');
+    }
+  };
+
+  const toggle = (id) => {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
   const list = hits || items;
+
+  /** 过滤只在列表模式生效；检索结果保持原样 */
+  const visible = useMemo(() => {
+    if (hits) return list;
+    if (filter === 'all') return list;
+    if (filter === 'pending') return list.filter((i) => i.status === 'pending');
+    if (filter === 'sourced') return list.filter((i) => i.confidence === 'sourced');
+    if (filter === 'missing') return list.filter((i) => i.confidence === 'missing');
+    if (filter === 'retracted') return list.filter((i) => i.status === 'retracted');
+    return list;
+  }, [list, hits, filter]);
+
+  const pendingSelected = selected.filter((id) => {
+    const item = items.find((i) => i.id === id);
+    return item && item.status === 'pending';
+  });
+  const activeSelected = selected.filter((id) => {
+    const item = items.find((i) => i.id === id);
+    return item && item.status !== 'retracted';
+  });
 
   return (
     <div style={{ maxWidth: 1000, margin: '0 auto' }}>
@@ -191,7 +307,7 @@ export default function Materials() {
           alignItems: 'center',
           flexWrap: 'wrap',
           gap: 12,
-          marginBottom: 20,
+          marginBottom: 12,
         }}
       >
         <Input.Search
@@ -241,54 +357,158 @@ export default function Materials() {
         </Button>
       </div>
 
-      {list.length === 0 ? (
+      <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <Segmented
+          size="small"
+          value={filter}
+          onChange={(value) => {
+            setFilter(value);
+            setSelected([]);
+            if (value === 'retracted') setHits(null);
+          }}
+          options={[
+            { value: 'all', label: '全部' },
+            { value: 'sourced', label: '有出处' },
+            { value: 'missing', label: '查不到' },
+            { value: 'pending', label: '待确认' },
+            { value: 'retracted', label: '已撤回' },
+          ]}
+        />
+        {selected.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '4px 10px',
+              borderRadius: 6,
+              background: 'var(--bg-hover)',
+            }}
+          >
+            <Text style={{ fontSize: 12 }}>已选 {selected.length} 条</Text>
+            <Button
+              size="small"
+              type="primary"
+              icon={<CheckOutlined />}
+              disabled={!pendingSelected.length}
+              onClick={confirmSelected}
+            >
+              确认入库（{pendingSelected.length}）
+            </Button>
+            <Button
+              size="small"
+              danger
+              icon={<RollbackOutlined />}
+              disabled={!activeSelected.length}
+              onClick={retractSelected}
+            >
+              撤回（{activeSelected.length}）
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {visible.length === 0 ? (
         <EmptyState
           className="ct-empty-top"
-          text="素材库还是空的。导入一些参考材料，AI 检索时会用到它们。"
+          text={
+            hits
+              ? '没有命中的素材。'
+              : '素材库还是空的。跟资料员说「帮我准备这个题材的素材」，它会自己整理进来。'
+          }
         />
       ) : (
         <List
           bordered
           loading={searching}
-          dataSource={list}
-          renderItem={(item) => (
-            <List.Item
-              actions={[
-                <EditOutlined key="edit" onClick={() => openEditor(item)} />,
-                <Popconfirm
-                  key="del"
-                  title="删除这条素材？"
-                  onConfirm={() => remove(item)}
-                >
-                  <DeleteOutlined />
-                </Popconfirm>,
-              ]}
-            >
-              <List.Item.Meta
-                title={
-                  <span className="ct-material-title">
-                    {item.title}
-                    <span className="ct-material-source">{item.source}</span>
-                  </span>
+          dataSource={visible}
+          renderItem={(item) => {
+            const meta = confidenceMeta(item);
+            return (
+              <List.Item
+                style={{
+                  borderLeft: meta.border,
+                  background: meta.bg,
+                  opacity: item.status === 'retracted' ? 0.55 : 1,
+                  paddingLeft: 12,
+                }}
+                avatar={
+                  <Checkbox
+                    checked={selected.includes(item.id)}
+                    onChange={() => toggle(item.id)}
+                    aria-label={`选择素材 ${item.title}`}
+                  />
                 }
-                description={
-                  <div>
-                    {hits ? (
-                      // 检索模式：只展示命中片段
-                      <div className="ct-material-snippet">{item.snippet || '（正文为空）'}</div>
-                    ) : (
-                      <div className="ct-material-preview">{item.preview || '（无正文）'}</div>
-                    )}
-                    <div className="ct-material-meta">
-                      {item.char_count || 0} 字
-                      {item.page_count ? ` · ${item.page_count} 页` : ''}
-                      {item.tags ? ` · ${item.tags}` : ''}
+                actions={[
+                  <EditOutlined key="edit" onClick={() => openEditor(item)} />,
+                  item.status !== 'retracted' ? (
+                    <Popconfirm
+                      key="retract"
+                      title="撤回这条素材？"
+                      description="撤回后立刻不再进入写作检索，记录仍保留。"
+                      onConfirm={() => retract(item)}
+                    >
+                      <RollbackOutlined />
+                    </Popconfirm>
+                  ) : null,
+                  <Popconfirm
+                    key="del"
+                    title="删除这条素材？"
+                    onConfirm={() => remove(item)}
+                  >
+                    <DeleteOutlined />
+                  </Popconfirm>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={
+                    <span className="ct-material-title">
+                      {item.title}
+                      <Tag
+                        icon={meta.icon}
+                        style={{
+                          marginLeft: 8,
+                          color: meta.color,
+                          borderColor: meta.color,
+                          background: 'transparent',
+                        }}
+                      >
+                        {meta.label}
+                      </Tag>
+                      {item.status === 'pending' && (
+                        <Tag color="warning" style={{ marginLeft: 4 }}>
+                          待确认
+                        </Tag>
+                      )}
+                      {item.status === 'retracted' && (
+                        <Tag style={{ marginLeft: 4 }}>已撤回</Tag>
+                      )}
+                      <span className="ct-material-source">{item.source}</span>
+                    </span>
+                  }
+                  description={
+                    <div>
+                      {hits ? (
+                        // 检索模式：只展示命中片段
+                        <div className="ct-material-snippet">{item.snippet || '（正文为空）'}</div>
+                      ) : (
+                        <div className="ct-material-preview">{item.preview || '（无正文）'}</div>
+                      )}
+                      {item.provenance ? (
+                        <div className="ct-material-meta">出处：{item.provenance}</div>
+                      ) : null}
+                      <div className="ct-material-meta">
+                        {item.char_count || 0} 字
+                        {item.page_count ? ` · ${item.page_count} 页` : ''}
+                        {item.tags ? ` · ${item.tags}` : ''}
+                        {item.created_by === 'agent' ? ' · 由 agent 整理' : ''}
+                      </div>
                     </div>
-                  </div>
-                }
-              />
-            </List.Item>
-          )}
+                  }
+                />
+              </List.Item>
+            );
+          }}
         />
       )}
 
@@ -359,7 +579,23 @@ export default function Materials() {
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
             <Input placeholder="雨夜巷子的描写" />
           </Form.Item>
-          <Form.Item name="source" label="来源">
+          <Form.Item
+            name="confidence"
+            label="置信档"
+            help="有出处：必须填写出处；可推定：常识或上下文可推；查不到：正文首行写「待补：缺什么」"
+          >
+            <Select
+              options={[
+                { value: 'sourced', label: '有出处' },
+                { value: 'inferable', label: '可推定' },
+                { value: 'missing', label: '查不到' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="provenance" label="出处">
+            <Input placeholder="《三国志·魏书·武帝纪》 / 网页标题" />
+          </Form.Item>
+          <Form.Item name="source" label="来源类型">
             <Input placeholder="手记 / 书籍 / 网页" />
           </Form.Item>
           <Form.Item name="sourceUrl" label="来源链接">
