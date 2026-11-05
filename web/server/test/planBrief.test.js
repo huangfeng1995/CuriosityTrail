@@ -961,6 +961,18 @@ test('交付不重复：只有 B6 完整交付 → 不标', () => {
   assert.deepStrictEqual(dup.beatIds, [], '只有一次交付就不标');
 });
 
+test('交付记账：托付人与对象被句号隔开，相邻两句窗口仍能定位该拍', () => {
+  const brief = handoverBrief();
+  const plan = { beats: [{ id: 'B7', paragraphs: 4 }], chapterGoal: '', protagonistIntent: '', obstacle: '', cost: '', hook: '', avoidRepeat: [], mainType: '决定' };
+  // 取自最终样本 A 的 B7 入口与 B 的 B6 交付：名字与交付动作被句号隔成两句。
+  const a = '杨俊在旁边站着，没催。司马防把手收回去，又抬起来，在杨平肩后轻轻推了一下，推向杨俊那边。“人我交给你了。”他说，声音不高，字字清楚，“保他平安。”';
+  const b = '杨俊。司马防在阶前站定，声音不高，院子里的人都听得见，“孩子我养了十一年，今日交到你手上。”';
+  for (const body of [a, b]) {
+    const dup = findHandoverDuplicates(brief, body, plan);
+    assert.deepStrictEqual(dup.evidence.map((x) => x.id), ['B7'], '真实交付必须落到 B7');
+  }
+});
+
 test('交付重复：同段各提一次名字，不算完整交付', () => {
   const brief = handoverBrief();
   brief.handoverBeat = 'B6';

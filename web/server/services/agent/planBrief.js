@@ -918,7 +918,7 @@ function paragraphRanges(beats, count) {
 /**
  * 全章扫描完整交付形态。
  *
- * 完整形态 = 托付人与交付对象在同一句里 + 这一句有完成态的交付动作
+ * 完整形态 = 托付人与交付对象在同一句或相邻两句里 + 交付句有完成态动作
  * （交到/递到/塞进/放进/托付…）。
  *
  * 同段各提一次名字、或「某人把符传往前一递」这种只有一方在场的动作
@@ -950,12 +950,13 @@ function findHandoverDuplicates(brief, body, plan) {
     const range = ranges[index];
     const texts = paragraphs.slice(range[0], range[1]);
     const sentences = splitSentences(texts.join(''));
-    const delivered = sentences.some(
-      (sentence) =>
-        sentence.includes(trustee) &&
-        sentence.includes(to) &&
-        HANDOVER_GIVE_RE.test(sentence)
-    );
+    // 托付人和交付对象常被逗号/句号隔成两句（「杨俊在旁边站着。」「人我交给你了。」），
+    // 单句匹配会漏掉真实交付；这里用相邻两句的窗口，仍在同一拍内，不跨拍。
+    const delivered = sentences.some((sentence, index) => {
+      const previous = index > 0 ? sentences[index - 1] : '';
+      const window = previous + sentence;
+      return window.includes(trustee) && window.includes(to) && HANDOVER_GIVE_RE.test(sentence);
+    });
     if (delivered) {
       evidence.push({ id: beat.id, text: texts.join('') });
     }
