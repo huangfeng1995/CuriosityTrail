@@ -216,6 +216,56 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
   assert.match(rewrite, /本组段数必须落在 \d+–\d+ 段（双向约束：不能超，也不能为了拆段反而写少）/);
 });
 
+test('S2 篇幅配额：组指令带每拍目标汉字数与 85% 未完成线，扩写只补不推进', () => {
+  const plan = makePlan(6, 5);
+  const functions = ['opening', 'discussion', 'identity', 'father', 'farewell', 'departure'];
+  const shares = [9, 14, 30, 15.5, 25, 6.5];
+  plan.beats = plan.beats.map((beat, index) => ({
+    ...beat,
+    function: functions[index],
+    wordShare: shares[index],
+    targetChars: Math.round(shares[index] * 50),
+  }));
+  const groups = segmentWriter.planSegments(plan);
+  const group = groups.find((item) => item.beatIds.includes('B3'));
+
+  const draft = segmentWriter.buildSegmentInstruction({
+    plan,
+    group,
+    groups,
+    tail: '上一组最后一段原文。',
+  });
+  assert.match(draft, /## 本组各拍目标（纯汉字，不含标点）/);
+  assert.match(draft, /B3（identity）：目标 1500 个汉字（纯汉字不含标点），段数 3–7 段/);
+  assert.match(draft, /不足 1275 字视为未完成/);
+
+  const continuation = segmentWriter.buildContinuationInstruction({
+    plan,
+    group,
+    groups,
+    tail: '上一组最后一段原文。',
+    remainingParagraphs: 3,
+    remainingChars: 500,
+  });
+  assert.match(continuation, /B3（identity）：目标 1500 个汉字/);
+
+  const rewrite = segmentWriter.buildGroupRewriteInstruction({
+    plan,
+    group,
+    groups,
+    problemIds: [],
+    expandShots: [{ id: 'B3', chars: 597, target: 1500 }],
+    tail: '上一组最后一段原文。',
+    nextHead: '',
+  });
+  assert.match(rewrite, /## 扩写（只补不推进）/);
+  assert.match(rewrite, /B3：当前 597 个汉字 → 目标 1500 个汉字/);
+  assert.match(rewrite, /只补细节、环境、动作、对话与人物心理，不推进情节、不新增事件、不提前揭示/);
+  assert.match(rewrite, /这一组节拍齐全，只是篇幅不足/);
+  assert.match(rewrite, /不许用加空段、拆句、加标点凑字数/);
+  assert.match(rewrite, /扩写后必须仍满足每段 80–140 字、本拍段数在计划区间 ±2/);
+});
+
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
 function fixedBody(count) {
   return Array.from({ length: count }, () => '字'.repeat(100)).join('\n\n');

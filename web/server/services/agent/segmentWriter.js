@@ -343,6 +343,33 @@ function beatSummary(beats) {
     .join('\n');
 }
 
+/**
+ * 本组各拍的篇幅配额（纯汉字）。
+ *
+ * 组级总字数会被写手平均摊开：身世拍分到 30%，落到正文就变成 19%。
+ * 这里把目标汉字数与段数区间逐拍写死，并给出 85% 的未完成线。
+ *
+ * @param {Array<Object>} beats
+ * @returns {string}
+ */
+function groupQuotaBlock(beats) {
+  const rows = (beats || [])
+    .filter((beat) => beat && beat.id)
+    .map((beat) => {
+      const share = Number(beat.wordShare);
+      const target = Number(beat.targetChars) || (share ? Math.round(share * 50) : 0);
+      const paras = Number(beat.paragraphs) || 0;
+      const low = target ? Math.round(target * 0.85) : 0;
+      const range = paras ? `段数 ${Math.max(1, paras - 2)}–${paras + 2} 段` : '按计划段数';
+      const floor = low ? `不足 ${low} 字视为未完成` : '写到目标就停';
+      return (
+        `- ${beat.id}（${beat.function || beat.type}）：目标 ${target || '未定'} 个汉字（纯汉字不含标点），` +
+        `${range}，每段 80–140 字（含标点），${floor}。`
+      );
+    });
+  return rows.length ? `## 本组各拍目标（纯汉字，不含标点）\n${rows.join('\n')}` : '';
+}
+
 /** 把下一组的标志事件写进指令，明确本组只能写到哪里。 */
 function buildBoundaryBlock({ group, groups }) {
   const next = groups.find((g) => g.index === group.index + 1);
@@ -445,6 +472,8 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     '## 本组篇幅（硬约束）',
     `本组大致写 ${group.targetChars} 字（含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。写到大致够用就停；全章大致 4800–5600 字即可，7000 字以上会被截断。`,
     '',
+    groupQuotaBlock(group.beats),
+    '',
     PARAGRAPH_SHAPE_RULES,
     '',
     briefBlock,
@@ -516,6 +545,8 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
     '## 还差多少',
     `本组目标约 ${group.targetChars} 字（含标点），已经写了 ${written} 字，再补约 ${remainingChars} 字就够；按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
     '',
+    groupQuotaBlock(group.beats),
+    '',
     PARAGRAPH_SHAPE_RULES,
     '',
     briefBlock,
@@ -549,12 +580,19 @@ function buildGroupRewriteInstruction({
   mustWithholdIds = [],
   invariantConflicts = [],
   shapeViolations = [],
+  expandShots = [],
   tail,
   nextHead,
   brief = null,
   mustReveal = [],
 }) {
   const wanted = new Set(problemIds || []);
+  // 篇幅扩写：只补细节，不让模型推进情节。映射 beatId -> {chars,target}。
+  const expand = new Map(
+    (expandShots || [])
+      .filter((shot) => shot && shot.id)
+      .map((shot) => [shot.id, { chars: Number(shot.chars) || 0, target: Number(shot.target) || 0 }])
+  );
   const weak = new Set(weakIds || []);
   const dup = new Set(handoverDupIds || []);
   const withhold = new Set(mustWithholdIds || []);
@@ -575,6 +613,15 @@ function buildGroupRewriteInstruction({
   const handoverBeat = brief && typeof brief.handoverBeat === 'string' ? brief.handoverBeat.trim() : '';
   const briefBlock = briefWriterBlock(brief);
   const revealLines = (mustReveal || []).map((fact) => `- ${fact}`);
+  const expandNote = (beat) => {
+    const shot = expand.get(beat.id);
+    if (!shot) return '';
+    const low = Math.round(shot.target * 0.85);
+    return (
+      ` 本拍篇幅不足：当前 ${shot.chars} 个汉字，目标 ${shot.target} 个汉字（不足 ${low} 视为未完成）；` +
+      '只补细节、环境、动作、对话与人物心理，不推进情节、不新增事件、不提前揭示。'
+    );
+  };
   const problems = group.beats
     .filter(
       (b) =>
@@ -583,26 +630,27 @@ function buildGroupRewriteInstruction({
         dup.has(b.id) ||
         withhold.has(b.id) ||
         conflicts.has(b.id) ||
-        shape.has(b.id)
+        shape.has(b.id) ||
+        expand.has(b.id)
     )
     .map((b) => {
       if (conflicts.has(b.id)) {
         return (
           `- ${b.id}：本拍数值与全章不变项冲突（${conflicts.get(b.id).join('；')}）；` +
           '同一事实只保留一个数，改成 brief 不变项里的值，删掉其余矛盾表述。'
-        );
+        ) + expandNote(b);
       }
       if (withhold.has(b.id)) {
         return (
           `- ${b.id}：本拍只写形制细节与人物反应，不写制度结论，不替读者解释；` +
           '删掉所有关于私辟/传诏/符传/逾制/该不该的判断句。'
-        );
+        ) + expandNote(b);
       }
       if (dup.has(b.id)) {
         return (
           `- ${b.id}：本章交付只发生一次，已在第 ${handoverBeat || '指定'} 拍完成；` +
           '本拍删掉完整托付/交割和托付话，只保留递、接、握住手这类预备动作。'
-        );
+        ) + expandNote(b);
       }
       return (
         `- ${b.id}：必须写出目标「${b.goal}」、阻碍「${b.obstacle}」、代价「${b.cost}」，` +
@@ -615,15 +663,30 @@ function buildGroupRewriteInstruction({
             '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
             ` 重写后本组段数必须落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段：` +
             '拆超长段时不许把「太长」翻成「太少」，也不许为了凑段数把对白拆成独段。'
-          : '')
+          : '') +
+        expandNote(b)
       );
     });
 
+  const hasCoverageGap = wanted.size || weak.size || dup.size || withhold.size || conflicts.size || shape.size;
   return [
     `## 重写第 ${group.index + 1}/${groups.length} 组（${group.beatIds.join('、')}）`,
-    '覆盖自检发现这一组有节拍没落地。只重写这一组，其他组保持原样，不要整章重来。',
+    hasCoverageGap
+      ? '覆盖自检发现这一组有节拍没落地。只重写这一组，其他组保持原样，不要整章重来。'
+      : '这一组节拍齐全，只是篇幅不足。只补本组指定拍的细节，其他组保持原样。',
     `完整节拍表见 system 中的「本章节拍表」，全章共 ${plan.beats.length} 拍。`,
     '',
+    expand.size ? '## 扩写（只补不推进）' : null,
+    expand.size
+      ? Array.from(expand.entries())
+          .map(
+            ([id, shot]) =>
+              `- ${id}：当前 ${shot.chars} 个汉字 → 目标 ${shot.target} 个汉字；` +
+              '只补细节、环境、动作、对话与人物心理，不推进情节、不新增事件、不提前揭示。'
+          )
+          .join('\n')
+      : null,
+    expand.size ? '' : null,
     '## 必须补足',
     problems.length ? problems.join('\n') : '把本组几拍写完整。',
     '',
@@ -647,7 +710,10 @@ function buildGroupRewriteInstruction({
     '',
     '## 篇幅（硬约束）',
     `本组大致写 ${group.targetChars} 字（含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。` +
-      `本组段数必须落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段（双向约束：不能超，也不能为了拆段反而写少）。`,
+      `本组段数必须落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段（双向约束：不能超，也不能为了拆段反而写少）。` +
+      '扩写也不许用加空段、拆句、加标点凑字数；扩写后必须仍满足每段 80–140 字、本拍段数在计划区间 ±2。',
+    '',
+    groupQuotaBlock(group.beats),
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
@@ -1264,6 +1330,7 @@ async function rewriteMissingGroups({
   mustWithholdIds = [],
   invariantConflicts = [],
   shapeViolations = [],
+  expandShots = [],
   log = () => {},
   progress = () => {},
 }) {
@@ -1286,6 +1353,7 @@ async function rewriteMissingGroups({
     ...(mustWithholdIds || []),
     ...conflictIds,
     ...shapeIds,
+    ...(expandShots || []).map((shot) => shot && shot.id).filter(Boolean),
   ];
   const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
   const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
@@ -1316,6 +1384,7 @@ async function rewriteMissingGroups({
       mustWithholdIds: factsOnly ? [] : (mustWithholdIds || []),
       invariantConflicts: factsOnly ? [] : (invariantConflicts || []),
       shapeViolations: factsOnly ? [] : (shapeViolations || []),
+      expandShots: factsOnly ? [] : (expandShots || []),
       tail: tailParagraphs(before || existingBody, 3),
       nextHead,
       brief,

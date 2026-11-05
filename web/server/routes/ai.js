@@ -1153,6 +1153,14 @@ router.post('/chat', async (req, res) => {
               `opponent:unplaced:${who || '对手未登记'}/${gap.oppMissing.openingBeatId || '无 function=opening 拍'}`
             );
           }
+          if (
+            briefCoverageResult
+            && Array.isArray(briefCoverageResult.withholdUnmapped)
+            && briefCoverageResult.withholdUnmapped.length
+          ) {
+            // 悬念没有落位就没有自检目标：这条必须写明，不能只留 0 条违规。
+            degradedParts.push(`withhold:unmapped:${briefCoverageResult.withholdUnmapped.join('、')}`);
+          }
           if (briefCoverageResult && briefCoverageResult.missing.length) {
             degradedParts.push(
               `brief_missing:${briefCoverageResult.missing
@@ -1661,7 +1669,12 @@ router.post('/chat', async (req, res) => {
     // 悬念自检：确定性扫正文，同一拍里制度词和结论词同时出现就判「把悬念解释掉」。
     // 与覆盖自检独立：模型说拍子写完了，但把制度结论讲完，仍然算违规。
     let withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
-    if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
+    if (beatCheck) {
+      beatCheck.mustWithholdViolations = withholdCheck.violations;
+      // 没有映射目标≠检查通过：unmapped 必须显式带出，不能只给 0 条违规。
+      beatCheck.mustWithholdUnmapped = withholdCheck.unmapped || [];
+      beatCheck.mustWithholdPassed = withholdCheck.passed === true;
+    }
     const withholdIds = withholdCheck.violations.map((v) => v.id);
     // 同章一致性：同一不变项在正文里出现两个数（十年/十五年、六岁/七岁）即判冲突。
     let invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
@@ -1869,7 +1882,12 @@ router.post('/chat', async (req, res) => {
             }
             // 重写后再判一次：仍违规就交付当前稿，只打徽标，不无限重写。
             withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
-            if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
+            if (beatCheck) {
+              beatCheck.mustWithholdViolations = withholdCheck.violations;
+              // 没有映射目标≠检查通过：unmapped 必须显式带出，不能只给 0 条违规。
+              beatCheck.mustWithholdUnmapped = withholdCheck.unmapped || [];
+              beatCheck.mustWithholdPassed = withholdCheck.passed === true;
+            }
             invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
             if (beatCheck) {
               beatCheck.invariantConflicts = invariantCheck.violations;
@@ -1904,6 +1922,8 @@ router.post('/chat', async (req, res) => {
                 handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
                 handoverBeatMismatch: beatCheck ? beatCheck.handoverBeatMismatch : null,
                 mustWithholdViolations: withholdCheck.violations.map((v) => v.id),
+                mustWithholdUnmapped: withholdCheck.unmapped || [],
+                mustWithholdPassed: withholdCheck.passed === true,
                 invariantConflicts: invariantCheck.violations.map((v) => `${v.beatId}:${v.label}:${v.actual}`),
                 wordShareOutOfRange: beatCheck ? beatCheck.wordShareOutOfRange : [],
                 rewrote: true,
@@ -2005,7 +2025,12 @@ router.post('/chat', async (req, res) => {
               : null;
           }
           withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
-          if (beatCheck) beatCheck.mustWithholdViolations = withholdCheck.violations;
+          if (beatCheck) {
+            beatCheck.mustWithholdViolations = withholdCheck.violations;
+            // 没有映射目标≠检查通过：unmapped 必须显式带出，不能只给 0 条违规。
+            beatCheck.mustWithholdUnmapped = withholdCheck.unmapped || [];
+            beatCheck.mustWithholdPassed = withholdCheck.passed === true;
+          }
           invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
           if (beatCheck) {
             beatCheck.invariantConflicts = invariantCheck.violations;
@@ -2040,6 +2065,8 @@ router.post('/chat', async (req, res) => {
               handoverDuplicated: beatCheck ? (beatCheck.handoverDuplicated || []) : [],
               handoverBeatMismatch: beatCheck ? beatCheck.handoverBeatMismatch : null,
               mustWithholdViolations: withholdCheck.violations.map((v) => v.id),
+              mustWithholdUnmapped: withholdCheck.unmapped || [],
+              mustWithholdPassed: withholdCheck.passed === true,
               invariantConflicts: invariantCheck.violations.map((v) => `${v.beatId}:${v.label}:${v.actual}`),
               wordShareOutOfRange: beatCheck ? beatCheck.wordShareOutOfRange : [],
               rewrote: true,
@@ -2052,6 +2079,139 @@ router.post('/chat', async (req, res) => {
         beatRewriteFailed = true;
         console.error('缺拍重写失败：', err.message);
       }
+    }
+
+    // ---- S2 篇幅扩写：组写完后按拍统计纯汉字，不足目标 85% 只扩写一次 ----
+    let shotExpand = null;
+    if (
+      segmented
+      && beatPlan
+      && beatCheck
+      && wordSharesReport
+      && wordSharesReport.applicable
+      && !roundSignal.aborted
+    ) {
+      const shortShots = wordSharesReport.beats
+        .filter((beat) => beat.target > 0 && beat.chars < Math.round(beat.target * 0.85))
+        .map((beat) => ({ id: beat.id, chars: beat.chars, target: beat.target }));
+      const affectedGroups = segmentWriter.groupsForIds(segmented.groups, shortShots.map((shot) => shot.id));
+      const remainingMs = ROUND_BUDGET_MS - (Date.now() - startedAt);
+      const cheapest = affectedGroups.length * SEGMENT_CALL_TIMEOUT_MS + CHECK_TIMEOUT_MS;
+
+      if (shortShots.length && affectedGroups.length && remainingMs >= cheapest) {
+        send({
+          type: 'agent_thinking',
+          label: `第 ${shortShots.map((shot) => shot.id).join('、')} 拍篇幅不足，正在扩写细节`,
+        });
+        try {
+          const expandStartedAt = Date.now();
+          const expandedBody = await segmentWriter.rewriteMissingGroups({
+            plan: beatPlan,
+            groups: segmented.groups,
+            coverage: { missing: [], weak: [], handoverDuplicated: [] },
+            brief,
+            mustReveal: revealMissing.map((fact) => fact.content),
+            expandShots: shortShots,
+            runSegment: segmentRun,
+            maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
+            callCount: segmented.callCount,
+            log: (entry) => {
+              console.log(
+                JSON.stringify({
+                  event: 'ai_segment',
+                  traceId,
+                  userId: req.userId,
+                  role: roleKey,
+                  ...entry,
+                })
+              );
+            },
+            progress: ({ index, total, beatIds }) => {
+              send({
+                type: 'agent_thinking',
+                label: `正在扩写第 ${index + 1}/${total} 组（${beatIds.join('、')}）`,
+              });
+            },
+          });
+
+          if (expandedBody.content.trim()) {
+            payload.content = expandedBody.content;
+            finalResult.parsed.content = expandedBody.content;
+            finalResult.usage = segmentWriter.usageSum([...segmented.calls, ...expandedBody.calls]);
+            segmented = {
+              ...segmented,
+              groups: expandedBody.groups,
+              calls: [...segmented.calls, ...expandedBody.calls],
+              callCount: expandedBody.callCount,
+              degraded: expandedBody.degraded || segmented.degraded,
+              truncated: expandedBody.truncated,
+              chars: expandedBody.chars,
+              originalChars: expandedBody.originalChars,
+            };
+
+            // 扩写只补细节，但段落形态/份额/悬念/不变量都要按新正文重算。
+            const sharesAfter = checkWordShares(beatPlan, payload.content);
+            wordSharesReport = sharesAfter;
+            beatCheck.wordShares = sharesAfter.beats;
+            beatCheck.wordRoleShares = sharesAfter.roleShares;
+            beatCheck.wordShareApplicable = sharesAfter.applicable;
+            beatCheck.wordShareReason = sharesAfter.reason || '';
+            beatCheck.wordShareOutOfRange = sharesAfter.outOfRange;
+            beatCheck.wordShareMissing = sharesAfter.shareMissing || [];
+            shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
+            beatCheck.shapeViolations = shapeCheck.violations;
+            beatCheck.shapeBeatIds = shapeCheck.beatIds;
+            beatCheck.paragraphCount = shapeCheck.totalParagraphs;
+            beatCheck.avgParagraphChars = shapeCheck.avgChars;
+            withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
+            beatCheck.mustWithholdViolations = withholdCheck.violations;
+            beatCheck.mustWithholdUnmapped = withholdCheck.unmapped || [];
+            beatCheck.mustWithholdPassed = withholdCheck.passed === true;
+            invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
+            beatCheck.invariantConflicts = invariantCheck.violations;
+            const expandDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
+            beatCheck.handoverDuplicated = expandDup.beatIds;
+            beatCheck.handoverBeatId = (expandDup.evidence.length ? expandDup.evidence[0].id : '')
+              || (brief && brief.handoverBeat ? String(brief.handoverBeat) : planBrief.handoverBeatId(brief, beatPlan));
+
+            shotExpand = {
+              before: shortShots,
+              after: sharesAfter.beats
+                .filter((beat) => shortShots.some((shot) => shot.id === beat.id))
+                .map((beat) => ({ id: beat.id, chars: beat.chars, target: beat.target })),
+            };
+
+            console.log(
+              JSON.stringify({
+                event: 'ai_shot_expand',
+                traceId,
+                userId: req.userId,
+                durationMs: Date.now() - expandStartedAt,
+                shots: shortShots,
+                contentLength: payload.content.length,
+                degraded: expandedBody.degraded || '',
+                finishReason: expandedBody.finishReason || '',
+              })
+            );
+          }
+        } catch (err) {
+          if (err.name === 'AbortError' || err.code === 'AI_ABORTED') throw err;
+          console.error('篇幅扩写失败：', err.message);
+        }
+      }
+    }
+
+    // 扩写后仍不足 85% 的拍：交付，但必须把差距写进 beatCheck，不能静默。
+    if (beatCheck && wordSharesReport && wordSharesReport.applicable) {
+      beatCheck.underFilledShots = wordSharesReport.beats
+        .filter((beat) => beat.target > 0 && beat.chars < Math.round(beat.target * 0.85))
+        .map((beat) => ({
+          beatId: beat.id,
+          chars: beat.chars,
+          target: beat.target,
+          note: `【篇幅自检：第${beat.id}拍 ${beat.chars}/${beat.target}】`,
+        }));
+      beatCheck.shotExpanded = Boolean(shotExpand);
     }
 
     // 编排结果必须以作者看得见的方式落地：reason 前挂一个徽标，
@@ -2093,7 +2253,11 @@ router.post('/chat', async (req, res) => {
             beat: v.id,
             terms: v.terms,
             sentence: v.sentence,
+            paragraph: v.paragraph,
+            paragraphIndex: v.paragraphIndex,
           })),
+          unmapped: withholdCheck.unmapped || [],
+          passed: withholdCheck.passed === true,
           rewrote: beatRewrite,
         })
       );
@@ -2164,6 +2328,10 @@ router.post('/chat', async (req, res) => {
       segmented && segmented.truncated
         ? `【字数安全上限 ${segmentWriter.MAX_CHAPTER_CHARS}：已截到最后一个完整段】`
         : '';
+    const shotBadge =
+      beatCheck && beatCheck.underFilledShots && beatCheck.underFilledShots.length
+        ? beatCheck.underFilledShots.map((shot) => shot.note).join('')
+        : '';
     if (
       segmentBadge ||
       truncationBadge ||
@@ -2171,7 +2339,8 @@ router.post('/chat', async (req, res) => {
       revealBadge ||
       withholdBadge ||
       invariantBadge ||
-      shapeBadge
+      shapeBadge ||
+      shotBadge
     ) {
       payload.reason = [
         segmentBadge,
@@ -2181,6 +2350,7 @@ router.post('/chat', async (req, res) => {
         withholdBadge,
         invariantBadge,
         shapeBadge,
+        shotBadge,
         payload.reason,
       ]
         .filter(Boolean)
