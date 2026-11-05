@@ -159,9 +159,9 @@ test.after(async () => {
 // 迁移
 // ---------------------------------------------------------------------------
 
-test('迁移：user_version 8 → 12，行数不变，四列默认 NULL，新表存在', async () => {
+test('迁移：user_version 8 → 13，行数不变，四列默认 NULL，新表存在', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 12);
+  assert.strictEqual(version.user_version, 13);
 
   for (const [table, expected] of Object.entries(LEGACY_COUNTS)) {
     assert.strictEqual(migratedCounts[table], expected, `${table} 迁移后行数不能变化`);
