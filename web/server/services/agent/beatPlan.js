@@ -547,7 +547,10 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
 
     const userContent = attempt === 0
       ? `请为这一章生成节拍表。选题：${instruction}`
-      : `上一次输出不合格：${lastErrors.join('；')}。只输出一个合格的 JSON 对象，不要解释。`;
+      : `上一次输出不合格：${lastErrors.join('；')}。` +
+        '请在保留可用节拍的前提下按错误清单修正：格式/段数/份额错误的拍就地改，' +
+        '缺身世拍或对手拍就补一拍；只输出完整的合格 JSON，不要解释，不要省略任何一拍。' +
+        (lastRaw ? `\n上一次输出：\n${lastRaw}` : '');
 
     try {
       const result = await provider.chat({

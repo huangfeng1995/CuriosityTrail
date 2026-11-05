@@ -369,6 +369,11 @@ test('规划：第一次不合格时带错误清单重试，第二次合格即�
     /不合格/,
     '第二次要把上一次的错误告诉模型'
   );
+  assert.ok(
+    String(calls[1].messages[1].content).includes('{"beats":[]}'),
+    '第二次要把上一版输出带上，模型才能就地修而不是盲写重来'
+  );
+  assert.match(String(calls[1].messages[1].content), /不要省略任何一拍/);
 });
 
 test('规划：两次都不合格时返回 invalid 而不是抛错', async () => {
