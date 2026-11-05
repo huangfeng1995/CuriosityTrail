@@ -11,6 +11,9 @@ import {
   Switch,
   Descriptions,
   Modal,
+  Select,
+  Spin,
+  Empty,
 } from 'antd';
 import {
   SaveOutlined,
@@ -23,6 +26,8 @@ import { useIsMobile } from '../hooks/useMediaQuery';
 import { useMemoryPref } from '../hooks/useMemoryPref';
 import { useSearchParams } from 'react-router-dom';
 import HistorySettings from '../components/Pipeline/HistorySettings';
+import WorkInfoPanel from '../components/Sidebar/WorkInfoPanel';
+import ProgressPanel from '../components/Sidebar/ProgressPanel';
 
 const { Text, Paragraph } = Typography;
 
@@ -31,24 +36,28 @@ const { Text, Paragraph } = Typography;
  *
  * 供应商配置、连接状态、模型/温度/深度思考这些参数都是部署期
  * 的运维细节，客户写作用不到，所以设置页里一个不留。
- * 留下的是客户真正需要的两件事：调每个 AI 角色的提示词、
- * 以及稿件的备份。
+ * 留下的是客户真正需要的：作品信息与进度、调每个 AI 角色的提示词、
+ * 长期记忆、历史悬疑模板、以及稿件的备份。
  */
 export default function SettingsPage() {
   const { user } = useAuth();
   const [params] = useSearchParams();
-  const initialTab = ['prompts', 'memory', 'history', 'anchor', 'backup'].includes(params.get('tab'))
+  const initialTab = ['prompts', 'memory', 'history', 'anchor', 'work', 'backup'].includes(
+    params.get('tab')
+  )
     ? params.get('tab')
     : 'prompts';
-  const historyWorkId = params.get('work') || '';
+  // 作品信息与进度、历史悬疑都按作品取数，`?work=` 让入口能直接落到当前作品
+  const workParam = params.get('work') || '';
 
   const items = [
     { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
     { key: 'memory', label: '长期记忆', children: <MemoryConfig /> },
+    { key: 'work', label: '作品', children: <WorkConfig initialWorkId={workParam} /> },
     {
       key: 'history',
       label: '历史悬疑',
-      children: <HistorySettings initialWorkId={historyWorkId} />,
+      children: <HistorySettings initialWorkId={workParam} />,
     },
     { key: 'anchor', label: '范文锚点', children: <AnchorConfig /> },
   ];
@@ -60,6 +69,88 @@ export default function SettingsPage() {
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
       <Tabs defaultActiveKey={initialTab} items={items} />
+    </div>
+  );
+}
+
+/**
+ * 设置页里的「作品」分区。
+ *
+ * 作品信息（书名/题材/简介/大纲/目标字数/模板）和进度都在这里：
+ * 都是「配置一次」或「偶尔回看」的东西，不该常驻在写作页左栏。
+ */
+function WorkConfig({ initialWorkId }) {
+  const [works, setWorks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [workId, setWorkId] = useState(initialWorkId || '');
+  // 保存作品信息后递增：目标字数改了，下面的完成度要立刻跟着变
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .get('/works')
+      .then((res) => {
+        if (!alive) return;
+        const list = res.data || [];
+        setWorks(list);
+        // ?work= 指定的作品不存在（被删了）就退回第一部，不把作者卡在空列表上
+        setWorkId((prev) =>
+          prev && list.some((w) => w.id === prev) ? prev : list[0]?.id || ''
+        );
+      })
+      .catch(() => message.error('作品列表加载失败'))
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="ct-loading">
+        <Spin />
+      </div>
+    );
+  }
+
+  if (!works.length) {
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="还没有作品。先到作品列表新建一部，再回来配置它。"
+      />
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <span style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>作品</span>
+        <Select
+          value={workId || undefined}
+          onChange={setWorkId}
+          style={{ minWidth: 220 }}
+          placeholder="选择作品"
+          options={works.map((w) => ({ value: w.id, label: w.title }))}
+        />
+        <span className="ct-hint" style={{ margin: 0 }}>
+          作品信息与进度都是配置一次、偶尔回看的东西，所以放在设置里。
+        </span>
+      </div>
+
+      <Card size="small" title="作品信息">
+        <WorkInfoPanel
+          workId={workId}
+          onSaved={() => setRefreshToken((n) => n + 1)}
+        />
+      </Card>
+
+      <Card size="small" title="进度">
+        <ProgressPanel key={`${workId}-${refreshToken}`} workId={workId} />
+      </Card>
     </div>
   );
 }

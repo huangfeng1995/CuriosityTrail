@@ -135,6 +135,9 @@ function AppShell({ isDark, setIsDark }) {
 
   // 工作区自己占满整屏，不需要顶部导航
   const isWorkspace = location.pathname.startsWith('/works/');
+  // 写作页的「设置」入口直接落到现在这部作品的「作品」分区，
+  // 作者不用先进设置、再自己找作品。
+  const workspaceWorkId = isWorkspace ? location.pathname.split('/')[2] || '' : '';
 
   // 专注模式只在工作区里生效。其他页面（统计、素材库）需要完整导航，
   // 把顶栏削了反而出不去。
@@ -232,7 +235,12 @@ function AppShell({ isDark, setIsDark }) {
                     key: 'settings',
                     icon: <SettingsIcon size={14} />,
                     label: '设置',
-                    onClick: () => navigate('/settings'),
+                    onClick: () =>
+                      navigate(
+                        workspaceWorkId
+                          ? `/settings?tab=work&work=${workspaceWorkId}`
+                          : '/settings'
+                      ),
                   },
                   { type: 'divider' },
                   {

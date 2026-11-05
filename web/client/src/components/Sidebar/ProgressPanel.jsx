@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Progress,
   Button,
-  InputNumber,
   Spin,
   Tooltip,
   Typography,
@@ -30,13 +29,15 @@ const { Text } = Typography;
  *   结构进度 —— 多少字、离目标还差多少、哪几章写完了
  *   时间进度 —— 最近每天写了多少字
  *
+ * 目标字数不在这里改：它是作品信息的一部分，在设置页「作品」里设，
+ * 同一项配置只留一个入口。这里只读它、算完成度。
+ *
  * 时间进度用"每天的净增量"统计，不是"当前总字数"。
  * 从版本历史反推会出问题：回滚会产生负增量，作者看到"今天写了 -800 字"会以为程序坏了。
  */
-export default function ProgressPanel({ workId, work, onWorkChanged }) {
+export default function ProgressPanel({ workId }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [savingTarget, setSavingTarget] = useState(false);
 
   const load = useCallback(async () => {
     if (!workId) return;
@@ -54,21 +55,6 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
   useEffect(() => {
     load();
   }, [load]);
-
-  const saveTarget = async (targetWords) => {
-    if (!workId) return;
-    setSavingTarget(true);
-    try {
-      await api.put(`/works/${workId}`, { targetWords });
-      message.success('已更新目标字数');
-      load();
-      onWorkChanged?.();
-    } catch (e) {
-      message.error(e.response?.data?.error || '保存失败');
-    } finally {
-      setSavingTarget(false);
-    }
-  };
 
   if (!workId) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="先选一个作品" />;
@@ -88,32 +74,6 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
 
   const { totalWords, targetWords, percent, remainingWords, chapters, timeline } = data;
   const doneCount = chapters.filter((c) => c.status === 'done').length;
-
-  // 目标字数这一项
-  const target = (
-    <div className="ct-section">
-      <div className="ct-stat-label">目标字数</div>
-      <InputNumber
-        size="small"
-        min={0}
-        step={10000}
-        value={targetWords || undefined}
-        placeholder="未设定"
-        disabled={savingTarget}
-        onBlur={(e) => {
-          const next = Number(e.target.value) || 0;
-          if (next !== (targetWords || 0)) saveTarget(next);
-        }}
-        onPressEnter={(e) => {
-          // rc-input-number 把 onKeyDown 挂在外层 div 上，e.currentTarget 是 div、拿不到 value，
-          // 必须用 e.target（触发按键的 input）
-          const next = Number(e.target.value) || 0;
-          if (next !== (targetWords || 0)) saveTarget(next);
-        }}
-        style={{ width: '100%' }}
-      />
-    </div>
-  );
 
   const stats = (
     <div className="ct-section">
@@ -202,7 +162,6 @@ export default function ProgressPanel({ workId, work, onWorkChanged }) {
 
   return (
     <div className="ct-panel">
-      {target}
       {stats}
       {chart}
       {chapterList}

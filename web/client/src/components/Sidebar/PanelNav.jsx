@@ -3,9 +3,7 @@ import {
   UserOutlined,
   BookOutlined,
   PartitionOutlined,
-  LineChartOutlined,
   SafetyOutlined,
-  InfoCircleOutlined,
   BulbOutlined,
 } from '@ant-design/icons';
 
@@ -18,15 +16,15 @@ import {
  *
  * 改成纵向分段：图标 + 文字，全部露出来，一眼扫完。
  *
- * 知情边界不在这里：它是偶尔核对一次的东西，收进了设置页的「历史悬疑」。
+ * 「作品」「进度」已经挪到设置页「作品」：书名/题材/简介/大纲/目标字数/模板
+ * 都是配置一次的东西，写作时不该占左栏一格。
+ * 知情边界同样不在写作页，收进了设置页的「历史悬疑」。
  */
 const PANELS = [
   { key: 'characters', label: '人物', icon: <UserOutlined /> },
   { key: 'settings', label: '设定', icon: <BookOutlined /> },
   { key: 'plot', label: '情节', icon: <PartitionOutlined /> },
-  { key: 'progress', label: '进度', icon: <LineChartOutlined /> },
   { key: 'check', label: '检查', icon: <SafetyOutlined /> },
-  { key: 'work', label: '作品', icon: <InfoCircleOutlined /> },
   { key: 'inspirations', label: '灵感', icon: <BulbOutlined /> },
 ];
 

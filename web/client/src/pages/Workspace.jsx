@@ -14,10 +14,8 @@ import { pendingActions } from '../components/Assistant/pendingActions';
 import WorkTree from '../components/Sidebar/WorkTree';
 import CharacterPanel from '../components/Sidebar/CharacterPanel';
 import SettingPanel from '../components/Sidebar/SettingPanel';
-import WorkInfoPanel from '../components/Sidebar/WorkInfoPanel';
 import InspirationPanel from '../components/Sidebar/InspirationPanel';
 import PlotCardPanel from '../components/Sidebar/PlotCardPanel';
-import ProgressPanel from '../components/Sidebar/ProgressPanel';
 import ConsistencyPanel from '../components/Sidebar/ConsistencyPanel';
 import PanelNav from '../components/Sidebar/PanelNav';
 import api from '../api/client';
@@ -25,9 +23,12 @@ import api from '../api/client';
 /**
  * 三栏工作区。
  *
- * 左：作品章节树 + 资料面板（人物/设定/情节/进度/检查/作品/灵感）
+ * 左：作品章节树 + 资料面板（人物/设定/情节/检查/灵感）
  * 中：块编辑器
  * 右：AI 侧边栏
+ *
+ * 作品信息与进度是「配置一次」的东西，入口在设置页「作品」（顶栏「⋯」→ 设置），
+ * 写作页左栏不再挂这两个面板。
  */
 export default function Workspace() {
   const { workId } = useParams();
@@ -200,9 +201,6 @@ export default function Workspace() {
     characters: <CharacterPanel workId={work?.id} />,
     settings: <SettingPanel workId={work?.id} />,
     plot: <PlotCardPanel workId={work?.id} chapters={chapters} />,
-    progress: (
-      <ProgressPanel workId={work?.id} work={work} onWorkChanged={() => loadWork(work.id)} />
-    ),
     check: (
       <ConsistencyPanel
         workId={work?.id}
@@ -210,7 +208,6 @@ export default function Workspace() {
         onOpenChapter={loadChapter}
       />
     ),
-    work: <WorkInfoPanel work={work} onSaved={() => loadWork(work.id)} />,
     inspirations: <InspirationPanel />,
   }[panelKey];
 
