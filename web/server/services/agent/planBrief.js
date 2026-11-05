@@ -886,7 +886,8 @@ function mergeHandoverIntoBrief(brief, { characters = [], settings = [] } = {}) 
     if (!HANDOVER_RELATION_RE.test(haystack)) continue;
     // 托付人必须是作品里真实存在的人物卡，不能从设定文本里凭空捏一个名字。
     const trustee = cardNames.find((name) => name !== protagonistName && haystack.includes(name));
-    if (trustee) trustees.set(trustee, '设定');
+    // 人物卡关系是主来源：设定只是补充，不能把「人物卡」覆盖成「设定」。
+    if (trustee && !trustees.has(trustee)) trustees.set(trustee, '设定');
   }
 
   if (!trustees.size) return brief;

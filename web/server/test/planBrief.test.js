@@ -594,6 +594,36 @@ test('托付关系注册：设定里的「寄养」也能确定性加项', () =>
   assert.strictEqual(item.to, '杨俊');
 });
 
+test('托付关系注册：人物卡关系是主来源，设定不把来源改写成「设定」', () => {
+  const brief = validatePlanBrief({ items: [] }).brief;
+  const merged = mergeHandoverIntoBrief(brief, {
+    characters: [
+      {
+        name: '杨平',
+        role: '主角',
+        relations: JSON.stringify([
+          { characterName: '杨俊', relation: '父子' },
+          { characterName: '司马防', relation: '养父' },
+        ]),
+      },
+      { name: '司马防', role: '长辈', relations: '' },
+      {
+        name: '杨俊',
+        role: '长辈',
+        relations: JSON.stringify([{ characterName: '杨平', relation: '父子' }]),
+      },
+    ],
+    settings: [
+      { name: '寄养', category: '背景', content: '杨平自幼寄养在司马防家。' },
+    ],
+  });
+
+  const item = merged.items.find((x) => x.kind === 'mustPresent' && x.handover === true);
+  assert.ok(item);
+  assert.strictEqual(item.source, '人物卡', '已有更具体的来源时不能被设定覆盖');
+  assert.strictEqual(item.to, '杨俊');
+});
+
 test('托付关系注册：已有同人物的 mustPresent 只升级为 handover，不重复堆', () => {
   const brief = validatePlanBrief({
     items: [
