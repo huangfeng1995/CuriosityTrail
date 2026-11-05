@@ -120,6 +120,29 @@ test('补齐背景事实后：同一正文加句子 → missing 为空', () => {
   assert.deepStrictEqual(chapter.missing, []);
 });
 
+test('年龄必须出现年龄表述：十八了算交代，十八年不算', () => {
+  const facts = [{ id: 'f1', content: '杨平今年十八岁', keywords: '十八岁,年龄', fact_type: 'background' }];
+
+  const covered = backgroundFacts.checkMustReveal({
+    facts,
+    body: '司马懿嗤了一声：「十八了，还跟个妇人一样心软。」',
+  });
+  assert.strictEqual(covered.covered, 1, '「十八了」是年龄表述，应算交代');
+  assert.deepStrictEqual(covered.missing, []);
+
+  const yearOnly = backgroundFacts.checkMustReveal({
+    facts,
+    body: '他在温县住了十八年，日子过得不算差。',
+  });
+  assert.strictEqual(yearOnly.missing.length, 1, '「十八年」不是年龄，不能算交代');
+
+  const wordOnly = backgroundFacts.checkMustReveal({
+    facts,
+    body: '他从不提自己的年龄。',
+  });
+  assert.strictEqual(wordOnly.missing.length, 1, '只出现「年龄」这个词不算交代');
+});
+
 test('非首次出场：更早章节已出现主角 → 不强制交代', () => {
   const chapter = backgroundFacts.mustRevealForChapter({
     facts: factRows(),

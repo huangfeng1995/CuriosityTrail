@@ -19,6 +19,27 @@ const { all, get, transaction } = require('../../database');
 const { briefWriterBlock } = require('../agent/planBrief');
 
 const FACT_TYPE_BACKGROUND = 'background';
+/**
+ * 年龄事实：只认「十八/十四 + 岁」这一形态。
+ *
+ * 正文里的「十八年的日子」不是在交代年龄，「十八」单独出现在别处也不能算。
+ */
+const AGE_FACT_RE = /([一二三四五六七八九十百]{1,4}|[0-9]{1,3})\s*(?:岁|周岁)/;
+
+function ageTokenOf(content) {
+  const normalized = normalizeText(content);
+  const match = normalized.match(AGE_FACT_RE);
+  return match ? match[1] : '';
+}
+
+/** 年龄表述：十八岁 / 十八了 / 今年十八 / 年满十八；不认「十八年」。 */
+function ageExpressionHit(text, token) {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    `${escaped}\\s*(?:岁|周岁|了|整)|(?:今年|年满|已满|刚满|才)\\s*${escaped}`
+  ).test(text);
+}
+
 
 function normalizeText(value) {
   return String(value == null ? '' : value).trim();
@@ -189,7 +210,14 @@ function checkMustReveal({ facts = [], body = '' }) {
   for (const fact of background) {
     const terms = factTerms(fact);
     const prefix = Array.from(normalizeText(fact.content)).slice(0, 12).join('');
-    const hit = terms.some((term) => text.includes(term)) || (prefix && text.includes(prefix));
+    const ageToken = ageTokenOf(fact.content);
+    let hit;
+    if (ageToken) {
+      // 年龄项必须出现年龄表述，不能靠全文含「年龄」或地名就算交代。
+      hit = ageExpressionHit(text, ageToken);
+    } else {
+      hit = terms.some((term) => text.includes(term)) || (prefix && text.includes(prefix));
+    }
     if (!hit) {
       missing.push({
         id: fact.id,
