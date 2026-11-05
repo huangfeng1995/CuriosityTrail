@@ -18,12 +18,32 @@ const { parseModelJson } = require('./parse');
 /** 节拍类型：六选一。与规划提示词、校验规则保持一致 */
 const BEAT_TYPES = ['行动', '转折', '冲突', '揭示', '决定', '过渡'];
 
+/**
+ * 功能拍枚举：这一拍在章节结构里承担什么。
+ *
+ * 与 type 是两件事：type 说「事件性质」（冲突/揭示），function 说
+ * 「在全章曲线上负责哪一段」（开场/身世/告别）。篇幅配比只看 function，
+ * 不再按 goal 文案里的关键词猜——「回城/猎鹿」这类地点词会把开场拍
+ * 误判成启程拍，正文份额就会全盘错位。
+ */
+const BEAT_FUNCTIONS = ['opening', 'discussion', 'identity', 'father', 'farewell', 'departure'];
+const FUNCTION_LABELS = {
+  opening: '开场',
+  discussion: '议论',
+  identity: '身世',
+  father: '长辈到',
+  farewell: '告别托付',
+  departure: '启程',
+};
+
 /** 变量：每拍至少改变一个 */
 const DELTA_VARIABLES = ['处境', '关系', '信息', '决心'];
 
 /** 节拍数范围 */
 const MIN_BEATS = 4;
 const MAX_BEATS = 8;
+/** 六类功能全覆盖的起算拍数：少于 6 拍不可能排进六类，不据此判降级。 */
+const MIN_BEATS_WITH_FUNCTIONS = 6;
 
 /**
  * 单拍段数与全章段数。
@@ -32,10 +52,20 @@ const MAX_BEATS = 8;
  * 全章 8–14 段」是按两千字短章推的，会把长篇写成提纲，已经作废。
  */
 const MIN_PARAGRAPHS = 3;
-const MAX_PARAGRAPHS = 10;
+/**
+ * 单拍段数上限。
+ *
+ * 30% 的身世拍在 40 段的长章里要约 12 段；上限卡在 10 会逼出
+ * 每段 150 字以上的超长段，正好撞上 P3 的 80–140 字硬约束。
+ * 12 段 × 125 字 ≈ 1500 字，才装得下范文的 30% 份额。
+ */
+const MAX_PARAGRAPHS = 12;
 // 段落数只做安全下限（防止把长章规划成几段），不作为文章结构的验收门槛。
 const MIN_TOTAL_PARAGRAPHS = 20;
 const MAX_TOTAL_PARAGRAPHS = 80;
+
+/** 范文口径的全章目标字数（仅用于把份额换算成每拍目标字数）。 */
+const CHAPTER_TARGET_CHARS = 5000;
 
 /** 空钩子话术，出现即判不合格 */
 const EMPTY_HOOKS = ['且听下回分解', '欲知后事', '下回分解'];
@@ -55,29 +85,63 @@ const ARC_MIN_SHARE = 20;
 /**
  * 范文实测的六段功能配比（百分点）。
  *
- * 按拍的功能识别，不按拍序硬编码：模型可以写 5–8 拍，但每一类功能的
- * 目标份额是固定的；同类功能有多拍时按计划段数分摊。
+ * 只看显式 function，不按文案关键词猜。模型可以写 6–8 拍，但每一类
+ * 功能的目标份额是固定的；同类功能有多拍时按计划段数分摊。
+ * 容差 ±5pp 由 checkWordShares 统一处理，这里只给中心值。
  */
 const SHARE_ROLES = [
-  { role: 'departure', label: '启程', target: 6.5, re: /启程|出城|上路|动身|登车|上车|离开温县|随父亲登/ },
-  { role: 'farewell', label: '告别托付', target: 25, re: /告别|辞行|拜别|道别|托付|嘱|交给/ },
-  { role: 'father', label: '父至符传', target: 15.5, re: /符传|传诏|征辟|赴召/ },
-  { role: 'discussion', label: '下山议论', target: 14, re: /下山|途中|路上|议论|形势/ },
-  { role: 'identity', label: '回城身世', target: 30, re: ARC_BEAT_RE },
-  { role: 'opening', label: '开篇', target: 9, re: /山中|雪地|打猎|猎|母鹿|放走|开篇/ },
+  { role: 'opening', label: FUNCTION_LABELS.opening, target: 9 },
+  { role: 'discussion', label: FUNCTION_LABELS.discussion, target: 14 },
+  { role: 'identity', label: FUNCTION_LABELS.identity, target: 30 },
+  { role: 'father', label: FUNCTION_LABELS.father, target: 15.5 },
+  { role: 'farewell', label: FUNCTION_LABELS.farewell, target: 25 },
+  { role: 'departure', label: FUNCTION_LABELS.departure, target: 6.5 },
 ];
+const SHARE_TOLERANCE = 5;
+
+/** 功能拍覆盖：六类各至少一拍。 */
+function functionCoverage(beats) {
+  const covered = BEAT_FUNCTIONS.filter((fn) => beats.some((beat) => beat.function === fn));
+  return {
+    covered,
+    missing: BEAT_FUNCTIONS.filter((fn) => !covered.includes(fn)),
+  };
+}
 
 function classifyShareRole(beat) {
-  const narrative = beatNarrative(beat);
-  const hit = SHARE_ROLES.find((rule) => rule.re.test(narrative));
-  return hit ? hit.role : '';
+  return BEAT_FUNCTIONS.includes(beat.function) ? beat.function : '';
+}
+
+/**
+ * 把每拍的份额换回「目标字数」，并在份额偏差较大时就地调整段落数。
+ *
+ * R3 的约束只允许调这一拍的 paragraphs 与目标字数，不许为配比重排整章。
+ * 目标段数按 120 字/段估算：1500 字的身世拍 → 12 段，正好落在
+ * 80–140 字的形态硬约束里，而不是写成 10 段 150 字的超长段。
+ */
+function applyTargetChars(beats) {
+  for (const beat of beats) {
+    const share = Number(beat.wordShare);
+    if (!Number.isFinite(share)) continue;
+    beat.targetChars = Math.round((share / 100) * CHAPTER_TARGET_CHARS);
+    if (!beat.shareRole) continue;
+    const desired = Math.min(
+      MAX_PARAGRAPHS,
+      Math.max(MIN_PARAGRAPHS, Math.round(beat.targetChars / 120))
+    );
+    beat.targetParagraphs = desired;
+    if (Math.abs(desired - (Number(beat.paragraphs) || 0)) >= 2) {
+      beat.paragraphs = desired;
+    }
+  }
 }
 
 /**
  * 按功能给每拍套用范文配比。
  *
  * 同类功能有多拍时按 paragraphs 权重分摊该功能的总份额；
- * 识别不出的拍保留模型/段落折算出来的原始份额。
+ * 功能未分类的拍保留模型/段落折算出来的原始份额，并记进 functionMissing，
+ * 交给路由重排——这里绝不按文案关键词替它猜一个功能。
  */
 function applyReferenceShares(beats) {
   const byRole = new Map();
@@ -99,10 +163,13 @@ function applyReferenceShares(beats) {
     }
   }
 
-  const shareMissing = SHARE_ROLES.filter((rule) => !(byRole.get(rule.role) || []).length).map(
-    (rule) => rule.role
-  );
-  return shareMissing;
+  // 未分类的拍也要有可比的区间：沿用原来折算出来的份额作为中心值。
+  for (const beat of beats) {
+    if (!beat.shareRole) beat.shareRole = '';
+  }
+
+  const coverage = functionCoverage(beats);
+  return coverage.missing;
 }
 
 /** 完整交付的机械识别：把某人交给某人。预备动作（递、接、握住手）不算。 */
@@ -121,14 +188,25 @@ const MAX_EVIDENCE_CHARS = 30;
  */
 const PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
-beats 4–8 个；每拍含 id（B1…Bn）、type（行动|转折|冲突|揭示|决定|过渡）、goal、obstacle、cost、
-delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–10）、wordShare、endHook（这一拍结束时的悬念或钩子）。
-单章是 5000 字量级的长章：按内容需要给每拍估段数，长章大致 35–60 段即可，不必凑固定段数。
-paragraphs 是这一拍的段落数，硬上限 10；它和 wordShare 是两件事：30% 的身世拍也用 3–10 段，
-份额靠每段写长来承担，不要用 11 段以上去堆篇幅，否则整张节拍表会被判格式不合格。
-wordShare 是这一拍占全章正文的百分比整数，各拍合计约 100。长章范文实测配比：
-开篇 8–10、途中议论 14、回城与身世约 30、父亲持符传到 15–16、告别托付 25、启程 6–7；
-允许 ±5 个百分点的浮动。回城/身世这一拍不能并进过渡拍，目标份额低于 20 会被判不合格。
+beats 6–8 个；每拍含 id（B1…Bn）、function、functionReason、type（行动|转折|冲突|揭示|决定|过渡）、
+goal、obstacle、cost、delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、
+targetChars、wordShare、endHook（这一拍结束时的悬念或钩子）。
+function 只能取以下六类，且全章六类必须各出现至少一次（可以有同类多拍）：
+- opening：开场。有外部对手施加压力、主角被叫走/被传唤，外部压力先一步打断当前场景。
+  这一拍的 obstacle 必须写清对手是谁、用什么方式阻碍，正文会据此校验对手是否落进开场。
+- discussion：同行议论且发生信息交换（谁告诉谁什么新信息）。
+- identity：交代身世与旧日（年龄、籍贯、寄养、旧事）。
+- father：长辈到场并带符传/传诏等制度性信物。
+- farewell：交割与托付（交物、交人、留下可引用的话）。
+- departure：上车出城/启程离场。
+function 按事件语义判，不许按关键词猜：判断依据写进 functionReason，一句话说明「谁在场、发生什么、改变了什么」。
+错误示例：把雪地猎鹿的开场拍写成 departure、把门前告别写成 departure、把回城身世并进过渡拍。
+单章是 5000 字量级的长章：按内容需要给每拍估段数，长章大致 35–65 段即可，不必凑固定段数。
+paragraphs 是这一拍的段落数，硬上限 12；targetChars 是这一拍的目标纯汉字数（不含标点），
+wordShare 是这一拍占全章正文的百分比。范文实测配比：
+opening 8–10%、discussion 14%、identity ≈30%、father 15–16%、farewell 25%、departure 6–7%，允许 ±5pp。
+targetChars 与 wordShare 要能对上：targetChars ≈ wordShare × 5000 / 100。
+回城/身世这一拍不能并进过渡拍，目标份额低于 20 会被判不合格。
 每个节拍必须让至少一个变量发生改变，必须写出代价，禁止空转抒情段。
 mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不新增未提供的人物或设定。`;
 
@@ -212,6 +290,7 @@ function validateBeatPlan(candidate) {
   }
 
   const beats = [];
+  const functionReasonMissing = [];
   let totalParagraphs = 0;
 
   rawBeats.forEach((beat, index) => {
@@ -223,6 +302,9 @@ function validateBeatPlan(candidate) {
 
     const id = text(beat.id) || `B${index + 1}`;
     const type = text(beat.type);
+    const rawFunction = text(beat.function);
+    const beatFunction = BEAT_FUNCTIONS.includes(rawFunction) ? rawFunction : '';
+    const functionReason = text(beat.functionReason);
     const goal = text(beat.goal);
     const beatObstacle = text(beat.obstacle);
     const beatCost = text(beat.cost);
@@ -236,6 +318,10 @@ function validateBeatPlan(candidate) {
 
     if (id !== `B${index + 1}`) errors.push(`${where}的 id 必须是 B${index + 1}，收到「${id}」`);
     if (!BEAT_TYPES.includes(type)) errors.push(`${where}的 type 不合法：${type || '空'}`);
+    // function 缺失/非法不直接判计划作废：作废会掉进整章直写，比缺分类更糟。
+    // 这里只记为「未分类」，由路由重排一次；重排后仍缺才写进 plan_degraded。
+    if (!beatFunction) functionReasonMissing.push(`${id}:未分类${rawFunction ? `(${rawFunction})` : ''}`);
+    else if (functionReason.length < 8) functionReasonMissing.push(`${id}:缺判定依据`);
     for (const [key, value] of Object.entries({ goal, obstacle: beatObstacle, cost: beatCost })) {
       if (!value) errors.push(`${where}的 ${key} 不能为空`);
     }
@@ -255,6 +341,8 @@ function validateBeatPlan(candidate) {
     const rawShare = Number(beat.wordShare);
     beats.push({
       id,
+      function: beatFunction,
+      functionReason,
       type,
       goal,
       obstacle: beatObstacle,
@@ -284,8 +372,16 @@ function validateBeatPlan(candidate) {
     beat.plannedShare = beat.wordShare;
   }
 
-  // 范文配比优先：识别出功能的拍改用实测目标，识别不出的保留原份额。
+  // 范文配比优先：有合法 function 的拍改用实测目标；未分类的拍保留原份额，
+  // 但绝不按文案关键词补猜一个功能（猜错会让整章份额错位）。
   const shareMissing = applyReferenceShares(beats);
+  const fnCoverage = functionCoverage(beats);
+  // 六类功能是「5000 字长章 6–8 拍」的结构要求。短章（<6 拍）本来就排不下
+  // 六类，不拿它判降级；功能字段仍按拍使用，只是不做全覆盖硬校验。
+  const requireFunctions = beats.length >= MIN_BEATS_WITH_FUNCTIONS;
+  applyTargetChars(beats);
+  const adjustedParagraphs = beats.reduce((sum, beat) => sum + (beat.paragraphs || 0), 0);
+  totalParagraphs = adjustedParagraphs;
 
   if (beats.length && (totalParagraphs < MIN_TOTAL_PARAGRAPHS || totalParagraphs > MAX_TOTAL_PARAGRAPHS)) {
     errors.push(`全章段落数必须在 ${MIN_TOTAL_PARAGRAPHS}–${MAX_TOTAL_PARAGRAPHS} 之间，收到 ${totalParagraphs}`);
@@ -298,7 +394,8 @@ function validateBeatPlan(candidate) {
   // 只认身世语义，不认「回城」地点词——途中议论拍本来就发生在回城路上。
   for (const beat of beats) {
     const planned = Number.isFinite(beat.plannedShare) ? beat.plannedShare : beat.wordShare;
-    if (beat.type === '过渡' && IDENTITY_MERGE_RE.test(beatNarrative(beat)) && planned < ARC_MIN_SHARE) {
+    const identitySemantic = beat.function === 'identity' || IDENTITY_MERGE_RE.test(beatNarrative(beat));
+    if (beat.type === '过渡' && identitySemantic && planned < ARC_MIN_SHARE) {
       errors.push(
         `${beat.id}把身世（寄养/年龄/籍贯/旧事）并进了过渡拍（计划份额仅 ${planned}%，应 ≥${ARC_MIN_SHARE}%），` +
           '身世必须单独成拍'
@@ -329,9 +426,126 @@ function validateBeatPlan(candidate) {
       beats,
       totalParagraphs,
       shareMissing,
+      functionCovered: fnCoverage.covered,
+      functionMissing: requireFunctions ? fnCoverage.missing : [],
+      functionReasonMissing: requireFunctions ? functionReasonMissing : [],
     },
     errors: [],
   };
+}
+
+/**
+ * 「最接近合法」兜底：校验失败时不把整章丢给写手直写。
+ *
+ * 把可解析的节拍表按硬边界修复：段数夹到 3–12、缺失必填字段补占位、
+ * 非法文不加猜测。修复后的表仍可能缺功能拍/缺对手，但至少保留
+ * 事件链与篇幅结构，比「整章 85 段直写」更接近合格产物。
+ *
+ * @param {Object|string} candidate 模型最后一次输出
+ * @returns {Object|null}
+ */
+function salvageBeatPlan(candidate) {
+  const data = typeof candidate === 'string' ? parseModelJson(candidate) : candidate;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const rawBeats = Array.isArray(data.beats) ? data.beats : [];
+  if (!rawBeats.length) return null;
+
+  const beats = rawBeats.slice(0, MAX_BEATS).map((raw, index) => {
+    const beat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const delta = beat.delta && typeof beat.delta === 'object' ? beat.delta : {};
+    const rawParagraphs = Number(beat.paragraphs);
+    const paragraphs = Number.isInteger(rawParagraphs)
+      ? Math.min(MAX_PARAGRAPHS, Math.max(MIN_PARAGRAPHS, rawParagraphs))
+      : MIN_PARAGRAPHS;
+    const rawShare = Number(beat.wordShare);
+    return {
+      id: `B${index + 1}`,
+      function: BEAT_FUNCTIONS.includes(text(beat.function)) ? text(beat.function) : '',
+      functionReason: text(beat.functionReason),
+      type: BEAT_TYPES.includes(text(beat.type)) ? text(beat.type) : '过渡',
+      goal: text(beat.goal) || '（原计划缺目标，按章目标推进）',
+      obstacle: text(beat.obstacle) || '（原计划缺阻碍，按现有情境补写）',
+      cost: text(beat.cost) || '（原计划缺代价，按事件结果补写）',
+      delta: {
+        variable: DELTA_VARIABLES.includes(text(delta.variable)) ? text(delta.variable) : '处境',
+        from: text(delta.from) || '原状',
+        to: text(delta.to) || '新的处境',
+      },
+      infoGain: text(beat.infoGain) || '（原计划缺少信息增量，按现有事件补写）',
+      paragraphs,
+      wordShare: Number.isFinite(rawShare) && rawShare > 0 && rawShare <= 100 ? rawShare : null,
+      endHook: text(beat.endHook) || '（原计划缺钩子，按下一拍推进）',
+    };
+  });
+
+  const totalParagraphsForShare = beats.reduce((sum, b) => sum + (b.paragraphs || 0), 0);
+  const rawShareTotal = beats.reduce((sum, b) => sum + (b.wordShare || 0), 0);
+  const usableRawShare =
+    beats.every((b) => b.wordShare !== null) && rawShareTotal >= 90 && rawShareTotal <= 110;
+  for (const beat of beats) {
+    if (usableRawShare) {
+      beat.wordShare = Math.round(beat.wordShare * 10) / 10;
+    } else if (totalParagraphsForShare > 0) {
+      beat.wordShare = Math.round(((beat.paragraphs || 0) / totalParagraphsForShare) * 1000) / 10;
+    } else {
+      beat.wordShare = Math.round((100 / Math.max(1, beats.length)) * 10) / 10;
+    }
+    beat.plannedShare = beat.wordShare;
+  }
+  const shareMissing = applyReferenceShares(beats);
+  applyTargetChars(beats);
+  const fnCoverage = functionCoverage(beats);
+  const requireFunctions = beats.length >= MIN_BEATS_WITH_FUNCTIONS;
+  const functionReasonMissing = [];
+  if (requireFunctions) {
+    for (const beat of beats) {
+      if (!beat.function) functionReasonMissing.push(`${beat.id}:未分类`);
+      else if (!beat.functionReason || beat.functionReason.length < 8) {
+        functionReasonMissing.push(`${beat.id}:缺判定依据`);
+      }
+    }
+  }
+
+  return {
+    chapterGoal: text(data.chapterGoal) || '（原计划缺章目标，按写作指令推进）',
+    protagonistIntent: text(data.protagonistIntent) || '（原计划缺主角意图，按章目标推断）',
+    obstacle: text(data.obstacle) || '（原计划缺主要阻碍）',
+    cost: text(data.cost) || '（原计划缺代价）',
+    hook: text(data.hook) || '（原计划缺钩子）',
+    avoidRepeat: Array.isArray(data.avoidRepeat)
+      ? data.avoidRepeat.map((x) => text(x)).filter(Boolean)
+      : [],
+    mainType: BEAT_TYPES.includes(text(data.mainType)) ? text(data.mainType) : beats[0].type,
+    beats,
+    totalParagraphs: beats.reduce((sum, beat) => sum + (beat.paragraphs || 0), 0),
+    shareMissing,
+    functionCovered: fnCoverage.covered,
+    functionMissing: requireFunctions ? fnCoverage.missing : [],
+    functionReasonMissing,
+    salvaged: true,
+  };
+}
+
+/**
+ * 功能拍重排指令：只补缺的功能分类，不重写已经合格的事件。
+ */
+function buildFunctionReplanInstruction(plan, missing, reasonMissing = []) {
+  const labels = missing.map((fn) => `${fn}（${FUNCTION_LABELS[fn]}）`).join('、');
+  const current = (plan && plan.beats ? plan.beats : [])
+    .map((beat) => `${beat.id}=${beat.function || '未分类'}`)
+    .join('、');
+  return [
+    '（功能拍自检：节拍表的功能分类不完整，只做一次重排。）',
+    `当前功能：${current || '无'}；缺少：${labels || '无'}。`,
+    reasonMissing.length ? `判定依据缺失：${reasonMissing.join('、')}。` : '',
+    '给每拍补 function（opening|discussion|identity|father|farewell|departure）与 functionReason（谁在场、发生什么、改变了什么）。',
+    '按事件语义判，不许按关键词猜：opening=外部对手施压/被叫走；discussion=同行议论且信息交换；',
+    'identity=交代身世旧日；father=长辈到场并带符传；farewell=交割托付；departure=上车出城。',
+    '六类必须各至少一拍，全章 6–8 拍；其余已经合格的拍保留原目标与事件，不要重写成新剧情。',
+    '只输出完整节拍表 JSON，不要解释。',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**
@@ -562,9 +776,9 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
         ],
         ...options,
         jsonOutput: true,
-        // 实测：6 拍 / 45 段的完整节拍表约 1558 tokens，1200 会稳定截断在
-        // 第 3–4 拍中间，JSON 解析必然失败。2000 留约 28% 余量。
-        maxTokens: 2000,
+        // 实测：6 拍 / 45 段的完整节拍表约 1558 tokens；加上 functionReason、
+        // targetChars 与 8 拍上限，2600 才留得住余量，2000 会在末拍截断。
+        maxTokens: 2600,
       });
 
       lastRaw = String(result.content || '');
@@ -588,6 +802,12 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
     }
   }
 
+  // R4：两次都不合格时按「最接近合法」的版本交付，不丢给写手直写。
+  // 修复只夹边界与补占位，不猜剧情；缺功能拍/对手会在 plan_degraded 里写明。
+  const salvaged = salvageBeatPlan(lastRaw);
+  if (salvaged) {
+    return { plan: salvaged, raw: lastRaw, errors: lastErrors, reason: 'salvaged', usage: lastUsage };
+  }
   return { plan: null, raw: lastRaw, errors: lastErrors, reason: 'invalid', usage: lastUsage };
 }
 
@@ -666,14 +886,30 @@ function shareParagraphRanges(beats, paragraphCount) {
  * @returns {{applicable: boolean, total: number, beats: Array, outOfRange: string[],
  *           shareMissing: string[], reason?: string}}
  */
-function checkWordShares(plan, body, tolerance = 5) {
+function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
   const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
   const paragraphs = String(body || '')
     .split(/\n+/)
     .map((row) => row.trim())
     .filter(Boolean);
+  const emptyRoleShares = SHARE_ROLES.map((rule) => ({
+    function: rule.role,
+    label: rule.label,
+    target: rule.target,
+    range: [rule.target - tolerance, rule.target + tolerance],
+    share: null,
+    hit: false,
+    present: false,
+  }));
   if (!beats.length || !paragraphs.length) {
-    return { applicable: false, total: 0, beats: [], outOfRange: [], shareMissing: [] };
+    return {
+      applicable: false,
+      total: 0,
+      beats: [],
+      roleShares: emptyRoleShares,
+      outOfRange: [],
+      shareMissing: [],
+    };
   }
 
   const ranges = shareParagraphRanges(beats, paragraphs.length);
@@ -684,13 +920,39 @@ function checkWordShares(plan, body, tolerance = 5) {
     const chars = to > from ? cjkCount(paragraphs.slice(from, to).join('')) : 0;
     const share = total > 0 ? Math.round((chars / total) * 1000) / 10 : 0;
     const target = Number(beats[i].wordShare);
+    const beatFunction = BEAT_FUNCTIONS.includes(beats[i].function) ? beats[i].function : '';
+    const hasTarget = Number.isFinite(target);
     rows.push({
       id: beats[i].id,
-      target: Number.isFinite(target) ? target : null,
+      function: beatFunction,
+      label: FUNCTION_LABELS[beatFunction] || '',
+      target: hasTarget ? target : null,
+      range: hasTarget ? [Math.round((target - tolerance) * 10) / 10, Math.round((target + tolerance) * 10) / 10] : null,
       share,
-      delta: Number.isFinite(target) ? Math.round((share - target) * 10) / 10 : null,
+      delta: hasTarget ? Math.round((share - target) * 10) / 10 : null,
+      hit: hasTarget ? Math.abs(share - target) <= tolerance : false,
+      chars,
     });
   }
+
+  // 按功能汇总：检查表要的是「identity ≥25%、farewell ≥20%」，
+  // 不是逐拍数字。同类功能多拍时把实际份额相加再和规则目标比。
+  const roleShares = SHARE_ROLES.map((rule) => {
+    const sameRole = rows.filter((row) => row.function === rule.role);
+    const share = sameRole.length
+      ? Math.round(sameRole.reduce((sum, row) => sum + row.share, 0) * 10) / 10
+      : null;
+    return {
+      function: rule.role,
+      label: rule.label,
+      target: rule.target,
+      range: [rule.target - tolerance, rule.target + tolerance],
+      share,
+      hit: sameRole.length ? Math.abs(share - rule.target) <= tolerance : false,
+      present: sameRole.length > 0,
+    };
+  });
+
   const shareMissing = Array.isArray(plan?.shareMissing) ? plan.shareMissing : [];
   // 六段功能拍没排齐时，剩余目标份额合计不到 100：再按绝对配比逐个判越界，
   // 等于把「计划缺拍」伪装成「正文每一拍都写错」。这里只报缺哪类功能拍，
@@ -702,21 +964,27 @@ function checkWordShares(plan, body, tolerance = 5) {
       shareMissing,
       total,
       beats: rows,
+      roleShares,
       outOfRange: [],
     };
   }
   const outOfRange = rows
     .filter((row) => row.target !== null && Math.abs(row.delta) > tolerance)
     .map((row) => row.id);
-  return { applicable: true, total, beats: rows, outOfRange, shareMissing };
+  return { applicable: true, total, beats: rows, roleShares, outOfRange, shareMissing };
 }
 
 module.exports = {
   BEAT_TYPES,
+  BEAT_FUNCTIONS,
+  FUNCTION_LABELS,
   DELTA_VARIABLES,
   PLAN_PROMPT,
   COVERAGE_PROMPT,
   validateBeatPlan,
+  salvageBeatPlan,
+  functionCoverage,
+  buildFunctionReplanInstruction,
   checkWordShares,
   validateCoverage,
   formatBeatPlan,

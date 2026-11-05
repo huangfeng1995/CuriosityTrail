@@ -87,6 +87,23 @@ function makePlan(overrides = {}) {
   };
 }
 
+/** 六拍功能表：默认覆盖六类，可替换 functions 以测缺类。 */
+function sixBeatFunctionPlan(functions = ['opening', 'discussion', 'identity', 'father', 'farewell', 'departure']) {
+  const base = makePlan().beats;
+  return makePlan({
+    beats: [
+      ...base,
+      { ...base[3], id: 'B5', type: '决定' },
+      { ...base[3], id: 'B6', type: '决定' },
+    ].map((beat, index) => ({
+      ...beat,
+      id: `B${index + 1}`,
+      function: functions[index],
+      functionReason: `第${index + 1}拍：${beat.goal}，有人在场且处境发生变化`,
+    })),
+  });
+}
+
 test('合格节拍表通过校验并归一化', () => {
   const result = validateBeatPlan(makePlan());
 
@@ -121,14 +138,14 @@ test('节拍数越界、缺字段、缺 endHook、段数越界都会被拒绝', 
       makePlan({
         beats: makePlan().beats.map((b, i) => (i === 0 ? { ...b, paragraphs: 2 } : b)),
       }),
-      /paragraphs 必须是 3–10/,
+      /paragraphs 必须是 3–12/,
     ],
     [
-      '单拍段落多于 10',
+      '单拍段落多于 12',
       makePlan({
-        beats: makePlan().beats.map((b, i) => (i === 0 ? { ...b, paragraphs: 11 } : b)),
+        beats: makePlan().beats.map((b, i) => (i === 0 ? { ...b, paragraphs: 13 } : b)),
       }),
-      /paragraphs 必须是 3–10/,
+      /paragraphs 必须是 3–12/,
     ],
     [
       'infoGain 太短',
@@ -363,7 +380,7 @@ test('规划：第一次不合格时带错误清单重试，第二次合格即�
   assert.ok(out.plan, '第二次合格时应当拿到节拍表');
   assert.strictEqual(calls.length, 2, '不合格才重试，且最多两次');
   assert.deepStrictEqual(calls[0].jsonOutput, true);
-  assert.strictEqual(calls[0].maxTokens, 2000);
+  assert.strictEqual(calls[0].maxTokens, 2600);
   assert.match(String(calls[0].messages[1].content), /写第一章/);
   assert.match(
     String(calls[1].messages[1].content),
@@ -474,17 +491,24 @@ test('篇幅配比：按范文六段功能套用目标份额，识别不出的�
     '在门前告别，司马防托付给杨俊',
     '杨平启程，登车离开温县',
   ];
+  const functions = ['opening', 'discussion', 'identity', 'father', 'farewell', 'departure'];
   const base = makePlan().beats;
   const plan = makePlan({
     beats: [
-      ...base.map((beat, index) => ({ ...beat, goal: goals[index] })),
-      { ...base[3], id: 'B5', type: '决定', goal: goals[4] },
-      { ...base[3], id: 'B6', type: '决定', goal: goals[5] },
+      ...base.map((beat, index) => ({
+        ...beat,
+        goal: goals[index],
+        function: functions[index],
+        functionReason: `第${index + 1}拍：有人在场并发生了对应事件，处境改变`,
+      })),
+      { ...base[3], id: 'B5', type: '决定', goal: goals[4], function: 'farewell' },
+      { ...base[3], id: 'B6', type: '决定', goal: goals[5], function: 'departure' },
     ],
   });
   const result = validateBeatPlan(plan);
   assert.strictEqual(result.ok, true);
   assert.deepStrictEqual(result.plan.shareMissing, []);
+  assert.deepStrictEqual(result.plan.functionMissing, []);
   assert.deepStrictEqual(
     result.plan.beats.map((b) => [b.id, b.shareRole, b.wordShare]),
     [
@@ -498,11 +522,104 @@ test('篇幅配比：按范文六段功能套用目标份额，识别不出的�
   );
 });
 
+test('功能拍：六类缺一记 functionMissing，但不判计划作废（留给路由重排）', () => {
+  const functions = ['opening', 'discussion', 'identity', 'father', 'farewell', ''];
+  const plan = sixBeatFunctionPlan(functions);
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, true, '缺功能拍不能直接把计划作废，否则会掉进整章直写');
+  assert.deepStrictEqual(result.plan.functionMissing, ['departure']);
+  assert.ok(result.plan.functionReasonMissing.includes('B6:未分类'));
+});
+
+test('功能拍：分类只看显式 function，不按 goal 关键词猜', () => {
+  // B1 的 goal 含「雪地/猎鹿/启程」等旧规则会误判成 departure 的词，但 function=opening。
+  const plan = sixBeatFunctionPlan();
+  plan.beats[0].goal = '雪地里猎鹿，随后启程回城';
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.plan.beats[0].shareRole, 'opening');
+  assert.strictEqual(result.plan.beats[0].wordShare, 9);
+  assert.deepStrictEqual(result.plan.functionMissing, []);
+});
+
+test('篇幅配比：按 function 给出目标字数，wordShares 输出实值区间与命中', () => {
+  const plan = sixBeatFunctionPlan();
+  const result = validateBeatPlan(plan);
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(
+    result.plan.beats.map((b) => b.wordShare),
+    [9, 14, 30, 15.5, 25, 6.5]
+  );
+  assert.deepStrictEqual(
+    result.plan.beats.map((b) => b.targetChars),
+    [450, 700, 1500, 775, 1250, 325]
+  );
+
+  // 按计划段数写等长段落，实际份额应落在目标 ±5pp 内。
+  const rows = result.plan.beats.flatMap((beat) =>
+    Array.from({ length: beat.paragraphs }, () => '雪'.repeat(100))
+  );
+  const shares = checkWordShares(result.plan, rows.join('\n\n'));
+  assert.strictEqual(shares.applicable, true);
+  assert.strictEqual(shares.beats.length, 6);
+  for (const row of shares.beats) {
+    assert.ok(Array.isArray(row.range), `${row.id} 必须有目标区间`);
+    assert.strictEqual(typeof row.share, 'number');
+    assert.strictEqual(typeof row.hit, 'boolean');
+  }
+  const identity = shares.roleShares.find((row) => row.function === 'identity');
+  assert.deepStrictEqual(identity.range, [25, 35]);
+  assert.ok(identity.share >= 25, `identity 实际 ${identity.share}% 应 ≥25%`);
+  assert.strictEqual(identity.hit, true);
+  const farewell = shares.roleShares.find((row) => row.function === 'farewell');
+  assert.deepStrictEqual(farewell.range, [20, 30]);
+  assert.ok(farewell.share >= 20, `farewell 实际 ${farewell.share}% 应 ≥20%`);
+});
+
+test('R4：结构不合格时不返回 null，按最接近合法的版本交付', async () => {
+  const provider = {
+    async chat() {
+      return {
+        content: JSON.stringify({
+          chapterGoal: '章目标',
+          protagonistIntent: '意图',
+          obstacle: '阻碍',
+          cost: '代价',
+          hook: '钩子',
+          mainType: '过渡',
+          beats: [
+            {
+              id: 'B1',
+              type: '不存在的类型',
+              goal: '目标',
+              obstacle: '阻碍',
+              cost: '代价',
+              delta: { variable: '处境', from: '甲', to: '乙' },
+              infoGain: '信息增量足够长',
+              paragraphs: 99,
+              endHook: '钩子',
+            },
+          ],
+        }),
+        finishReason: 'stop',
+      };
+    },
+  };
+  const out = await generateBeatPlan({ provider, systemPrompt: '上下文', instruction: '写第一章' });
+  assert.ok(out.plan, '可解析但不合格的节拍表应修复后交付');
+  assert.strictEqual(out.reason, 'salvaged');
+  assert.strictEqual(out.plan.salvaged, true);
+  assert.strictEqual(out.plan.beats[0].paragraphs, 12, '段数夹到 3–12');
+  assert.strictEqual(out.plan.beats[0].type, '过渡', '非法 type 回落为过渡');
+  assert.ok(out.errors.length > 0);
+});
+
 test('篇幅配比：同类功能有多拍时按段数分摊该功能总份额', () => {
   const plan = makePlan({
     beats: makePlan().beats.map((beat, index) => ({
       ...beat,
       goal: index === 2 || index === 3 ? '回城交代身世' : beat.goal,
+      function: index === 2 || index === 3 ? 'identity' : '',
       paragraphs: index === 2 ? 6 : index === 3 ? 4 : beat.paragraphs,
     })),
   });
@@ -628,8 +745,10 @@ test('自检：超时返回 null 与 timeout，正文留空不发起请求', asy
   assert.strictEqual(called, false);
 });
 
-test('规划提示词：明确 paragraphs 与 wordShare 是两件事，避免为份额写超段数', () => {
-  assert.match(PLAN_PROMPT, /paragraphs 是这一拍的段落数，硬上限 10/);
-  assert.match(PLAN_PROMPT, /30% 的身世拍也用 3–10 段/);
-  assert.match(PLAN_PROMPT, /份额靠每段写长来承担/);
+test('规划提示词：明确 function 语义与 paragraphs/wordShare/targetChars 的关系', () => {
+  assert.match(PLAN_PROMPT, /function 只能取以下六类/);
+  assert.match(PLAN_PROMPT, /opening|discussion|identity|father|farewell|departure/);
+  assert.match(PLAN_PROMPT, /不许按关键词猜/);
+  assert.match(PLAN_PROMPT, /paragraphs 是这一拍的段落数，硬上限 12/);
+  assert.match(PLAN_PROMPT, /targetChars 与 wordShare 要能对上/);
 });
