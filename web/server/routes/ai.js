@@ -942,6 +942,30 @@ router.post('/chat', async (req, res) => {
 
           // 背景事实是确定性 mustReveal：模型没给、漏给，也不能从 brief 里漏掉。
           brief = backgroundFacts.mergeIntoBrief(briefOut.brief, backgroundFactRows);
+
+          // 托付关系是确定性 mustPresent(handover)：人物卡/设定里登记过寄养、托付、
+          // 拜师、代养，告别拍就必须让托付人本人在场并留下一句可引用的话。
+          try {
+            const [characterCards, settingRows] = await Promise.all([
+              all(
+                `SELECT name, role, identity, relations FROM characters
+                 WHERE work_id = ? ORDER BY created_at ASC, id ASC`,
+                [workId]
+              ),
+              all(
+                `SELECT name, category, content FROM settings
+                 WHERE work_id = ? ORDER BY created_at ASC, id ASC`,
+                [workId]
+              ),
+            ]);
+            brief = planBrief.mergeHandoverIntoBrief(brief, {
+              characters: characterCards,
+              settings: settingRows,
+            });
+          } catch (err) {
+            console.error('[ai] 托付关系并入 brief 失败，沿用原 brief:', err.message);
+          }
+
           if (brief && brief.items.length) {
             briefSystemPrompt = `${briefSystemPrompt}\n\n---\n\n${planBrief.formatPlanBrief(brief)}`;
           }
@@ -1011,7 +1035,7 @@ router.post('/chat', async (req, res) => {
             if (coverage.missing.length) {
               planDegraded = `brief_missing:${coverage.missing
                 .slice(0, 3)
-                .map((item) => `${item.kind}/${item.text}`)
+                .map((item) => (item.slot ? `${item.kind}/${item.slot}/${item.text}` : `${item.kind}/${item.text}`))
                 .join('|')}`;
             }
           }
@@ -1055,6 +1079,8 @@ router.post('/chat', async (req, res) => {
             paragraphs: beatPlan ? beatPlan.totalParagraphs : 0,
             briefOk: Boolean(brief),
             briefItems: brief ? brief.items.length : 0,
+            briefOpponent: briefCoverageResult ? briefCoverageResult.opponent : 'absent',
+            briefHandover: briefCoverageResult ? briefCoverageResult.handover : 'absent',
             briefMissing: briefCoverageResult ? briefCoverageResult.missing.map((x) => x.id) : [],
             errors: (planOut.errors || []).slice(0, 6),
             usage: planOut.usage || null,

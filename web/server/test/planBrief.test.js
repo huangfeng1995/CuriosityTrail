@@ -20,6 +20,7 @@ const {
   briefWriterBlock,
   partitionCoverage,
   buildReplanInstruction,
+  mergeHandoverIntoBrief,
   generatePlanBrief,
 } = require('../services/agent/planBrief');
 const { validateBeatPlan } = require('../services/agent/beatPlan');
@@ -283,4 +284,342 @@ test('回落：brief 生成失败返回 null，不抛给路由', async () => {
   });
   assert.strictEqual(out2.brief, null);
   assert.strictEqual(out2.reason, 'error');
+});
+
+// ---------------------------------------------------------------------------
+// 任务六：对手与托付
+// ---------------------------------------------------------------------------
+
+/**
+ * 四拍小表：B1 开场，B4 是告别拍（goal/cost 可按用例改）。
+ *
+ * @param {{openingObstacle?: string, openingGoal?: string, farewellGoal?: string,
+ *          farewellCost?: string}} [options]
+ */
+function planWithOpeningAndFarewell(options = {}) {
+  const {
+    openingObstacle = '门禁森严，符传核验迟迟不放行',
+    openingGoal = '把杨平带到堂上',
+    farewellGoal = '接过长匣并辞行',
+    farewellCost = '把父亲给的犀角弓交出去',
+  } = options;
+
+  return validateBeatPlan({
+    chapterGoal: '杨平离开司马府',
+    protagonistIntent: '跟父亲走',
+    obstacle: '司马防不肯放人',
+    cost: '交出犀角弓',
+    hook: '马车驶向许都',
+    avoidRepeat: [],
+    mainType: '决定',
+    beats: [
+      {
+        id: 'B1',
+        type: '行动',
+        goal: openingGoal,
+        obstacle: openingObstacle,
+        cost: '在门外等了一个时辰',
+        delta: { variable: '处境', from: '被挡在府门外', to: '得以入内见人' },
+        infoGain: '守门人反复核对符传上的形制',
+        paragraphs: 10,
+        endHook: '堂内传来司马防的咳嗽声',
+      },
+      {
+        id: 'B2',
+        type: '冲突',
+        goal: '说清来意',
+        obstacle: '司马防不愿正面回应',
+        cost: '话说得越来越重',
+        delta: { variable: '关系', from: '客气寒暄', to: '当面顶撞' },
+        infoGain: '司马防提到了杨平的寄养旧事',
+        paragraphs: 10,
+        endHook: '司马防忽然沉默',
+      },
+      {
+        id: 'B3',
+        type: '转折',
+        goal: '听完司马防的安排',
+        obstacle: '外头催行的车马已到',
+        cost: '没来得及追问',
+        delta: { variable: '信息', from: '以为只是暂住', to: '知道此去不再回来' },
+        infoGain: '随行的箱笼只有一只旧弓',
+        paragraphs: 10,
+        endHook: '管家把一只长匣放到案上',
+      },
+      {
+        id: 'B4',
+        type: '决定',
+        goal: farewellGoal,
+        obstacle: '司马防坚持要他亲手拿走',
+        cost: farewellCost,
+        delta: { variable: '决心', from: '想留下', to: '决定离城' },
+        infoGain: '犀角弓的弓弭上刻着司马氏的族记',
+        paragraphs: 10,
+        endHook: '车队在城门外停下',
+      },
+    ],
+  }).plan;
+}
+
+function opponentBrief(extraItems = []) {
+  return validatePlanBrief({
+    items: [
+      {
+        kind: 'opponent',
+        text: '张杨征粮的使者堵在城门口',
+        keywords: ['张杨', '使者'],
+        source: '本章大纲',
+      },
+      ...extraItems,
+    ],
+  }).brief;
+}
+
+test('对手：内部状态被丢弃，具体主体与 none 都能进 brief', () => {
+  const out = validatePlanBrief({
+    items: [
+      { kind: 'opponent', text: '心软不忍逼问', keywords: ['心软'], source: '本章大纲' },
+      {
+        kind: 'opponent',
+        text: '张杨征粮的使者堵在城门口',
+        keywords: ['张杨', '使者'],
+        source: '本章大纲',
+      },
+      { kind: 'opponent', none: true, reason: '本章是内廷对话，没有外部势力出场', source: '本章大纲' },
+    ],
+  });
+
+  assert.strictEqual(out.ok, true);
+  assert.ok(
+    !out.brief.items.some((x) => x.kind === 'opponent' && x.text.includes('心软')),
+    '内部状态不能当对手'
+  );
+  assert.ok(out.brief.dropped.some((x) => x.includes('内部状态')));
+
+  const concrete = out.brief.items.find((x) => x.kind === 'opponent' && !x.none);
+  assert.strictEqual(concrete.id, 'OP1');
+  assert.deepStrictEqual(concrete.keywords, ['张杨', '使者']);
+
+  const noneItem = out.brief.items.find((x) => x.kind === 'opponent' && x.none);
+  assert.strictEqual(noneItem.reason, '本章是内廷对话，没有外部势力出场');
+
+  // 只有 none、没有具体对手时：这是「没有对手」的结论，不报缺。
+  const noneOnly = validatePlanBrief({
+    items: [{ kind: 'opponent', none: true, reason: '本章没有外部势力出场', source: '本章大纲' }],
+  }).brief;
+  const coverage = briefCoverage(noneOnly, planWithOpeningAndFarewell());
+  assert.strictEqual(coverage.opponent, 'none');
+  assert.ok(!coverage.missing.some((x) => x.slot === 'opening'));
+});
+
+test('对手缺失：brief 既没给对手也没说明为什么没有 → 开场硬校验报缺', () => {
+  const brief = validatePlanBrief({
+    items: [
+      { kind: 'loss', text: '交出犀角弓', keywords: ['犀角弓'], source: '设定' },
+    ],
+  }).brief;
+
+  const coverage = briefCoverage(brief, planWithOpeningAndFarewell());
+  assert.strictEqual(coverage.opponent, 'missing');
+  const missing = coverage.missing.find((x) => x.slot === 'opening');
+  assert.ok(missing, '没有对手也没有 none 说明时必须报缺');
+  assert.strictEqual(missing.id, 'OP0');
+  assert.match(missing.text, /未给出对手/);
+});
+
+test('开场对手：只在 B1 的 goal/cost 出现不算覆盖，必须写进 obstacle', () => {
+  const brief = opponentBrief();
+
+  const inGoal = planWithOpeningAndFarewell({ openingGoal: '张杨的使者来催粮，杨平想绕道出城' });
+  const missingCoverage = briefCoverage(brief, inGoal);
+  assert.strictEqual(missingCoverage.opponent, 'missing');
+  const missing = missingCoverage.missing.find((x) => x.slot === 'opening');
+  assert.ok(missing);
+  assert.strictEqual(missing.kind, 'opponent');
+  assert.match(missing.text, /张杨/);
+
+  const inObstacle = planWithOpeningAndFarewell({ openingObstacle: '张杨征粮的使者守住城门，不交粮就不放行' });
+  const coveredCoverage = briefCoverage(brief, inObstacle);
+  assert.strictEqual(coveredCoverage.opponent, 'covered');
+  assert.ok(coveredCoverage.covered.includes('OP1'));
+  assert.ok(!coveredCoverage.missing.some((x) => x.slot === 'opening'));
+});
+
+test('告别托付：托付人不在告别拍或没有交付动作都报缺', () => {
+  const brief = validatePlanBrief({
+    items: [
+      {
+        kind: 'mustPresent',
+        text: '司马防在告别时当面托付杨平',
+        keywords: ['司马防', '托付'],
+        source: '人物卡',
+        handover: true,
+      },
+    ],
+  }).brief;
+
+  // 告别拍只有抽象的「辞行」，没有人物也没有交付动作。
+  const thin = briefCoverage(brief, planWithOpeningAndFarewell({
+    farewellGoal: '独自辞行，没有见着人',
+    farewellCost: '把一个空匣带出城',
+  }));
+  assert.strictEqual(thin.handover, 'missing');
+  const missing = thin.missing.find((x) => x.slot === 'handover');
+  assert.ok(missing);
+  assert.strictEqual(missing.kind, 'mustPresent');
+  assert.match(missing.text, /司马防/);
+
+  // 告别拍里托付人在场，并当场交付一件物。
+  const full = briefCoverage(brief, planWithOpeningAndFarewell({
+    farewellGoal: '司马防在门口拦下他，把一只旧弓塞进他怀里',
+    farewellCost: '司马防说：保他平安',
+  }));
+  assert.strictEqual(full.handover, 'covered');
+  assert.ok(full.covered.includes('MP1'));
+  assert.ok(!full.missing.some((x) => x.slot === 'handover'));
+});
+
+test('重排指令：开场对手与告别托付带 slot 落点', () => {
+  const brief = validatePlanBrief({
+    items: [
+      { kind: 'opponent', text: '张杨征粮的使者堵在城门口', keywords: ['张杨', '使者'], source: '本章大纲' },
+      {
+        kind: 'mustPresent',
+        text: '司马防在告别时当面托付杨平',
+        keywords: ['司马防', '托付'],
+        source: '人物卡',
+        handover: true,
+      },
+    ],
+  }).brief;
+
+  const plan = planWithOpeningAndFarewell({
+    openingObstacle: '天色已晚，城门将闭',
+    farewellGoal: '独自辞行，没有见着人',
+    farewellCost: '把一个空匣带出城',
+  });
+  const coverage = briefCoverage(brief, plan);
+  const partitioned = partitionCoverage(plan, coverage);
+
+  const opening = partitioned.find((x) => x.slot === 'opening');
+  assert.deepStrictEqual(opening.targetBeats, ['B1']);
+  assert.match(opening.hint, /外部对手/);
+
+  const handover = partitioned.find((x) => x.slot === 'handover');
+  assert.deepStrictEqual(handover.targetBeats, ['B4']);
+  assert.match(handover.hint, /当场交付/);
+
+  const instruction = buildReplanInstruction(partitioned);
+  assert.match(instruction, /张杨/);
+  assert.match(instruction, /司马防/);
+});
+
+test('托付关系注册：人物卡「养父」确定性加一条 handover', () => {
+  const brief = validatePlanBrief({ items: [] }).brief;
+  const merged = mergeHandoverIntoBrief(brief, {
+    characters: [
+      {
+        name: '杨平',
+        role: '主角',
+        relations: JSON.stringify([{ characterName: '司马防', relation: '养父' }]),
+      },
+      { name: '司马防', role: '长辈', relations: '' },
+    ],
+    settings: [],
+  });
+
+  const item = merged.items.find((x) => x.kind === 'mustPresent' && x.handover === true);
+  assert.ok(item, '养父关系必须补一条托付项');
+  assert.strictEqual(item.source, '人物卡');
+  assert.strictEqual(item.inferred, false);
+  assert.deepStrictEqual(item.keywords, ['司马防']);
+  assert.match(item.text, /司马防/);
+  assert.match(item.text, /可引用的话或一件物/);
+});
+
+test('托付关系注册：设定里的「寄养」也能确定性加项', () => {
+  const brief = validatePlanBrief({ items: [] }).brief;
+  const merged = mergeHandoverIntoBrief(brief, {
+    characters: [
+      { name: '杨平', role: '主角', relations: '' },
+      { name: '司马防', role: '养父', relations: '' },
+    ],
+    settings: [
+      { name: '寄养', category: '背景', content: '杨平自幼寄养在司马家，司马防待他如子。' },
+    ],
+  });
+
+  const item = merged.items.find((x) => x.kind === 'mustPresent' && x.handover === true);
+  assert.ok(item);
+  assert.strictEqual(item.source, '设定');
+  assert.deepStrictEqual(item.keywords, ['司马防']);
+});
+
+test('托付关系注册：已有同人物的 mustPresent 只升级为 handover，不重复堆', () => {
+  const brief = validatePlanBrief({
+    items: [
+      {
+        kind: 'mustPresent',
+        text: '司马防到场',
+        keywords: ['司马防'],
+        source: '人物卡',
+      },
+    ],
+  }).brief;
+  const before = brief.items.length;
+  const merged = mergeHandoverIntoBrief(brief, {
+    characters: [
+      { name: '杨平', role: '主角', relations: JSON.stringify([{ characterName: '司马防', relation: '养父' }]) },
+      { name: '司马防', role: '长辈', relations: '' },
+    ],
+  });
+
+  assert.strictEqual(merged.items.length, before, '不重复新增条目');
+  const item = merged.items.find((x) => x.kind === 'mustPresent' && x.text === '司马防到场');
+  assert.strictEqual(item.handover, true);
+});
+
+test('托付关系注册：没有登记关系或 brief 为空时保持原样', () => {
+  const brief = validatePlanBrief({ items: [] }).brief;
+  const untouched = mergeHandoverIntoBrief(brief, {
+    characters: [{ name: '杨平', role: '主角', relations: '' }],
+    settings: [],
+  });
+  assert.deepStrictEqual(untouched.items, []);
+
+  assert.strictEqual(mergeHandoverIntoBrief(null, { characters: [], settings: [] }), null);
+});
+
+test('格式与写手块：对手和托付都有独立段落', () => {
+  const brief = validatePlanBrief({
+    items: [
+      { kind: 'opponent', text: '张杨征粮的使者堵在城门口', keywords: ['张杨', '使者'], source: '本章大纲' },
+      {
+        kind: 'mustPresent',
+        text: '司马防在告别时当面托付杨平',
+        keywords: ['司马防', '托付'],
+        source: '人物卡',
+        handover: true,
+      },
+    ],
+  }).brief;
+
+  const formatted = formatPlanBrief(brief);
+  assert.match(formatted, /外部对手（开场拍必须由它施加阻碍/);
+  assert.match(formatted, /托付（告别\/离场拍必须由托付人当场交付/);
+
+  const writerBlock = briefWriterBlock(brief);
+  assert.match(writerBlock, /开场的外部对手/);
+  assert.match(writerBlock, /托付（告别\/离场拍/);
+  // 托付项不再重复出现在「必须到场」行。
+  assert.strictEqual((writerBlock.match(/司马防在告别时当面托付杨平/g) || []).length, 1);
+});
+
+test('格式：opponent 标了 none 时写明原因，不硬编', () => {
+  const brief = validatePlanBrief({
+    items: [{ kind: 'opponent', none: true, reason: '本章没有外部势力出场', source: '本章大纲' }],
+  }).brief;
+  const formatted = formatPlanBrief(brief);
+  assert.match(formatted, /本章没有明确的外部对手（本章没有外部势力出场）/);
+  assert.ok(!formatted.includes('外部对手（开场拍必须由它施加阻碍）'));
 });

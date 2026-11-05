@@ -849,6 +849,13 @@ test('分场 brief 进入规划 system 与写手组指令，且不改变原有�
           keywords: ['主簿'],
           inferred: true,
         },
+        // 本章是查旧案，没有外部对手；按新契约必须显式说明，否则开场硬校验报缺。
+        {
+          kind: 'opponent',
+          none: true,
+          reason: '庙祝只是例行拦门，本章没有外部势力对抗',
+          source: '本章大纲',
+        },
       ],
     }),
     finishReason: 'stop',
