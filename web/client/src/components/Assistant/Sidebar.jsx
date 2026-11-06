@@ -555,10 +555,11 @@ export default function AssistantSidebar() {
   );
 
   /**
-   * 采纳一条或多条意见：整批只发一次 /chat。
+   * 采纳一条或多条意见。
    *
-   * 失败时整批都不标记，并给一句人话提示；成功后把条目标成已采纳，
-   * 作者不会因为同一条意见被重复发给写手而反复改稿。
+   * 已定位的意见走 /api/ai/inline（短上下文 + 显式选区，不会被聊天历史撑爆），
+   * 未定位的全章级建议仍走 /chat。失败时整批都不标记，并给一句人话提示；
+   * 成功后把条目标成已采纳，作者不会因为同一条意见被重复发给写手而反复改稿。
    *
    * source 用来把回执送回发起方：检查面板发起的那批要标记面板里的条目，
    * 卡片里点的不需要。
@@ -574,7 +575,40 @@ export default function AssistantSidebar() {
         return { ok: false, sent: false, keys: [] };
       }
 
-      const result = await sendAdoptionBatch(send, findings);
+      // inline 通道：已定位的意见直接改写对应块，不带对话历史、不走 agent loop。
+      const inlineFn = async (params) => {
+        const res = await fetch('/api/ai/inline', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(params),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '请求失败');
+        return data;
+      };
+
+      const result = await sendAdoptionBatch(send, findings, {
+        blocks,
+        workId: work?.id,
+        chapterId: chapter?.id,
+        inlineFn,
+      });
+
+      // 把 inline 改写结果落到正文块上。
+      // replace：整块替换；append：追加到块尾。
+      if (result.blockUpdates && result.blockUpdates.length) {
+        result.blockUpdates.forEach((update) => {
+          const block = blocks.find((b) => b.id === update.blockId);
+          if (!block) return;
+          if (update.action === 'replace') {
+            updateBlock(update.blockId, { content: update.content });
+          } else if (update.action === 'append') {
+            updateBlock(update.blockId, { content: block.content + update.content });
+          }
+        });
+      }
+
       if (result.ok) {
         setAdoptedFindingKeys((prev) => {
           const next = new Set(prev);
@@ -592,7 +626,7 @@ export default function AssistantSidebar() {
       );
       return result;
     },
-    [send, sending, toast]
+    [send, sending, toast, blocks, work, chapter, updateBlock]
   );
 
   // 左侧「检查」面板勾选后，同样交给这里统一发一次 /chat：

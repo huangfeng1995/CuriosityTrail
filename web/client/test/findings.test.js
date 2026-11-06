@@ -411,3 +411,152 @@ test('sendAdoptionBatch: 没有勾选任何一条时不发请求', async () => {
   assert.equal(result.sent, false);
   assert.deepEqual(result.keys, []);
 });
+
+// ---------------------------------------------------------------------------
+// inline 通道（已定位意见走 /api/ai/inline）
+// ---------------------------------------------------------------------------
+
+const blocksForInline = [
+  { id: 'b1', type: 'paragraph', content: '陈默把伞收了，雨水顺着伞骨往下淌。' },
+  { id: 'b2', type: 'paragraph', content: '林叙把灯芯挑亮，火光映在窗纸上。' },
+];
+
+/** 假 inline 调用器：记录每次调用，返回预设响应。 */
+function makeInlineFn(response) {
+  const calls = [];
+  const fn = async (params) => {
+    calls.push(params);
+    return response;
+  };
+  return { fn, calls };
+}
+
+test('sendAdoptionBatch: 已定位意见走 inline，不走 chat', async () => {
+  const sender = makeSender(true);
+  const inline = makeInlineFn({ action: 'replace', content: '改写后的正文' });
+  const list = [located('f1', 1, '陈默把伞收了', '动作太急。')];
+
+  const result = await sendAdoptionBatch(sender.fn, list, {
+    blocks: blocksForInline,
+    workId: 'w1',
+    chapterId: 'c1',
+    inlineFn: inline.fn,
+  });
+
+  // chat 不应被调用
+  assert.equal(sender.calls.length, 0);
+  // inline 应被调用一次
+  assert.equal(inline.calls.length, 1);
+  const call = inline.calls[0];
+  assert.equal(call.action, 'rewrite');
+  assert.equal(call.blockId, 'b1');
+  assert.equal(call.roleKey, 'writer');
+  assert.equal(call.workId, 'w1');
+  assert.equal(call.chapterId, 'c1');
+  assert.equal(call.selection, blocksForInline[0].content);
+  assert.match(call.instruction, /动作太急。/);
+  // 响应被收集进 blockUpdates
+  assert.equal(result.ok, true);
+  assert.equal(result.blockUpdates.length, 1);
+  assert.equal(result.blockUpdates[0].blockId, 'b1');
+  assert.equal(result.blockUpdates[0].content, '改写后的正文');
+  assert.equal(result.blockUpdates[0].action, 'replace');
+});
+
+test('sendAdoptionBatch: 同一块多条意见合并成一次 inline 调用', async () => {
+  const sender = makeSender(true);
+  const inline = makeInlineFn({ action: 'replace', content: '改写后' });
+  const a = located('f1', 1, '陈默把伞收了', '动作太急。');
+  const b = { ...located('f2', 2, '雨水顺着伞骨', '雨水描写重复。'), blockId: 'b1' };
+
+  await sendAdoptionBatch(sender.fn, [a, b], {
+    blocks: blocksForInline,
+    inlineFn: inline.fn,
+  });
+
+  assert.equal(inline.calls.length, 1, '同一块只调一次 inline');
+  assert.match(inline.calls[0].instruction, /动作太急。/);
+  assert.match(inline.calls[0].instruction, /雨水描写重复。/);
+});
+
+test('sendAdoptionBatch: 不同块的意见各自调一次 inline', async () => {
+  const sender = makeSender(true);
+  const inline = makeInlineFn({ action: 'replace', content: 'x' });
+  const a = located('f1', 1, '陈默把伞收了', '动作太急。');
+  const b = { ...located('f2', 2, '林叙把灯芯挑亮', '细节多余。'), blockId: 'b2' };
+
+  await sendAdoptionBatch(sender.fn, [a, b], {
+    blocks: blocksForInline,
+    inlineFn: inline.fn,
+  });
+
+  assert.equal(inline.calls.length, 2);
+  assert.equal(inline.calls[0].blockId, 'b1');
+  assert.equal(inline.calls[1].blockId, 'b2');
+});
+
+test('sendAdoptionBatch: 未定位意见仍走 chat，已定位走 inline', async () => {
+  const sender = makeSender(true);
+  const inline = makeInlineFn({ action: 'replace', content: 'x' });
+  const list = [
+    located('f1', 1, '陈默把伞收了', '动作太急。'),
+    unlocated('f2', 2, '整章节奏偏慢。'),
+  ];
+
+  const result = await sendAdoptionBatch(sender.fn, list, {
+    blocks: blocksForInline,
+    inlineFn: inline.fn,
+  });
+
+  assert.equal(inline.calls.length, 1);
+  assert.equal(sender.calls.length, 1);
+  assert.match(sender.calls[0].prompt, /整章节奏偏慢。/);
+  assert.match(sender.calls[0].prompt, /全章级/);
+  assert.equal(result.ok, true);
+  assert.equal(result.blockUpdates.length, 1);
+});
+
+test('sendAdoptionBatch: inline 返回 comment（无正文）时 ok=false', async () => {
+  const sender = makeSender(true);
+  const inline = makeInlineFn({ action: 'comment', content: '我觉得不用改', reason: '没问题' });
+  const list = [located('f1', 1, '陈默把伞收了', '动作太急。')];
+
+  const result = await sendAdoptionBatch(sender.fn, list, {
+    blocks: blocksForInline,
+    inlineFn: inline.fn,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.blockUpdates.length, 0);
+});
+
+test('sendAdoptionBatch: inline 抛错时 ok=false', async () => {
+  const sender = makeSender(true);
+  const inlineFn = async () => {
+    throw new Error('网络错误');
+  };
+  const list = [located('f1', 1, '陈默把伞收了', '动作太急。')];
+
+  const result = await sendAdoptionBatch(sender.fn, list, {
+    blocks: blocksForInline,
+    inlineFn,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.sent, false);
+});
+
+test('sendAdoptionBatch: append 动作也收集进 blockUpdates', async () => {
+  const sender = makeSender(true);
+  const inline = makeInlineFn({ action: 'append', content: '追加的内容' });
+  const list = [located('f1', 1, '陈默把伞收了', '动作太急。')];
+
+  const result = await sendAdoptionBatch(sender.fn, list, {
+    blocks: blocksForInline,
+    inlineFn: inline.fn,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.blockUpdates[0].action, 'append');
+  assert.equal(result.blockUpdates[0].content, '追加的内容');
+});

@@ -227,23 +227,111 @@ export function buildBatchAdoptPrompt(findings) {
 }
 
 /**
+ * 把同一块上的多条审稿意见合并成一条 inline 指令。
+ *
+ * 不合并意见文本本身（它们可能说的是两件事），只是按序编号，
+ * 让写手一次看完这块上的所有要求。
+ */
+function mergeBlockInstruction(findings) {
+  return findings
+    .map((f, i) => `${i + 1}. ${String(f.text || '').trim()}`)
+    .join('\n');
+}
+
+/**
  * 执行一次批量采纳。
  *
- * 抽出来是为了能单测「只发一次请求」：sendFn 由调用方传入，
- * 生产里就是侧栏的 send。返回 ok=false 时调用方不得标记已采纳。
+ * 已定位的意见（status==='located'，有 blockId）走 /api/ai/inline：
+ * 显式 selection + 短上下文（只带前后块），不会被聊天历史撑爆上下文窗口，
+ * 也不会被 agent loop 的技能清单干扰。未定位的全章级建议仍走 /chat。
  *
- * @param {(prompt: string, options: Object) => Promise<boolean>} sendFn
+ * 抽出来是为了能单测：sendFn / inlineFn 都由调用方传入。
+ * 返回 ok=false 时调用方不得标记已采纳。
+ *
+ * @param {(prompt: string, options: Object) => Promise<boolean>} sendFn  chat 通道
  * @param {Array} findings
- * @returns {Promise<{ok: boolean, sent: boolean, keys: Array<string>}>}
+ * @param {Object} [options]
+ * @param {Array}  [options.blocks]       当前章节的块（inline 通道需要）
+ * @param {string} [options.workId]
+ * @param {string} [options.chapterId]
+ * @param {(params: Object) => Promise<Object>} [options.inlineFn]  inline 通道调用函数
+ * @returns {Promise<{ok: boolean, sent: boolean, keys: Array<string>, blockUpdates: Array}>}
  */
-export async function sendAdoptionBatch(sendFn, findings) {
+export async function sendAdoptionBatch(sendFn, findings, options = {}) {
   const list = dedupeFindings(findings);
-  if (!list.length) return { ok: false, sent: false, keys: [] };
+  if (!list.length) return { ok: false, sent: false, keys: [], blockUpdates: [] };
 
-  const ok = await sendFn(buildBatchAdoptPrompt(list), { roleKey: 'writer' });
+  const { blocks = [], workId, chapterId, inlineFn } = options;
+  const allKeys = list.map((f) => f.key);
+
+  // 未提供 inlineFn 时退回旧路径（兼容旧调用方与单测）。
+  if (!inlineFn) {
+    const ok = await sendFn(buildBatchAdoptPrompt(list), { roleKey: 'writer' });
+    return {
+      ok: ok === true,
+      sent: true,
+      keys: allKeys,
+      blockUpdates: [],
+    };
+  }
+
+  const located = list.filter((f) => f.status === 'located' && f.blockId);
+  const unlocated = list.filter((f) => !(f.status === 'located' && f.blockId));
+
+  let ok = true;
+  let sent = false;
+  const blockUpdates = [];
+
+  // 已定位的意见：按块分组，每块调一次 inline（同一块多条意见合并指令）。
+  if (located.length) {
+    const byBlock = new Map();
+    for (const f of located) {
+      if (!byBlock.has(f.blockId)) byBlock.set(f.blockId, []);
+      byBlock.get(f.blockId).push(f);
+    }
+
+    for (const [blockId, blockFindings] of byBlock) {
+      const block = blocks.find((b) => b.id === blockId);
+      if (!block) {
+        ok = false;
+        continue;
+      }
+
+      try {
+        const res = await inlineFn({
+          action: 'rewrite',
+          selection: block.content,
+          blockId,
+          instruction: `按审稿意见修改：\n${mergeBlockInstruction(blockFindings)}`,
+          roleKey: 'writer',
+          workId,
+          chapterId,
+          blocks,
+        });
+
+        if (res && (res.action === 'replace' || res.action === 'append') && res.content) {
+          blockUpdates.push({ blockId, content: res.content, action: res.action });
+          sent = true;
+        } else {
+          ok = false;
+        }
+      } catch (e) {
+        ok = false;
+      }
+    }
+  }
+
+  // 未定位的全章级建议：仍走 /chat。
+  if (unlocated.length) {
+    const chatOk = await sendFn(buildBatchAdoptPrompt(unlocated), { roleKey: 'writer' });
+    if (chatOk !== true) ok = false;
+    sent = true;
+  }
+
   return {
-    ok: ok === true,
-    sent: true,
-    keys: list.map((f) => f.key),
+    ok,
+    sent,
+    keys: allKeys,
+    blockUpdates,
   };
 }
