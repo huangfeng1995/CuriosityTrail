@@ -350,6 +350,20 @@ export default function Workspace() {
         hidden={hideLeft}
       />
 
+      {/* 左栏展开条：左栏收起时露出来，贴在编辑区左缘。
+          放在左 Resizer 之后、中栏之前，收起后它正好占据左栏的位置，
+          不会跑到屏幕最右侧去。 */}
+      <button
+        type="button"
+        className="ct-col-toggle is-left"
+        data-hidden={!collapsed.left || focusMode ? 'true' : undefined}
+        onClick={toggleLeft}
+        title={'展开左栏（目录与资料） · ⌘/Ctrl+Shift+\\'}
+        aria-label="展开左栏"
+      >
+        ›
+      </button>
+
       <main className="ct-col-center">
         {work?.template === 'history_thriller' && (
           <div
@@ -400,19 +414,8 @@ export default function Workspace() {
         <AssistantSidebar />
       </aside>
 
-      {/* 展开条：栏收起时露出来。专注模式里藏掉——
-          它本来就是「这里能展开侧栏」的入口，专注模式不该有。 */}
-      <button
-        type="button"
-        className="ct-col-toggle is-left"
-        data-hidden={!collapsed.left || focusMode ? 'true' : undefined}
-        onClick={toggleLeft}
-        title={'展开左栏（目录与资料） · ⌘/Ctrl+Shift+\\'}
-        aria-label="展开左栏"
-      >
-        ›
-      </button>
-
+      {/* 右栏展开条：右栏收起时露出来，贴在编辑区右缘。
+          专注模式里藏掉——它本来就是「这里能展开侧栏」的入口，专注模式不该有。 */}
       <button
         type="button"
         className="ct-col-toggle is-right"

@@ -438,14 +438,17 @@ body {
   display: flex;
   overflow: hidden;
 
-  /* 正文列宽度上限：随视口在 960–1100px 之间走。
+  /* 正文列宽度上限：随视口在 960–1440px 之间走。
      三栏时中栏本来就窄，正文再卡一道，大屏上左右会空出一大片；
-     1100px 约 66 汉字/行，再宽回行容易跳行。 */
-  --ct-editor-width: clamp(960px, 76vw, 1100px);
+     1440px 约 84 汉字/行（1440−44 按钮沟 = 1396px 正文 ÷ 16.5px 字宽），
+     落在 80–90 字/行的舒适阅读区间，再宽回行容易跳行。 */
+  --ct-editor-width: clamp(960px, 80vw, 1440px);
 }
 
+/* 专注模式两侧栏都收掉，中栏拿满视口，上限再放宽一点。
+   1500px 约 88 汉字/行，仍在舒适区间内。 */
 .ct-workspace.is-focus {
-  --ct-editor-width: 1160px;
+  --ct-editor-width: clamp(1000px, 86vw, 1500px);
 }
 
 /* 三栏的显隐。
