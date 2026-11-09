@@ -647,8 +647,13 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
   return lines.join('\n');
 }
 
-/** 分组重写指令：只重写这一组，不整章重来。 */
-function buildGroupRewriteInstruction({
+/**
+ * 单拍重写指令：只把违规拍送回模型，其余拍由代码原样拼回。
+ *
+ * 整组重写会把同组的合格拍一起洗一遍——实测初稿 6,679 字，一次重写后只剩 4,128。
+ * 这里只点名违规拍；同一拍同时有形态与禁写问题时合并成一份说明，避免重写两遍。
+ */
+function buildBeatRewriteInstruction({
   plan,
   group,
   groups,
@@ -691,67 +696,71 @@ function buildGroupRewriteInstruction({
   const handoverBeat = brief && typeof brief.handoverBeat === 'string' ? brief.handoverBeat.trim() : '';
   const briefBlock = briefWriterBlock(brief);
   const revealLines = (mustReveal || []).map((fact) => `- ${fact}`);
-  const expandNote = (beat) => {
-    const shot = expand.get(beat.id);
-    if (!shot) return '';
-    const low = Math.round(shot.target * 0.85);
-    return (
-      ` 本拍篇幅不足：当前 ${shot.chars} 个汉字，目标 ${shot.target} 个汉字（不足 ${low} 视为未完成）；` +
-      '只补细节、环境、动作、对话与人物心理，不推进情节、不新增事件、不提前揭示。'
-    );
-  };
-  const problems = group.beats
-    .filter(
-      (b) =>
-        wanted.has(b.id) ||
-        weak.has(b.id) ||
-        dup.has(b.id) ||
-        withhold.has(b.id) ||
-        conflicts.has(b.id) ||
-        shape.has(b.id) ||
-        expand.has(b.id)
-    )
-    .map((b) => {
-      if (conflicts.has(b.id)) {
-        return (
-          `- ${b.id}：本拍数值与全章不变项冲突（${conflicts.get(b.id).join('；')}）；` +
+  const flagged = (beat) =>
+    wanted.has(beat.id) ||
+    weak.has(beat.id) ||
+    dup.has(beat.id) ||
+    withhold.has(beat.id) ||
+    conflicts.has(beat.id) ||
+    shape.has(beat.id) ||
+    expand.has(beat.id);
+  const beats = group.beats.filter(flagged);
+  const ids = beats.map((beat) => beat.id);
+  // 同一拍的所有问题合并成一行：形态 + 禁写 + 交付重复只发一次请求。
+  const problems = beats.map((b) => {
+    const clauses = [];
+    if (conflicts.has(b.id)) {
+      clauses.push(
+        `本拍数值与全章不变项冲突（${conflicts.get(b.id).join('；')}）；` +
           '同一事实只保留一个数，改成 brief 不变项里的值，删掉其余矛盾表述。'
-        ) + expandNote(b);
-      }
-      if (withhold.has(b.id)) {
-        return (
-          `- ${b.id}：本拍只写形制细节与人物反应，不写制度结论，不替读者解释；` +
-          '删掉所有关于私辟/传诏/符传/逾制/该不该的判断句。'
-        ) + expandNote(b);
-      }
-      if (dup.has(b.id)) {
-        return (
-          `- ${b.id}：本章交付只发生一次，已在第 ${handoverBeat || '指定'} 拍完成；` +
-          '本拍删掉完整托付/交割和托付话，只保留递、接、握住手这类预备动作。'
-        ) + expandNote(b);
-      }
-      return (
-        `- ${b.id}：必须写出目标「${b.goal}」、阻碍「${b.obstacle}」、代价「${b.cost}」，` +
-        `以及「${b.delta.variable}」从「${b.delta.from}」到「${b.delta.to}」的变化，` +
-        `收在「${b.endHook}」。` +
-        (weak.has(b.id) ? '写到了事件但没写出变化，这一遍要把变化写实。' : '') +
-        (shape.has(b.id)
-          ? ` 本拍段落形态不合规（${describeShapeViolations(shape.get(b.id))}）：` +
-            `按 ${b.paragraphs}±2 段落段，每段 80–140 字（含标点），合并碎片段、拆开超长段，` +
-            '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
-            ` 重写后本组段数必须落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段：` +
-            '拆超长段时不许把「太长」翻成「太少」，也不许为了凑段数把对白拆成独段。'
-          : '') +
-        expandNote(b)
       );
-    });
+    }
+    if (withhold.has(b.id)) {
+      clauses.push(
+        '本拍只写形制细节与人物反应，不写制度结论，不替读者解释；' +
+          '删掉所有关于私辟/传诏/符传/逾制/该不该的判断句。'
+      );
+    }
+    if (dup.has(b.id)) {
+      clauses.push(
+        `本章交付只发生一次，已在第 ${handoverBeat || '指定'} 拍完成；` +
+          '本拍删掉完整托付/交割和托付话，只保留递、接、握住手这类预备动作。'
+      );
+    }
+    if (wanted.has(b.id) || weak.has(b.id)) {
+      clauses.push(
+        `必须写出目标「${b.goal}」、阻碍「${b.obstacle}」、代价「${b.cost}」，` +
+          `以及「${b.delta.variable}」从「${b.delta.from}」到「${b.delta.to}」的变化，` +
+          `收在「${b.endHook}」。` +
+          (weak.has(b.id) ? '写到了事件但没写出变化，这一遍要把变化写实。' : '')
+      );
+    }
+    if (shape.has(b.id)) {
+      const planned = Number(b.paragraphs) || 3;
+      clauses.push(
+        `本拍段落形态不合规（${describeShapeViolations(shape.get(b.id))}）：` +
+          `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，每段 80–140 字（含标点），合并碎片段、拆开超长段，` +
+          '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
+          ` 重写后本拍段数必须落在 ${Math.max(1, planned - SHAPE_BEAT_TOLERANCE)}–${planned + SHAPE_BEAT_TOLERANCE} 段：` +
+          '拆超长段时不许把「太长」翻成「太少」，也不许为了凑段数把对白拆成独段。'
+      );
+    }
+    const shot = expand.get(b.id);
+    if (shot) {
+      clauses.push(
+        `当前 ${shot.chars} 个汉字 → 目标 ${shot.target} 个汉字；` +
+          '本次只补细节、环境、动作、对话与人物心理，不推进情节、不新增事件、不提前揭示。'
+      );
+    }
+    return `- ${b.id}：${clauses.join(' ')}`;
+  });
 
   const hasCoverageGap = wanted.size || weak.size || dup.size || withhold.size || conflicts.size || shape.size;
   return [
-    `## 重写第 ${group.index + 1}/${groups.length} 组（${group.beatIds.join('、')}）`,
+    `## 重写第 ${group.index + 1}/${groups.length} 组中的 ${ids.join('、')}（其他拍原样保留）`,
     hasCoverageGap
-      ? '覆盖自检发现这一组有节拍没落地。只重写这一组，其他组保持原样，不要整章重来。'
-      : '这一组节拍齐全，只是篇幅不足。只补本组指定拍的细节，其他组保持原样。',
+      ? '覆盖自检发现这些拍没有落地。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
+      : '这些拍节拍齐全，只是篇幅不足。只补指定拍的细节，其他拍与其他组保持原样。',
     `完整节拍表见 system 中的「本章节拍表」，全章共 ${plan.beats.length} 拍。`,
     '',
     expand.size ? '## 扩写（只补不推进）' : null,
@@ -766,7 +775,7 @@ function buildGroupRewriteInstruction({
       : null,
     expand.size ? '' : null,
     '## 必须补足',
-    problems.length ? problems.join('\n') : '把本组几拍写完整。',
+    problems.length ? problems.join('\n') : '把点名的拍写完整。',
     '',
     revealLines.length
       ? `## 必须交代的背景事实（每项至少一句，写进人物对话或叙述，不得一句话带过）\n${revealLines.join('\n')}`
@@ -791,6 +800,15 @@ function buildGroupRewriteInstruction({
       `本组段数必须落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段（双向约束：不能超，也不能为了拆段反而写少）。` +
       '扩写也不许用加空段、拆句、加标点凑字数；扩写后必须仍满足每段 80–140 字、本拍段数在计划区间 ±2。',
     '',
+    '## 每拍硬约束',
+    beats
+      .map(
+        (b) =>
+          `- ${b.id}：本拍 ${Number(b.paragraphs) || 0} 段（容差 ±${SHAPE_BEAT_TOLERANCE}），` +
+          '每段 80–140 字（含标点），每段至少 2 句。'
+      )
+      .join('\n'),
+    '',
     groupQuotaBlock(group.beats),
     '',
     PARAGRAPH_SHAPE_RULES,
@@ -801,7 +819,8 @@ function buildGroupRewriteInstruction({
     '',
     buildSelfCheck(group),
     '',
-    '输出 JSON：action 固定为 "append"，content 只放这一组重写后的正文。',
+    '输出 JSON：{"action":"rewrite","beats":[{"id":"B4","paragraphs":["第一段","第二段"]}]}。',
+    'beats 只放上面点名的拍，按拍号顺序；paragraphs 只放这一拍的正文，其余拍一个字都不要返回。',
   ].join('\n');
 }
 
@@ -1388,11 +1407,14 @@ function groupsForIds(groups, ids) {
   return groups.filter((g) => g.beatIds.some((id) => wanted.has(id)));
 }
 
+/** 重写后总字数低于重写前的这个比例，就记一次整体缩水（不允许静默）。 */
+const REWRITE_SHRINK_RATIO = 0.85;
+
 /**
- * 只重写缺拍/写得弱的组。
+ * 只重写缺拍/写得弱/违规的拍。
  *
- * 其他组的正文不动——整章重来会把这些已经合格的部分也洗一遍，
- * 而且调用次数会直接顶到上限。
+ * 其他拍与其他组按快照原样拼回——整组重写会把合格部分一起洗一遍，
+ * 实测一次能把全章从 6,679 字压到 4,128；调用次数也会直接顶到上限。
  */
 async function rewriteMissingGroups({
   plan,
@@ -1419,6 +1441,7 @@ async function rewriteMissingGroups({
   let rewroteGroups = 0;
   let boundaryTrimmed = 0;
   const failedGroups = [];
+  const beatDeltas = [];
 
   const weakIds = (coverage?.weak || []).map((w) => w.id);
   const dupIds = coverage?.handoverDuplicated || [];
@@ -1433,8 +1456,12 @@ async function rewriteMissingGroups({
     ...shapeIds,
     ...(expandShots || []).map((shot) => shot && shot.id).filter(Boolean),
   ];
+  const wanted = new Set(missingIds);
   const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
   const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
+  const chapterBefore = countWords(
+    composeChapterContent({ groups, existingBody, mergeScenes }).content
+  );
 
   for (const group of affected) {
     if (count >= maxCalls) {
@@ -1442,7 +1469,10 @@ async function rewriteMissingGroups({
       break;
     }
 
-    progress({ phase: 'rewrite', index: group.index, total: groups.length, beatIds: group.beatIds });
+    const beats = factsOnly ? group.beats : group.beats.filter((beat) => wanted.has(beat.id));
+    if (!beats.length) continue;
+
+    progress({ phase: 'rewrite', index: group.index, total: groups.length, beatIds: beats.map((b) => b.id) });
     const before = groups
       .filter((g) => g.index < group.index)
       .map((g) => g.content)
@@ -1451,7 +1481,18 @@ async function rewriteMissingGroups({
     const afterGroup = groups.find((g) => g.index === group.index + 1);
     const nextHead = afterGroup ? splitParagraphs(afterGroup.content).slice(0, 2).join('\n\n') : '';
 
-    const instruction = buildGroupRewriteInstruction({
+    // 替换前的拍区间与字数：缩水判定要精确到「哪一拍少了多少」。
+    const snapshot = group.content;
+    const paragraphsBefore = splitParagraphs(snapshot);
+    const rangesBefore = beatParagraphRanges(group.beats, paragraphsBefore.length);
+    const beforeChars = new Map(
+      group.beats.map((beat, index) => {
+        const [from, to] = rangesBefore[index] || [0, 0];
+        return [beat.id, countWords(paragraphsBefore.slice(from, to).join(''))];
+      })
+    );
+
+    const instruction = buildBeatRewriteInstruction({
       plan,
       group,
       groups,
@@ -1487,7 +1528,7 @@ async function rewriteMissingGroups({
       call: count,
       kind: 'rewrite',
       group: group.index,
-      beatIds: group.beatIds,
+      beatIds: beats.map((beat) => beat.id),
       durationMs,
       finishReason: out?.finishReason || '',
       chars: countWords(content),
@@ -1497,21 +1538,59 @@ async function rewriteMissingGroups({
     log(entry);
     if (out?.finishReason) finishReason = out.finishReason;
 
-    if (!content) {
+    const rows = expandedBeatsFrom(out, beats.map((beat) => ({ id: beat.id })));
+    if (!rows.length) {
       failedGroups.push(group.index);
       continue;
     }
 
-    const rewritten = group.isLast ? content : stripClosingTail(content);
-    const bounded = enforceGroupBoundary({ content: rewritten, group, groups });
-    if (bounded.boundaryTrimmed) boundaryTrimmed += 1;
-    group.content = bounded.content;
+    // 只清洗点名拍的正文；同组其他拍连一个字都不碰。
+    const cleaned = rows
+      .map((row) => {
+        const joined = row.paragraphs.join('\n\n');
+        const safe = group.isLast ? joined : stripClosingTail(joined);
+        const bounded = enforceGroupBoundary({ content: safe, group, groups });
+        if (bounded.boundaryTrimmed) boundaryTrimmed += 1;
+        return { id: row.id, paragraphs: splitParagraphs(bounded.content) };
+      })
+      .filter((row) => row.paragraphs.length);
+
+    group.content = snapshot;
+    if (!spliceExpandedBeats(group, cleaned)) {
+      failedGroups.push(group.index);
+      continue;
+    }
+    for (const row of cleaned) {
+      const beforeCharsOfBeat = beforeChars.get(row.id) || 0;
+      const afterCharsOfBeat = row.paragraphs.reduce(
+        (sum, paragraph) => sum + countWords(paragraph),
+        0
+      );
+      beatDeltas.push({
+        beatId: row.id,
+        group: group.index,
+        before: beforeCharsOfBeat,
+        after: afterCharsOfBeat,
+        delta: afterCharsOfBeat - beforeCharsOfBeat,
+      });
+    }
     rewroteGroups += 1;
   }
 
   const composed = composeChapterContent({ groups, existingBody, mergeScenes });
   const normalized = normalizeChapterShape(composed.content);
   const beforeNormalized = normalizeChapterShape(composed.contentBeforeMerge);
+  // 整体缩水超过 15%：把前后总字数与每一拍的差值带出去，交付时写进 beatCheck。
+  const shrink =
+    chapterBefore > 0 && normalized.chars < Math.round(chapterBefore * REWRITE_SHRINK_RATIO)
+      ? {
+          before: chapterBefore,
+          after: normalized.chars,
+          delta: normalized.chars - chapterBefore,
+          ratio: Math.round((normalized.chars / chapterBefore) * 1000) / 1000,
+          beats: beatDeltas.filter((row) => row.delta < 0).sort((a, b) => a.delta - b.delta),
+        }
+      : null;
   return {
     groups,
     content: normalized.content,
@@ -1524,6 +1603,8 @@ async function rewriteMissingGroups({
     rewroteGroups,
     failedGroups,
     boundaryTrimmed,
+    beatDeltas,
+    shrink,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
@@ -1532,6 +1613,7 @@ async function rewriteMissingGroups({
     usage: usageSum(calls),
   };
 }
+
 
 /** 扩写过的拍：交付时低于目标 95% 才记 underFilledShots（95%–100% 不打扰作者）。 */
 const SHOT_RECORD_RATIO = 0.95;
@@ -1824,7 +1906,7 @@ module.exports = {
   planSegments,
   buildSegmentInstruction,
   buildContinuationInstruction,
-  buildGroupRewriteInstruction,
+  buildBeatRewriteInstruction,
   stripClosingTail,
   hasClosingTone,
   appendFresh,

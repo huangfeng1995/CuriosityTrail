@@ -131,7 +131,7 @@ test('交付只写一次：组指令给具体拍号，重复拍在重写里被�
   assert.match(other, /本章交付只发生一次，已在第 B6 拍完成/);
 
   const dupGroup = groups.find((g) => g.beatIds.includes('B4'));
-  const rewrite = segmentWriter.buildGroupRewriteInstruction({
+  const rewrite = segmentWriter.buildBeatRewriteInstruction({
     plan,
     group: dupGroup,
     groups,
@@ -169,7 +169,7 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
     remainingParagraphs: 4,
     remainingChars: 400,
   });
-  const rewrite = segmentWriter.buildGroupRewriteInstruction({
+  const rewrite = segmentWriter.buildBeatRewriteInstruction({
     plan,
     group: groups[1],
     groups,
@@ -249,7 +249,7 @@ test('S2 篇幅配额：组指令带每拍目标汉字数与 85% 未完成线，
   });
   assert.match(continuation, /B3（identity）：目标 1500 个汉字/);
 
-  const rewrite = segmentWriter.buildGroupRewriteInstruction({
+  const rewrite = segmentWriter.buildBeatRewriteInstruction({
     plan,
     group,
     groups,
@@ -261,7 +261,7 @@ test('S2 篇幅配额：组指令带每拍目标汉字数与 85% 未完成线，
   assert.match(rewrite, /## 扩写（只补不推进）/);
   assert.match(rewrite, /B3：当前 597 个汉字 → 目标 1500 个汉字/);
   assert.match(rewrite, /只补细节、环境、动作、对话与人物心理，不推进情节、不新增事件、不提前揭示/);
-  assert.match(rewrite, /这一组节拍齐全，只是篇幅不足/);
+  assert.match(rewrite, /这些拍节拍齐全，只是篇幅不足/);
   assert.match(rewrite, /不许用加空段、拆句、加标点凑字数/);
   assert.match(rewrite, /扩写后必须仍满足每段 80–140 字、本拍段数在计划区间 ±2/);
 });
@@ -451,6 +451,106 @@ test('U1 两次都不合规：保留原稿并记 unconverged', async () => {
   assert.strictEqual(out.unconverged.length, 1);
   assert.strictEqual(out.unconverged[0].beatIds[0], 'B2');
   assert.ok(out.unconverged[0].problems.length > 0);
+});
+
+/** 两拍共用一组、每拍 5 段的完整计划与正文，重写测试用。 */
+function rewriteFixture() {
+  const plan = makePlan(2, 5);
+  const groups = segmentWriter.planSegments(plan);
+  groups[0].content = body('原', 10);
+  return { plan, groups };
+}
+
+/** 返回结构化拍 JSON 的假回复（模拟 segmentRun 解析后的 parsed）。 */
+function parsedRunner(replies) {
+  const seen = [];
+  let index = 0;
+  const run = async (meta) => {
+    seen.push(meta);
+    const payload = replies[index] ?? replies[replies.length - 1];
+    index += 1;
+    return { content: '', parsed: payload, finishReason: 'stop', usage: {} };
+  };
+  run.seen = seen;
+  return run;
+}
+
+function beatReply(id, paragraphs) {
+  return { action: 'rewrite', beats: [{ id, paragraphs }] };
+}
+
+test('V1 单拍违规只替换该拍，同组其他拍字节级不变', async () => {
+  const { plan, groups } = rewriteFixture();
+  const before = segmentWriter.splitParagraphs(groups[0].content);
+  const ranges = segmentWriter.beatParagraphRanges(groups[0].beats, before.length);
+  const b1Before = before.slice(ranges[0][0], ranges[0][1]);
+
+  const runner = parsedRunner([
+    beatReply('B2', Array.from({ length: 5 }, () => '改'.repeat(100))),
+  ]);
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: ['B2'], weak: [] },
+    runSegment: runner,
+    callCount: 0,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(runner.seen.length, 1, '只重写一组一次');
+  assert.match(runner.seen[0].instruction, /只重写这一组里的指定拍/);
+  const after = segmentWriter.splitParagraphs(out.groups[0].content);
+  assert.deepStrictEqual(
+    after.slice(0, b1Before.length),
+    b1Before,
+    'B1 的段落必须与重写前逐字相同'
+  );
+  assert.ok(
+    after.slice(b1Before.length).every((paragraph) => paragraph.startsWith('改')),
+    '只替换被点名的 B2'
+  );
+});
+
+test('V1 同拍同时有形态与禁写问题：合并成一次请求，不重写两遍', async () => {
+  const { plan, groups } = rewriteFixture();
+  const runner = parsedRunner([
+    beatReply('B2', Array.from({ length: 5 }, () => '改'.repeat(100))),
+  ]);
+
+  await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: [], weak: [] },
+    mustWithholdIds: ['B2'],
+    shapeViolations: [{ beatId: 'B2', kind: 'count', expected: 5, actual: 9, tolerance: 2 }],
+    runSegment: runner,
+    callCount: 0,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(runner.seen.length, 1, '同一拍的双重违规只能发一次请求');
+  const instruction = runner.seen[0].instruction;
+  assert.match(instruction, /B2：本拍只写形制细节/, '禁写要求必须带上');
+  assert.match(instruction, /B2：.*段落形态不合规/, '形态要求必须合并在同一行');
+});
+
+test('V1 重写后总字数少 15% 以上：记录缩水拍与差值', async () => {
+  const { plan, groups } = rewriteFixture();
+  const runner = parsedRunner([beatReply('B2', ['短'.repeat(10)])]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: ['B2'], weak: [] },
+    runSegment: runner,
+    callCount: 0,
+    maxCalls: 8,
+  });
+
+  assert.ok(out.shrink, '整体缩水超过 15% 必须显式记录');
+  assert.ok(out.shrink.after < out.shrink.before * 0.85, 'after 必须低于 before 的 85%');
+  assert.strictEqual(out.shrink.beats[0].beatId, 'B2', '要标出缩水拍');
+  assert.ok(out.shrink.beats[0].delta < 0, '要给出差值');
 });
 
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
@@ -926,7 +1026,7 @@ test('段落形态违规只重写违规拍所在组，指令给出段数与合�
   assert.match(rewriteRunner.seen[0].instruction, /B4：.*段落形态不合规/);
   assert.match(rewriteRunner.seen[0].instruction, /实际 9 段，目标是 3±2 段/);
   assert.match(rewriteRunner.seen[0].instruction, /每段 80–140 字（含标点）/);
-  assert.match(rewriteRunner.seen[0].instruction, /重写后本组段数必须落在 \d+–\d+ 段/);
+  assert.match(rewriteRunner.seen[0].instruction, /重写后本拍段数必须落在 \d+–\d+ 段/);
   assert.match(rewriteRunner.seen[0].instruction, /不许把「太长」翻成「太少」/);
   assert.strictEqual(rewritten.groups[0].content, beforeGroup, '违规拍之外的组不能被改写');
 });

@@ -1850,6 +1850,7 @@ router.post('/chat', async (req, res) => {
                 degraded: rewrite.degraded,
                 finishReason: rewrite.finishReason || '',
                 contentLength: rewrite.content.length,
+                shrink: rewrite.shrink || null,
                 usage: segmentWriter.usageSum(rewrite.calls),
               })
             );
@@ -1909,6 +1910,8 @@ router.post('/chat', async (req, res) => {
               beatCheck.shapeBeatIds = shapeCheck.beatIds;
               beatCheck.paragraphCount = shapeCheck.totalParagraphs;
               beatCheck.avgParagraphChars = shapeCheck.avgChars;
+              // 整体缩水不许静默：前后总字数与每拍差值随交付一起带出。
+              if (rewrite.shrink) beatCheck.rewriteShrink = rewrite.shrink;
             }
 
             console.log(
