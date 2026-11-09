@@ -1640,6 +1640,8 @@ function buildExpandInstruction({ group, groups, beats, shots, feedback = '' }) 
     '',
     '## 硬性段落约束',
     ...rows,
+    '- 每段至少两句（一句动作或对白，一句环境、器物或人物反应），合计不少于 90 字（含标点）；写不够就再补一层细节，不要停在 80 字以下。',
+    '示例（单段约 100 字）：“他伸手把门环按下去，指腹擦过一层薄冰，门里有人应了一声。廊下的风把灯芯压得低低的，光只照到门槛那一线。”',
     '- 禁止把两段合并成一段来凑字数，禁止把一句话拆成多段，禁止加空段或加标点凑字数。',
     '- 段与段之间用空行分隔；单段不超过 140 字，也不少于 80 字。',
     feedback ? `\n## 上一次的问题（必须改掉）\n${feedback}` : null,
@@ -1712,7 +1714,7 @@ function spliceExpandedBeats(group, expanded) {
  * 篇幅扩写：只对判定不足的拍发起，其他拍原样保留。
  *
  * 每组的第一次输出若不满足「段数 ±2、每段 80–140」，用同一拍再扩一次
- * （算扩写内部的收敛，不是整轮重试）；仍不满足则保留原稿并记录。
+ * （算扩写内部的收敛，不是整轮重试）；仍不满足则保留原稿并记 expandRejected。
  *
  * 替换会改变全章的拍区间：第一遍跑完必须用 measureShots 重算每拍字数，
  * 把新掉到 85% 以下的拍补进第二遍（同一轮只补一次，不无限循环）。
@@ -1737,6 +1739,7 @@ async function expandMissingBeats({
   let finishReason = 'stop';
   const expanded = [];
   const unconverged = [];
+  const expandRejected = [];
   const supplemented = [];
 
   let passShots = shots;
@@ -1751,6 +1754,8 @@ async function expandMissingBeats({
       const snapshot = group.content;
       let feedback = '';
       let accepted = false;
+      let lastProblems = [];
+      const attemptRecords = [];
 
       for (let attempt = 0; attempt < 2 && !accepted; attempt += 1) {
         if (count >= maxCalls) {
@@ -1786,6 +1791,13 @@ async function expandMissingBeats({
         if (out?.finishReason) finishReason = out.finishReason;
 
         const rows = expandedBeatsFrom(out, groupShots);
+        const lengths = {};
+        for (const beat of beats) {
+          const row = rows.find((item) => item.id === beat.id);
+          lengths[beat.id] = row ? row.paragraphs.map((paragraph) => countWords(paragraph)) : [];
+        }
+        attemptRecords.push(lengths);
+
         const problems = [];
         for (const beat of beats) {
           const row = rows.find((item) => item.id === beat.id);
@@ -1800,6 +1812,7 @@ async function expandMissingBeats({
 
         // 先按单拍约束判，避免把不合规段落写回正文。
         if (problems.length) {
+          lastProblems = problems;
           feedback = problems.join('\n');
           if (attempt === 1) {
             unconverged.push({ group: group.index, beatIds: beats.map((b) => b.id), problems });
@@ -1820,7 +1833,7 @@ async function expandMissingBeats({
             ['count', 'too_long', 'fragment', 'short_run'].includes(row.kind)
         );
         if (own.length) {
-          feedback = own
+          const detail = own
             .map((row) => {
               if (row.kind === 'count') {
                 return `${row.beatId}: 段数 ${row.actual}/${row.expected}（容差 ±${row.tolerance}）`;
@@ -1828,6 +1841,8 @@ async function expandMissingBeats({
               return `${row.beatId}: 第 ${row.index + 1} 段 ${row.chars} 字（80–140）`;
             })
             .join('\n');
+          lastProblems = [detail];
+          feedback = detail;
           group.content = snapshot;
           if (attempt === 1) {
             unconverged.push({ group: group.index, beatIds: [...beatIds], problems: [feedback] });
@@ -1839,7 +1854,20 @@ async function expandMissingBeats({
         expanded.push({ group: group.index, beatIds: [...beatIds], attempt: attempt + 1 });
       }
 
-      if (!accepted) group.content = snapshot;
+      if (!accepted) {
+        group.content = snapshot;
+        // 两次都被拒：逐拍记录两次实际段长，不再只留一句「未收敛」。
+        if (!degraded && attemptRecords.length === 2) {
+          for (const beat of beats) {
+            expandRejected.push({
+              group: group.index,
+              beatId: beat.id,
+              attempts: attemptRecords.map((record) => record[beat.id] || []),
+              problems: lastProblems.filter((problem) => problem.startsWith(`${beat.id}: `)),
+            });
+          }
+        }
+      }
     }
 
     if (degraded || pass === 1) break;
@@ -1872,6 +1900,7 @@ async function expandMissingBeats({
     expanded,
     supplement: supplemented,
     unconverged,
+    expandRejected,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,

@@ -627,6 +627,47 @@ test('V2 补完仍不足：不再循环，记 underFilledShots', async () => {
   );
 });
 
+test('V3 扩写指令写明每段至少两句、不少于 90 字，并给示例', () => {
+  const plan = expandablePlan();
+  const groups = [expandableGroup()];
+  const instruction = segmentWriter.buildExpandInstruction({
+    group: groups[0],
+    groups,
+    beats: groups[0].beats,
+    shots: [
+      { id: 'B1', chars: 300, target: 700 },
+      { id: 'B2', chars: 300, target: 700 },
+    ],
+  });
+
+  assert.match(instruction, /每段至少两句/);
+  assert.match(instruction, /不少于 90 字/);
+  assert.match(instruction, /示例（单段约 100 字）/);
+  assert.match(instruction, /每段 80–140 字（含标点）/);
+});
+
+test('V3 两次被拒：expandRejected 记下两次实际段长', async () => {
+  const plan = expandablePlan();
+  const groups = [expandableGroup()];
+  const runSegment = async () => ({
+    content: '',
+    parsed: { beats: [{ id: 'B2', paragraphs: ['短'.repeat(30), '短'.repeat(30)] }] },
+    finishReason: 'stop',
+  });
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [{ id: 'B2', chars: 300, target: 700 }],
+    runSegment,
+  });
+
+  assert.strictEqual(out.expandRejected.length, 1);
+  assert.strictEqual(out.expandRejected[0].beatId, 'B2');
+  assert.deepStrictEqual(out.expandRejected[0].attempts, [[30, 30], [30, 30]]);
+  assert.ok(out.expandRejected[0].problems.length > 0);
+});
+
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
 function fixedBody(count) {
   return Array.from({ length: count }, () => '字'.repeat(100)).join('\n\n');
