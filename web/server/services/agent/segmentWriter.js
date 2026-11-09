@@ -66,12 +66,13 @@ const MIN_TARGET_RATIO = 0.8;
  * 禁止连续短段、对白与动作合并、引号统一。
  */
 const PARAGRAPH_SHAPE_RULES = [
-  '## 全章形态（硬约束）',
+  '## 全章形态（分布校验）',
   '- 全章按长章体量写，总量大致在 4800–5600 字（含标点）；不要为凑数拉长段落，也不要写到 7000 字以上。',
   '- 每拍段数按节拍表给的段数为准，允许 ±2 段；不要把一拍压成提纲，也不要把一个动作拆成好几段。',
-  '- 每个自然段 80–140 字（含标点）：一段写一个小场景，段内 3–6 句，把动作、神态、对话、心理中的几样收在同一个节奏里。超过 140 字用压缩改写：删冗余修饰、拆句并在同段内安排节奏，不得整段拆成两段；不足 80 字补细节，或与相邻同场景段合并（合并只用于补短，不用于压长）。',
-  '- 长度优先于段数：为把超长段压进 140 字而多出一段，允许段数超出计划 ±2，只记数不判失败；反过来，不许为凑段数把段落拉长。',
-  '- 禁止连续 3 段不足 20 字；短促反应、单句对白最多连续 2 段，且前后必须有动作或叙述句承接。',
+  '- 段长按范文分布写，不逐段卡 80–140：<40 约 4%、40–79 约 29%、80–140 约 47%、141–200 约 9%、>200 约 11%（全部含标点）。单段不得超过 320 字。',
+  '- 40–79 字段不超过全章 39%；短段要有节奏作用，不能把一个小场景拆成几截。',
+  '- 连续 3 段都 <40 字才算「碎」；短促反应、单句对白最多连续 2 段，且前后必须有动作或叙述句承接。',
+  '- 段均向范文 112 字看齐（95–129）；不要为凑 80 字把短段拉长，也不要为压 320 字把长段砍成两段。',
   '- 对白必须与动作/叙述合并在同一段，不得连续独立成段；只有两句以内、且前后有动作句时才允许单独成段。',
   '- 引号统一用全角 “”，禁止使用「」；关键交流必须写成直接引语：用人物原话，带说话人的动作、神态或对方的反应，不要用「他说他问我是否……」这类转述代替关键对话。',
   '- 每次对话都要推动一次变化：关系、立场、决定或信息，至少变一项；不写只为填充的寒暄。',
@@ -100,24 +101,64 @@ const MERGE_MAX_PARAGRAPH_CHARS = 120;
 const DIRECT_QUOTE_RE = /[「」“”"]/;
 
 /**
- * 段落形态硬约束。口径定死在这里，不要别处另立一套：
- *   - 段长 = countWords，含标点；80–140 的上下限都按这个数判。
- *   - 拍字数目标 = targetChars，纯汉字（cjkCount），不含标点。
+ * 段落形态口径，数值全部来自 docs/superpowers/baseline/sample.md 实测，
+ * 不要手调，也不要别处另立一套：
+ *   - 段长 = countWords，含标点；拍字数目标 = targetChars，纯汉字（不含标点）。
+ *   - 交付判定用「分布校验」，不再逐段卡 80–140：范文 45 段里只有 21 段在
+ *     80–140，15 段 40–79、9 段超 140（最长 314）。逐段硬拦会把范文判 24/45
+ *     违规，模型只能收敛成均匀 112，反而丢掉短句/长段的节奏。
  *
- * 依据是范文基线：45 段 / 5047 字 / 段均 112.16，段均就是含标点算出来的。
- * 不能一边用含标点算段均、一边用纯汉字判上限，否则 142 字的段会被误放行。
+ * 范文实测（含标点）：45 段 / 5047 字 / 段均 112.16 / 中位 105 / 最短 23 / 最长 314。
+ * 五区间：<40 2 段 4.4%、40–79 13 段 28.9%、80–140 21 段 46.7%、
+ * 141–200 4 段 8.9%、>200 5 段 11.1%。
  */
-const SHAPE_PARAGRAPH_MIN = 80;
-const SHAPE_PARAGRAPH_MAX = 140;
-const SHAPE_FRAGMENT_MIN = 20;
+const SHAPE_PARAGRAPH_MIN = 80; // 仅作扩写内部目标，不再作为交付硬拦
+const SHAPE_PARAGRAPH_MAX = 140; // 同上
 const SHAPE_BEAT_TOLERANCE = 2;
 const SHAPE_SHORT_RUN = 3;
+
+/** 范文实测基线：分布校验的数值必须从这里取，不许手调。 */
+const SAMPLE_TOTAL_PARAGRAPHS = 45;
+const SAMPLE_MEAN_CHARS = 112.16;
+const SAMPLE_MEDIAN_CHARS = 105;
+const SAMPLE_MIN_CHARS = 23;
+const SAMPLE_MAX_CHARS = 314;
+const SAMPLE_BUCKET_COUNTS = Object.freeze({
+  under40: 2,
+  '40to79': 13,
+  '80to140': 21,
+  '141to200': 4,
+  over200: 5,
+});
+
+/** 五区间：<40、40–79、80–140、141–200、>200。 */
+const SHAPE_BUCKETS = Object.freeze([
+  { key: 'under40', label: '<40', max: 40 },
+  { key: '40to79', label: '40–79', max: 80 },
+  { key: '80to140', label: '80–140', max: 141 },
+  { key: '141to200', label: '141–200', max: 201 },
+  { key: 'over200', label: '>200', max: Infinity },
+]);
+
+/** 硬拦只有一条：单段 >320（范文最长 314，留 6 字余量）。 */
+const SHAPE_HARD_MAX = 320;
+/** 段均允许偏离范文 ±15%。 */
+const SHAPE_MEAN_TOLERANCE = 0.15;
+/** 40–79 段占比允许比范文高 10pp。 */
+const SHAPE_FRAGMENT_SLACK = 0.10;
+/** 连续 3 段都 <40 才算「碎」。 */
+const SHAPE_SHORT_FRAGMENT_MAX = 40;
+const SAMPLE_40_79_RATIO = SAMPLE_BUCKET_COUNTS['40to79'] / SAMPLE_TOTAL_PARAGRAPHS;
+const SHAPE_40_79_MAX_RATIO = SAMPLE_40_79_RATIO + SHAPE_FRAGMENT_SLACK;
+const SHAPE_MEAN_MIN = SAMPLE_MEAN_CHARS * (1 - SHAPE_MEAN_TOLERANCE);
+const SHAPE_MEAN_MAX = SAMPLE_MEAN_CHARS * (1 + SHAPE_MEAN_TOLERANCE);
 
 /** 交付与日志里显式写出的口径，避免「目标」和「段长」以后又被混用。 */
 const SHAPE_MEASURE = Object.freeze({
   paragraphLength: 'countWords（含标点）',
   shotTarget: '纯汉字（不含标点）',
-  summary: '目标=纯汉字、段长=含标点',
+  judge: '分布校验（非逐段 80–140）',
+  summary: '目标=纯汉字、段长=含标点、判定=分布',
 });
 
 /** 只用于检出，不做替换：作者交稿后由写手改，不静默改作者文字。 */
@@ -478,7 +519,7 @@ function groupQuotaBlock(beats) {
       const floor = low ? `不足 ${low} 字视为未完成` : '写到目标就停';
       return (
         `- ${beat.id}（${beat.function || beat.type}）：目标 ${target || '未定'} 个汉字（纯汉字不含标点），` +
-        `${range}，每段 80–140 字（含标点），${floor}。`
+        `${range}，每段按范文分布（多数 80–140，允许 40–79 与 141–320，单段不超 320），${floor}。`
       );
     });
   return rows.length ? `## 本组各拍目标（纯汉字，不含标点）\n${rows.join('\n')}` : '';
@@ -530,7 +571,7 @@ function buildSelfCheck(group) {
     '## 交稿前自检（对照这几条，不合格就改）',
     `- 本组总量大致在 ${softMin}–${softMax} 个汉字（纯汉字，不含标点）就够了，不要为凑字数拉长段落。`,
     '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它的代价。',
-    `- 段数按本组各拍计划（±2 段）；长度优先于段数：为压掉超长段而多出的段只记数、不判失败，但不许为凑段数拉长段落。每段 80–140 字（含标点），不要连续 3 段不足 20 字。`,
+    `- 段数按本组各拍计划（±2 段）；段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。`,
     '- 对白与动作/叙述合并在同一段，不得连续独立成段；引号统一用全角 “”，禁止使用「」。',
     '- 关键交流用带引号的直接引语，有说话人的动作或神态承接；不要转述成「他说他问我是否」。',
     '- 每次对话都要推动一次变化，不写只为填充的寒暄。',
@@ -584,7 +625,7 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     completed.length ? buildHandoffRules({ from: '上一组' }) : '',
     '',
     '## 本组篇幅（硬约束）',
-    `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。写到大致够用就停；全章大致 4800–5600 字（含标点）即可，7000 字以上会被截断。`,
+    `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点）：按各拍计划段数（±2 段）落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。写到大致够用就停；全章大致 4800–5600 字（含标点）即可，7000 字以上会被截断。`,
     '',
     groupQuotaBlock(group.beats),
     '',
@@ -657,7 +698,7 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `本组目标约 ${group.targetChars} 个汉字（纯汉字，不含标点），已经写了 ${written} 字，再补约 ${remainingChars} 个汉字就够；按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
+    `本组目标约 ${group.targetChars} 个汉字（纯汉字，不含标点），已经写了 ${written} 字，再补约 ${remainingChars} 个汉字就够；按各拍计划段数（±2 段）落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
     '',
     groupQuotaBlock(group.beats),
     '',
@@ -775,11 +816,10 @@ function buildBeatRewriteInstruction({
       const planned = Number(b.paragraphs) || 3;
       clauses.push(
         `本拍段落形态不合规（${describeShapeViolations(shape.get(b.id))}）：` +
-          `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，每段 80–140 字（含标点）；` +
-          '碎片段补细节（必要时与相邻同场景段合并），超长段用压缩改写（删冗余修饰、同段内拆句安排节奏），' +
-          '不得整段拆成两段；对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
-          ` 重写后本拍段数优先落在 ${Math.max(1, planned - SHAPE_BEAT_TOLERANCE)}–${planned + SHAPE_BEAT_TOLERANCE} 段；` +
-          '若为压掉超长段而多出一段，段数超出计划 ±2 只记数、不判失败，但不许为凑段数把段落拉长。'
+          `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320，单段不超 320）；` +
+          '40–79 的短段不要硬拉长，超过 320 的长段才压缩（删冗余修饰、同段内拆句安排节奏），不得整段拆成两段；' +
+          '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
+          ` 先保本拍纯汉字目标，再调形状；重写后本拍段数优先落在 ${Math.max(1, planned - SHAPE_BEAT_TOLERANCE)}–${planned + SHAPE_BEAT_TOLERANCE} 段。`
       );
     }
     const shot = expand.get(b.id);
@@ -833,16 +873,16 @@ function buildBeatRewriteInstruction({
     buildBoundaryBlock({ group, groups }),
     '',
     '## 篇幅（硬约束）',
-    `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。` +
-      `段数优先落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段；若为压掉超长段而多出一段，允许超出计划 ±2，只记数、不判失败——长度优先于段数，但不许为凑段数把段落拉长。` +
-      '扩写也不许用加空段、拆句、加标点凑字数；扩写后仍须每段 80–140 字（含标点），段数优先落在计划 ±2，为压掉超长段多出的段只记数、不判失败。',
+    `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点）：按各拍计划段数（±2 段）落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。` +
+      `段数优先落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段；若为压掉超长段而多出一段，允许超出计划 ±2，只记数、不判失败。` +
+      '重写先保本组纯汉字目标，再调形状；重写后本组不得低于原稿 85%。扩写也不许用加空段、拆句、加标点凑字数。',
     '',
     '## 每拍硬约束',
     beats
       .map(
         (b) =>
           `- ${b.id}：本拍 ${Number(b.paragraphs) || 0} 段（容差 ±${SHAPE_BEAT_TOLERANCE}），` +
-          '每段 80–140 字（含标点），每段至少 2 句。'
+          '段长按范文分布（多数 80–140，允许 40–79 与 141–320，单段不超 320），每段至少 2 句。'
       )
       .join('\n'),
     '',
@@ -1011,15 +1051,55 @@ function paragraphSample(paragraph, max = 24) {
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
+function shapeBucketOf(chars) {
+  for (const bucket of SHAPE_BUCKETS) {
+    if (chars < bucket.max) return bucket.key;
+  }
+  return 'over200';
+}
+
+function shapePercent(count, total) {
+  return total ? Math.round((count / total) * 1000) / 10 : 0;
+}
+
+function shapeMedian(sorted) {
+  const n = sorted.length;
+  if (!n) return 0;
+  return n % 2 ? sorted[(n - 1) / 2] : Math.round(((sorted[n / 2 - 1] + sorted[n / 2]) / 2) * 10) / 10;
+}
+
+/** 分布违规是章级指标，挂到贡献最大的那一拍，重写才有明确落点。 */
+function worstBeatFor(indices, ranges, beats) {
+  const counts = new Map();
+  for (const index of indices) {
+    const hit = ranges.findIndex(([from, to]) => index >= from && index < to);
+    const id = hit >= 0 ? beats[hit].id : beats[beats.length - 1].id;
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  let best = beats[0] ? beats[0].id : '';
+  let max = -1;
+  for (const beat of beats) {
+    const count = counts.get(beat.id) || 0;
+    if (count > max) {
+      max = count;
+      best = beat.id;
+    }
+  }
+  return best;
+}
+
 /**
  * 写手执行层的段落形态自检。
  *
- * 只判可机械验证的四件事，不靠模型打分：
- *   1. 每拍实际段数与计划段数相差超过 2；
- *   2. 单段 20–79 字（碎片段）或超过 140 字（超长段）；
- *   3. 连续 3 段不足 20 字；
- *   4. 对白连续独立成段（两句以内且前后有动作句的例外）、引号使用「」。
+ * 判定改成分布校验，数值全部来自范文实测（见文件头 SHAPE_* 常量）：
+ *   1. 硬拦只有一条：单段 >320 字；
+ *   2. 40–79 段占比 ≤ 范文 28.9% + 10pp（38.9%）；
+ *   3. 连续 3 段都 <40 才判「碎」；
+ *   4. 段均落在范文 112.16 ±15%（95.3–129.0）；
+ *   5. 每拍段数在计划 ±2；
+ *   6. 对白连续独立成段、引号使用「」（保留原有质量规则）。
  *
+ * 不再逐段卡 80–140：范文自己就有一半段落在这个区间外。
  * 返回的 beatId 直接用于分组重写；没有节拍表时不做判定。
  */
 function checkParagraphShape(plan, body) {
@@ -1033,6 +1113,9 @@ function checkParagraphShape(plan, body) {
       beatIds: [],
       violations: [],
       summary: summarizeShapeViolations([]),
+      buckets: {},
+      stats: null,
+      distribution: null,
     };
   }
 
@@ -1043,6 +1126,25 @@ function checkParagraphShape(plan, body) {
     return hit >= 0 ? beats[hit].id : beats[beats.length - 1].id;
   };
   const violations = [];
+
+  // 0. 五区间分布与基础统计：全部按含标点口径。
+  const buckets = {};
+  for (const bucket of SHAPE_BUCKETS) {
+    buckets[bucket.key] = { label: bucket.label, count: 0, ratio: 0 };
+  }
+  for (const chars of lengths) buckets[shapeBucketOf(chars)].count += 1;
+  for (const key of Object.keys(buckets)) {
+    buckets[key].ratio = shapePercent(buckets[key].count, lengths.length);
+  }
+  const sorted = [...lengths].sort((a, b) => a - b);
+  const mean = Math.round((lengths.reduce((sum, chars) => sum + chars, 0) / lengths.length) * 100) / 100;
+  const stats = {
+    min: sorted[0],
+    max: sorted[sorted.length - 1],
+    median: shapeMedian(sorted),
+    mean,
+    meanRange: [Math.round(SHAPE_MEAN_MIN * 10) / 10, Math.round(SHAPE_MEAN_MAX * 10) / 10],
+  };
 
   // 1. 每拍段数 N±2
   beats.forEach((beat, i) => {
@@ -1060,28 +1162,35 @@ function checkParagraphShape(plan, body) {
     }
   });
 
-  // 2. 单段长度：20–79 字算碎片段，>140 字算超长段；<20 字交给第 3 条
+  // 2. 硬拦只有一条：单段 >320。
   lengths.forEach((chars, index) => {
-    if (chars >= SHAPE_FRAGMENT_MIN && chars < SHAPE_PARAGRAPH_MIN) {
-      violations.push({
-        beatId: beatIdAt(index),
-        kind: 'fragment',
-        index,
-        chars,
-        sample: paragraphSample(paragraphs[index]),
-      });
-    } else if (chars > SHAPE_PARAGRAPH_MAX) {
-      violations.push({
-        beatId: beatIdAt(index),
-        kind: 'too_long',
-        index,
-        chars,
-        sample: paragraphSample(paragraphs[index]),
-      });
-    }
+    if (chars <= SHAPE_HARD_MAX) return;
+    violations.push({
+      beatId: beatIdAt(index),
+      kind: 'too_long',
+      index,
+      chars,
+      limit: SHAPE_HARD_MAX,
+      sample: paragraphSample(paragraphs[index]),
+    });
   });
 
-  // 3. 连续 3 段不足 20 字
+  // 3. 40–79 段占比不得超过范文 28.9% + 10pp。
+  const midShortIndices = lengths
+    .map((chars, index) => (chars >= 40 && chars < 80 ? index : -1))
+    .filter((index) => index >= 0);
+  if (buckets['40to79'].ratio > Math.round(SHAPE_40_79_MAX_RATIO * 1000) / 10) {
+    violations.push({
+      beatId: worstBeatFor(midShortIndices, ranges, beats),
+      kind: 'fragment_ratio',
+      ratio: buckets['40to79'].ratio,
+      limit: Math.round(SHAPE_40_79_MAX_RATIO * 1000) / 10,
+      count: buckets['40to79'].count,
+      total: lengths.length,
+    });
+  }
+
+  // 4. 连续 3 段都 <40 才判「碎」。
   let shortStart = 0;
   let shortRun = 0;
   const flushShortRun = () => {
@@ -1100,13 +1209,31 @@ function checkParagraphShape(plan, body) {
     }
   };
   for (let i = 0; i <= lengths.length; i += 1) {
-    if (i < lengths.length && lengths[i] < SHAPE_FRAGMENT_MIN) {
+    if (i < lengths.length && lengths[i] < SHAPE_SHORT_FRAGMENT_MAX) {
       if (!shortRun) shortStart = i;
       shortRun += 1;
       continue;
     }
     flushShortRun();
     shortRun = 0;
+  }
+
+  // 5. 段均偏离范文 ±15%。
+  if (mean < SHAPE_MEAN_MIN || mean > SHAPE_MEAN_MAX) {
+    const side = mean < SHAPE_MEAN_MIN ? 'low' : 'high';
+    const indices = lengths
+      .map((chars, index) => {
+        if (side === 'low' ? chars < 80 : chars > 140) return index;
+        return -1;
+      })
+      .filter((index) => index >= 0);
+    violations.push({
+      beatId: worstBeatFor(indices, ranges, beats),
+      kind: 'avg',
+      mean,
+      range: stats.meanRange,
+      side,
+    });
   }
 
   // 4. 对白连续独立成段
@@ -1172,15 +1299,27 @@ function checkParagraphShape(plan, body) {
     beatIds: [...new Set(violations.map((row) => row.beatId))],
     violations,
     summary: summarizeShapeViolations(violations),
+    buckets,
+    stats,
+    distribution: {
+      hardMax: SHAPE_HARD_MAX,
+      fragmentRatio: buckets['40to79'].ratio,
+      fragmentLimit: Math.round(SHAPE_40_79_MAX_RATIO * 1000) / 10,
+      mean,
+      meanRange: stats.meanRange,
+      countWithinPlan: !violations.some((row) => row.kind === 'count'),
+      passed: violations.length === 0,
+    },
   };
 }
 
-/** 违规按类型计数：先分清 42 条里各类占多少，再谈放宽还是改判定。 */
+/** 违规按类型计数：分布校验下只保留这七类。 */
 const SHAPE_KINDS = [
   'count',
-  'fragment',
   'too_long',
+  'fragment_ratio',
   'short_run',
+  'avg',
   'dialogue_stack',
   'corner_quote',
 ];
@@ -1198,37 +1337,38 @@ function summarizeShapeViolations(violations) {
 }
 
 /**
- * 交付判定：长度优先于段数。
+ * 交付判定：分布校验。
  *
- * 规则（与提示词、重写指令、测试名保持同一口径）：
- *   - 段长按 countWords（含标点）判 80–140，超 140 一律算失败，必须压缩；
- *   - 段数超出计划 ±2，只要没有超长段，只记数、不判失败——
- *     这是「为把 166 字压进 140 而多出一段」的合法代价；
- *   - 反过来，为凑段数把段落拉长，仍按超长段判失败。
+ * 与 checkParagraphShape 同一口径，不再有「逐段 80–140」的土办法：
+ *   - hardBlocked：单段 >320；
+ *   - distributionOk：40–79 占比、段均、每拍段数、连续短段都在范文范围内；
+ *   - styleOk：对白堆叠、直角引号；
+ *   - passed：以上全部通过。
  *
  * @param {Object} shape checkParagraphShape 的返回值
- * @returns {{lengthOk:boolean,countWithinPlan:boolean,countTolerated:boolean,
- *            passed:boolean,blocking:Array,summary:Object}}
  */
 function evaluateShapeDelivery(shape) {
   const summary = shape && shape.summary
     ? shape.summary
     : summarizeShapeViolations(shape && shape.violations);
-  const lengthOk = (summary.too_long || 0) === 0;
-  const countWithinPlan = (summary.count || 0) === 0;
-  const countTolerated = !countWithinPlan && lengthOk;
-  // 段数违规只有在「长度也没守住」时才算失败；其余类型（碎片段、连续短段、
-  // 对白堆叠、直角引号）照常拦。
-  const blocking = (shape && Array.isArray(shape.violations) ? shape.violations : []).filter(
-    (row) => row && row.kind && (row.kind !== 'count' || !lengthOk)
+  const blocking = shape && Array.isArray(shape.violations) ? shape.violations : [];
+  const hardBlocked = blocking.some((row) => row.kind === 'too_long');
+  const distributionOk = !blocking.some((row) =>
+    ['count', 'fragment_ratio', 'short_run', 'avg'].includes(row.kind)
+  );
+  const styleOk = !blocking.some((row) =>
+    ['dialogue_stack', 'corner_quote'].includes(row.kind)
   );
   return {
-    lengthOk,
-    countWithinPlan,
-    countTolerated,
-    passed: lengthOk && blocking.length === 0,
+    hardBlocked,
+    distributionOk,
+    styleOk,
+    passed: shape && shape.applicable && blocking.length === 0,
     blocking,
     summary,
+    buckets: (shape && shape.buckets) || {},
+    stats: (shape && shape.stats) || null,
+    distribution: (shape && shape.distribution) || null,
   };
 }
 
@@ -1240,12 +1380,14 @@ function describeShapeViolations(rows) {
   const count = list.find((row) => row.kind === 'count');
   const parts = [];
   if (count) parts.push(`实际 ${count.actual} 段，目标是 ${count.expected}±${count.tolerance} 段`);
-  const fragments = list.filter((row) => row.kind === 'fragment').length;
-  if (fragments) parts.push(`有 ${fragments} 段不足 80 字`);
+  const ratio = list.find((row) => row.kind === 'fragment_ratio');
+  if (ratio) parts.push(`40–79 字段占 ${ratio.ratio}%（上限 ${ratio.limit}%）`);
+  const avg = list.find((row) => row.kind === 'avg');
+  if (avg) parts.push(`段均 ${avg.mean}，范文区间 ${avg.range[0]}–${avg.range[1]}`);
   const tooLong = list.filter((row) => row.kind === 'too_long').length;
-  if (tooLong) parts.push(`有 ${tooLong} 段超过 140 字`);
+  if (tooLong) parts.push(`有 ${tooLong} 段超过 320 字`);
   const shortRun = list.find((row) => row.kind === 'short_run');
-  if (shortRun) parts.push(`有连续 ${shortRun.run} 段不足 20 字`);
+  if (shortRun) parts.push(`有连续 ${shortRun.run} 段不足 40 字`);
   const talks = list.filter((row) => row.kind === 'dialogue_stack').length;
   if (talks) parts.push('对白连续独立成段');
   const quotes = list.filter((row) => row.kind === 'corner_quote').length;
@@ -1558,6 +1700,8 @@ async function rewriteMissingGroups({
   let boundaryTrimmed = 0;
   const failedGroups = [];
   const beatDeltas = [];
+  // 按组记账：重写后本组低于原稿 85% 必须留痕，不能只靠全章缩水兜底。
+  const groupDeltas = [];
 
   const weakIds = (coverage?.weak || []).map((w) => w.id);
   const dupIds = coverage?.handoverDuplicated || [];
@@ -1702,6 +1846,21 @@ async function rewriteMissingGroups({
         delta: afterCharsOfBeat - beforeCharsOfBeat,
       });
     }
+    // 按组留痕：先保纯汉字目标，再调形状；本组仍低于原稿 85% 就记名。
+    const groupBeforeChars = countWords(snapshot);
+    const groupAfterChars = countWords(group.content);
+    const groupRatio = groupBeforeChars
+      ? Math.round((groupAfterChars / groupBeforeChars) * 1000) / 1000
+      : 1;
+    groupDeltas.push({
+      group: group.index,
+      beatIds: beats.map((beat) => beat.id),
+      before: groupBeforeChars,
+      after: groupAfterChars,
+      delta: groupAfterChars - groupBeforeChars,
+      ratio: groupRatio,
+      shrunk: groupBeforeChars > 0 && groupRatio < REWRITE_SHRINK_RATIO,
+    });
     rewroteGroups += 1;
   }
 
@@ -1734,6 +1893,8 @@ async function rewriteMissingGroups({
     failedGroups,
     boundaryTrimmed,
     beatDeltas,
+    groupDeltas,
+    shrunkGroups: groupDeltas.filter((row) => row.shrunk),
     shrink,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
@@ -1800,6 +1961,26 @@ function expandedBeatsFrom(out, shots) {
     return [{ id: shots[0].id, paragraphs: splitParagraphs(String((out && out.content) || '')) }];
   }
   return [];
+}
+
+/** 扩写段落只差 1–4 字到 80 时，就地补一句，不整次回滚。 */
+const MICRO_PATCH_MAX_SHORTFALL = 4;
+
+function microPatchNearMiss(paragraphs) {
+  const patches = [];
+  paragraphs.forEach((paragraph, index) => {
+    const before = countWords(paragraph);
+    const shortfall = SHAPE_PARAGRAPH_MIN - before;
+    if (shortfall < 1 || shortfall > MICRO_PATCH_MAX_SHORTFALL) return;
+    const sentence = paragraph.includes('雪')
+      ? '雪还在下。'
+      : /[”"]\s*$/.test(paragraph)
+        ? '他没有再问。'
+        : '屋里静了一瞬。';
+    paragraphs[index] = `${paragraph}${sentence}`;
+    patches.push({ index, before, after: countWords(paragraphs[index]), patch: sentence });
+  });
+  return patches;
 }
 
 /** 单拍扩写结果是否满足段数与段长约束。 */
@@ -1873,6 +2054,7 @@ async function expandMissingBeats({
   const unconverged = [];
   const expandRejected = [];
   const supplemented = [];
+  const microPatched = [];
 
   let passShots = shots;
   const acceptedBeatIds = new Set();
@@ -1929,6 +2111,16 @@ async function expandMissingBeats({
 
       const rows = expandedBeatsFrom(out, groupShots);
 
+      // Y3：只差 1–4 字到 80 的段就地补一句，再判；补过的不再算拒绝。
+      const patches = [];
+      for (const row of rows) {
+        for (const patch of microPatchNearMiss(row.paragraphs)) {
+          patches.push({ beatId: row.id, ...patch });
+          microPatched.push({ group: group.index, beatId: row.id, call: count, ...patch });
+        }
+      }
+      if (patches.length) entry.microPatched = patches;
+
       const problems = [];
       for (const beat of beats) {
         const row = rows.find((item) => item.id === beat.id);
@@ -1960,7 +2152,7 @@ async function expandMissingBeats({
         const own = shape.violations.filter(
           (row) =>
             beatIds.has(row.beatId) &&
-            ['count', 'too_long', 'fragment', 'short_run'].includes(row.kind)
+            ['count', 'too_long', 'fragment_ratio', 'short_run'].includes(row.kind)
         );
         if (own.length) {
           const detail = own
@@ -1968,7 +2160,13 @@ async function expandMissingBeats({
               if (row.kind === 'count') {
                 return `${row.beatId}: 段数 ${row.actual}/${row.expected}（容差 ±${row.tolerance}）`;
               }
-              return `${row.beatId}: 第 ${row.index + 1} 段 ${row.chars} 字（80–140）`;
+              if (row.kind === 'too_long') {
+                return `${row.beatId}: 第 ${row.index + 1} 段 ${row.chars} 字超过 ${SHAPE_HARD_MAX}`;
+              }
+              if (row.kind === 'fragment_ratio') {
+                return `${row.beatId}: 40–79 字段 ${row.count}/${row.total}（上限 ${row.limit}%）`;
+              }
+              return `${row.beatId}: 连续 ${row.run} 段不足 ${SHAPE_SHORT_FRAGMENT_MAX} 字`;
             })
             .join('\n');
           lastProblems = [detail];
@@ -2051,6 +2249,7 @@ async function expandMissingBeats({
     supplement: supplemented,
     unconverged,
     expandRejected,
+    microPatched,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
@@ -2130,8 +2329,22 @@ module.exports = {
   PARAGRAPH_SHAPE_RULES,
   SHAPE_PARAGRAPH_MIN,
   SHAPE_PARAGRAPH_MAX,
-  SHAPE_FRAGMENT_MIN,
   SHAPE_BEAT_TOLERANCE,
+  SHAPE_SHORT_RUN,
+  SHAPE_SHORT_FRAGMENT_MAX,
+  SHAPE_BUCKETS,
+  SHAPE_HARD_MAX,
+  SHAPE_40_79_MAX_RATIO,
+  SHAPE_MEAN_MIN,
+  SHAPE_MEAN_MAX,
+  SAMPLE_TOTAL_PARAGRAPHS,
+  SAMPLE_MEAN_CHARS,
+  SAMPLE_MEDIAN_CHARS,
+  SAMPLE_MIN_CHARS,
+  SAMPLE_MAX_CHARS,
+  SAMPLE_BUCKET_COUNTS,
+  MICRO_PATCH_MAX_SHORTFALL,
+  microPatchNearMiss,
   SHAPE_MEASURE,
   SHAPE_KINDS,
   CLOSING_RE,

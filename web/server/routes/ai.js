@@ -1703,11 +1703,12 @@ router.post('/chat', async (req, res) => {
         beatCheck.wordShareMissing = wordShares.shareMissing || [];
       }
     }
-    // 段落形态自检：段数 N±2、单段 20–79 / >140 字、连续 3 段不足 20 字、
-    // 对白连续独立成段、引号用「」。违规只重写违规拍所在的组，不整章重写。
+    // 段落形态自检：分布校验（数值来自范文实测）。硬拦只有单段 >320；
+    // 40–79 段占比超范文 +10pp、连续 3 段 <40、段均偏离 ±15%、每拍段数 ±2
+    // 都算分布违规。违规只重写违规拍所在的组，不整章重写。
     let shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
-    // 长度优先于段数：段数超出计划 ±2、但每段都在 80–140（含标点）时，
-    // 只记录、不触发重写；超长段仍然必须拦。口径见 SHAPE_MEASURE。
+    // 不再逐段卡 80–140：范文自己就有 24/45 段在这个区间外。
+    // 判定口径见 SHAPE_MEASURE。
     const shapeDelivery = segmentWriter.evaluateShapeDelivery(shapeCheck);
     const shapeIds = [
       ...new Set(shapeDelivery.blocking.map((row) => row.beatId).filter(Boolean)),
@@ -1880,6 +1881,7 @@ router.post('/chat', async (req, res) => {
                 finishReason: rewrite.finishReason || '',
                 contentLength: rewrite.content.length,
                 shrink: rewrite.shrink || null,
+                shrunkGroups: rewrite.shrunkGroups || [],
                 usage: segmentWriter.usageSum(rewrite.calls),
               })
             );
@@ -1941,6 +1943,9 @@ router.post('/chat', async (req, res) => {
               beatCheck.avgParagraphChars = shapeCheck.avgChars;
               // 整体缩水不许静默：前后总字数与每拍差值随交付一起带出。
               if (rewrite.shrink) beatCheck.rewriteShrink = rewrite.shrink;
+              if ((rewrite.shrunkGroups || []).length) {
+                beatCheck.rewriteShrunkGroups = rewrite.shrunkGroups;
+              }
             }
 
             console.log(
@@ -2257,6 +2262,7 @@ router.post('/chat', async (req, res) => {
                 supplement: expandedBody.supplement,
                 unconverged: expandedBody.unconverged,
                 expandRejected: expandedBody.expandRejected,
+                microPatched: expandedBody.microPatched || [],
                 contentLength: payload.content.length,
                 degraded: expandedBody.degraded || '',
                 finishReason: expandedBody.finishReason || '',
@@ -2367,15 +2373,15 @@ router.post('/chat', async (req, res) => {
       beatCheck.shapeDelivery = finalShapeDelivery;
       beatCheck.shapeMeasure = segmentWriter.SHAPE_MEASURE;
     }
-    // 徽标只报仍然拦下的违规；段数因压缩而略超、长度全合规的，记在
-    // beatCheck.shapeDelivery.countTolerated 里，不打扰作者。
+    // 徽标只报仍然拦下的违规；段数因压缩而略超、分布仍合规的，记在
+    // beatCheck.shapeDelivery.distribution 里，不打扰作者。
     const shapeBeatIds = [
       ...new Set(finalShapeDelivery.blocking.map((row) => row.beatId).filter(Boolean)),
     ];
     const shapeBadge = shapeCheck.applicable && finalShapeDelivery.blocking.length
       ? `【段落自检：第${shapeBeatIds
           .map((id) => String(id).replace(/^B/i, ''))
-          .join('、')}拍段落形态不合规（${finalShapeDelivery.blocking.length} 条；目标=纯汉字、段长=含标点）】`
+          .join('、')}拍段落分布不合规（${finalShapeDelivery.blocking.length} 条；目标=纯汉字、段长=含标点）】`
       : '';
     if (shapeCheck.applicable) {
       console.log(
@@ -2387,9 +2393,13 @@ router.post('/chat', async (req, res) => {
           avgChars: shapeCheck.avgChars,
           summary: shapeCheck.summary,
           measure: segmentWriter.SHAPE_MEASURE,
-          lengthOk: finalShapeDelivery.lengthOk,
-          countWithinPlan: finalShapeDelivery.countWithinPlan,
-          countTolerated: finalShapeDelivery.countTolerated,
+          hardBlocked: finalShapeDelivery.hardBlocked,
+          distributionOk: finalShapeDelivery.distributionOk,
+          styleOk: finalShapeDelivery.styleOk,
+          passed: finalShapeDelivery.passed,
+          buckets: finalShapeDelivery.buckets,
+          stats: finalShapeDelivery.stats,
+          distribution: finalShapeDelivery.distribution,
           blocking: finalShapeDelivery.blocking.length,
           beatIds: shapeCheck.beatIds,
           violations: shapeCheck.violations.map((row) => ({
