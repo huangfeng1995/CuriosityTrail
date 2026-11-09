@@ -984,6 +984,16 @@ test('W2 形态违规按类型计数，总数与违规数组一致', () => {
   );
 });
 
+test('W1 重写按原因记账：形态与禁写分开计数，同组只算一次调用', () => {
+  const out = segmentWriter.summarizeCallBudget([
+    { kind: 'rewrite', reasons: ['shape', 'forbidden'] },
+    { kind: 'rewrite', reasons: ['missing'] },
+  ]);
+
+  assert.deepStrictEqual(out.rewriteReasons, { shape: 1, forbidden: 1, missing: 1 });
+  assert.strictEqual(out.byKind.rewrite, 2, '同一组双违规只发一次请求');
+});
+
 test('缺拍只重写对应组，其他组正文原样保留', async () => {
   const plan = makePlan(4);
   const draftRunner = makeRunner([body('甲', 8), body('乙', 8)]);

@@ -1593,11 +1593,19 @@ async function rewriteMissingGroups({
 
     const durationMs = Date.now() - startedAt;
     const content = String(out?.content || '').trim();
+    // 重写按原因记账：形态 / 缺拍（含弱拍、重复、补事实）/ 禁写。
+    // 同一组同时有多类问题时仍只发一次请求，所以这里记的是「这次请求覆盖了哪些原因」。
+    const shapeSet = new Set(shapeIds);
+    const reasons = [];
+    if (beats.some((beat) => shapeSet.has(beat.id))) reasons.push('shape');
+    if (!factsOnly && beats.some((beat) => (coverage?.missing || []).includes(beat.id) || weakIds.includes(beat.id) || dupIds.includes(beat.id))) reasons.push('missing');
+    if (!factsOnly && beats.some((beat) => (mustWithholdIds || []).includes(beat.id) || conflictIds.includes(beat.id))) reasons.push('forbidden');
     const entry = {
       call: count,
       kind: 'rewrite',
       group: group.index,
       beatIds: beats.map((beat) => beat.id),
+      reasons,
       durationMs,
       finishReason: out?.finishReason || '',
       chars: countWords(content),
@@ -2012,9 +2020,15 @@ async function expandMissingBeats({
 function summarizeCallBudget(calls, options = {}) {
   const limit = Number(options.limit) || MAX_SEGMENT_CALLS;
   const byKind = { initial: 0, continuation: 0, rewrite: 0, expand: 0 };
+  const rewriteReasons = {};
   for (const call of calls || []) {
     const kind = String(call && call.kind ? call.kind : 'unknown');
     byKind[kind] = (byKind[kind] || 0) + 1;
+    if (kind === 'rewrite' && Array.isArray(call.reasons)) {
+      for (const reason of call.reasons) {
+        rewriteReasons[reason] = (rewriteReasons[reason] || 0) + 1;
+      }
+    }
   }
   return {
     limit,
@@ -2022,6 +2036,7 @@ function summarizeCallBudget(calls, options = {}) {
     remaining: Math.max(0, limit - (calls || []).length),
     quotas: { ...SEGMENT_CALL_BUDGET },
     byKind,
+    rewriteReasons,
     exhaustedBy: options.exhaustedBy || '',
     skippedGroups: options.skippedGroups || [],
     continuationSkipped: Number(options.continuationSkipped) || 0,
