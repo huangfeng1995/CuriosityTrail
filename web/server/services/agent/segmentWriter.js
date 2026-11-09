@@ -397,8 +397,8 @@ function findShortShots(plan, report, ratio = SHOT_FILL_RATIO) {
 /**
  * 交付时的篇幅自检。
  *
- * 只报两类：扩写过的拍仍没到目标；没扩写（预算不够）但低于 85%。
- * 已经过了 85% 且没扩写的拍不再打扰作者。
+ * 扩写过的拍：低于目标 95% 才记（95%–100% 的尾差不再打扰作者）；
+ * 没扩写（预算不够/未触发）的拍：低于 85% 才记。
  *
  * @param {Object} plan
  * @param {Object} report
@@ -408,10 +408,11 @@ function findShortShots(plan, report, ratio = SHOT_FILL_RATIO) {
 function underFilledShots(plan, report, expandedIds = []) {
   const expanded = new Set(expandedIds || []);
   return shotCharStats(plan, report)
-    .filter((shot) => shot.target > 0 && shot.chars < shot.target)
-    .filter(
-      (shot) => expanded.has(shot.id) || shot.chars < Math.round(shot.target * SHOT_FILL_RATIO)
-    )
+    .filter((shot) => {
+      if (shot.target <= 0 || shot.chars >= shot.target) return false;
+      const line = expanded.has(shot.id) ? SHOT_RECORD_RATIO : SHOT_FILL_RATIO;
+      return shot.chars < Math.round(shot.target * line);
+    })
     .map((shot) => ({
       beatId: shot.id,
       chars: shot.chars,
@@ -1532,6 +1533,245 @@ async function rewriteMissingGroups({
   };
 }
 
+/** 扩写过的拍：交付时低于目标 95% 才记 underFilledShots（95%–100% 不打扰作者）。 */
+const SHOT_RECORD_RATIO = 0.95;
+
+/**
+ * 扩写指令：只点名不足的拍。
+ *
+ * 扩写不能走整组重写——同组的合格拍会被一起洗一遍，反而写短。
+ * 这里把每一拍的计划段数与 80–140 字写死，并禁止合并段落凑字数。
+ */
+function buildExpandInstruction({ group, groups, beats, shots, feedback = '' }) {
+  const shotById = new Map((shots || []).map((shot) => [shot.id, shot]));
+  const rows = (beats || []).map((beat) => {
+    const shot = shotById.get(beat.id);
+    const planned = Number(beat.paragraphs) || 0;
+    return (
+      `- ${beat.id}：本拍必须 ${planned} 段（容差 ±${SHAPE_BEAT_TOLERANCE}），每段 80–140 字（含标点）；` +
+      `当前 ${shot ? shot.chars : '?'} 个汉字，目标 ${shot ? shot.target : '?'} 个汉字。`
+    );
+  });
+  return [
+    `## 只扩写第 ${group.index + 1}/${groups.length} 组中的 ${(beats || []).map((b) => b.id).join('、')}，其他拍与其余组一律不动`,
+    '只补细节：环境、动作、器物、人物心理、对话往复。禁止推进情节、不新增事件、不提前揭示本章悬念。',
+    '',
+    '## 硬性段落约束',
+    ...rows,
+    '- 禁止把两段合并成一段来凑字数，禁止把一句话拆成多段，禁止加空段或加标点凑字数。',
+    '- 段与段之间用空行分隔；单段不超过 140 字，也不少于 80 字。',
+    feedback ? `\n## 上一次的问题（必须改掉）\n${feedback}` : null,
+    '',
+    '输出 JSON：{"action":"expand","beats":[{"id":"B3","paragraphs":["第一段","第二段"]}]}。',
+    'beats 只放上面点名的拍，按拍号顺序；paragraphs 只放这一拍的正文。',
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
+}
+
+/** 从模型返回里取出逐拍正文；没按 JSON 返回时，单拍整段正文就是该拍。 */
+function expandedBeatsFrom(out, shots) {
+  const rows = out && out.parsed && Array.isArray(out.parsed.beats) ? out.parsed.beats : [];
+  const parsed = rows
+    .map((row) => {
+      const id = String((row && row.id) || '').trim();
+      const paragraphs = Array.isArray(row && row.paragraphs)
+        ? row.paragraphs.map((p) => String(p || '').trim()).filter(Boolean)
+        : splitParagraphs(String((row && row.content) || ''));
+      return { id, paragraphs };
+    })
+    .filter((row) => row.id && row.paragraphs.length);
+  if (parsed.length) return parsed;
+  if ((shots || []).length === 1) {
+    return [{ id: shots[0].id, paragraphs: splitParagraphs(String((out && out.content) || '')) }];
+  }
+  return [];
+}
+
+/** 单拍扩写结果是否满足段数与段长约束。 */
+function expandBeatProblems(beat, paragraphs) {
+  const planned = Number(beat && beat.paragraphs) || 0;
+  const problems = [];
+  if (planned && Math.abs(paragraphs.length - planned) > SHAPE_BEAT_TOLERANCE) {
+    problems.push(`段数 ${paragraphs.length}/${planned}（容差 ±${SHAPE_BEAT_TOLERANCE}）`);
+  }
+  paragraphs.forEach((paragraph, index) => {
+    const chars = countWords(paragraph);
+    if (chars > SHAPE_PARAGRAPH_MAX) problems.push(`第 ${index + 1} 段 ${chars} 字超 140`);
+    else if (chars < SHAPE_PARAGRAPH_MIN) problems.push(`第 ${index + 1} 段 ${chars} 字不足 80`);
+  });
+  return problems;
+}
+
+/**
+ * 只替换点名拍的段落，同组其他拍原样保留。
+ *
+ * 拍区间按计划段数权重切分（与 checkParagraphShape 同一口径），
+ * 因此替换后不会挪动其他拍的段落。
+ */
+function spliceExpandedBeats(group, expanded) {
+  const paragraphs = splitParagraphs(group.content);
+  const ranges = beatParagraphRanges(group.beats, paragraphs.length);
+  const chunks = ranges.map(([from, to]) => paragraphs.slice(from, to));
+  const byId = new Map((expanded || []).map((row) => [row.id, row.paragraphs]));
+  let replaced = 0;
+  group.beats.forEach((beat, index) => {
+    const next = byId.get(beat.id);
+    if (!next || !next.length) return;
+    chunks[index] = next.slice();
+    replaced += 1;
+  });
+  if (!replaced) return false;
+  group.content = chunks.flat().join('\n\n');
+  return true;
+}
+
+/**
+ * 篇幅扩写：只对判定不足的拍发起，其他拍原样保留。
+ *
+ * 每组的第一次输出若不满足「段数 ±2、每段 80–140」，用同一拍再扩一次
+ * （算扩写内部的收敛，不是整轮重试）；仍不满足则保留原稿并记录。
+ */
+async function expandMissingBeats({
+  plan,
+  groups,
+  expandShots = [],
+  runSegment,
+  maxCalls = MAX_SEGMENT_CALLS,
+  callCount = 0,
+  mergeScenes = true,
+  log = () => {},
+  progress = () => {},
+}) {
+  const shots = (expandShots || []).filter((shot) => shot && shot.id);
+  const affected = groupsForIds(groups, shots.map((shot) => shot.id));
+  const calls = [];
+  let count = callCount;
+  let degraded = '';
+  let finishReason = 'stop';
+  const expanded = [];
+  const unconverged = [];
+
+  for (const group of affected) {
+    const groupShots = shots.filter((shot) => group.beatIds.includes(shot.id));
+    const beats = group.beats.filter((beat) => groupShots.some((shot) => shot.id === beat.id));
+    if (!beats.length) continue;
+
+    const snapshot = group.content;
+    let feedback = '';
+    let accepted = false;
+
+    for (let attempt = 0; attempt < 2 && !accepted; attempt += 1) {
+      if (count >= maxCalls) {
+        degraded = 'call_limit';
+        break;
+      }
+      progress({ phase: 'expand', index: group.index, total: groups.length, beatIds: beats.map((b) => b.id) });
+      const instruction = buildExpandInstruction({ group, groups, beats, shots: groupShots, feedback });
+      count += 1;
+      const startedAt = Date.now();
+      let out;
+      try {
+        out = await runSegment({ instruction, group, kind: 'expand', callIndex: count });
+      } catch (err) {
+        if (err.name === 'AbortError' || err.code === 'AI_ABORTED') throw err;
+        degraded = err.code === 'AI_TIMEOUT' ? 'timeout' : 'error';
+        break;
+      }
+
+      const entry = {
+        call: count,
+        kind: 'expand',
+        group: group.index,
+        beatIds: beats.map((b) => b.id),
+        durationMs: Date.now() - startedAt,
+        finishReason: out?.finishReason || '',
+        chars: countWords(String(out?.content || '')),
+        attempt: attempt + 1,
+        usage: out?.usage || null,
+      };
+      calls.push(entry);
+      log(entry);
+      if (out?.finishReason) finishReason = out.finishReason;
+
+      const rows = expandedBeatsFrom(out, groupShots);
+      const problems = [];
+      for (const beat of beats) {
+        const row = rows.find((item) => item.id === beat.id);
+        if (!row) {
+          problems.push(`${beat.id}: 没有返回这一拍的正文`);
+          continue;
+        }
+        for (const problem of expandBeatProblems(beat, row.paragraphs)) {
+          problems.push(`${beat.id}: ${problem}`);
+        }
+      }
+
+      // 先按单拍约束判，避免把不合规段落写回正文。
+      if (problems.length) {
+        feedback = problems.join('\n');
+        if (attempt === 1) {
+          unconverged.push({ group: group.index, beatIds: beats.map((b) => b.id), problems });
+        }
+        continue;
+      }
+
+      group.content = snapshot;
+      spliceExpandedBeats(group, rows);
+
+      // 拼回全章后再验一次：合并会改变段数，交付形态以全章为准。
+      const composed = composeChapterContent({ groups, mergeScenes });
+      const shape = checkParagraphShape(plan, composed.content);
+      const beatIds = new Set(beats.map((beat) => beat.id));
+      const own = shape.violations.filter(
+        (row) =>
+          beatIds.has(row.beatId) &&
+          ['count', 'too_long', 'fragment', 'short_run'].includes(row.kind)
+      );
+      if (own.length) {
+        feedback = own
+          .map((row) => {
+            if (row.kind === 'count') {
+              return `${row.beatId}: 段数 ${row.actual}/${row.expected}（容差 ±${row.tolerance}）`;
+            }
+            return `${row.beatId}: 第 ${row.index + 1} 段 ${row.chars} 字（80–140）`;
+          })
+          .join('\n');
+        group.content = snapshot;
+        if (attempt === 1) {
+          unconverged.push({ group: group.index, beatIds: [...beatIds], problems: [feedback] });
+        }
+        continue;
+      }
+
+      accepted = true;
+      expanded.push({ group: group.index, beatIds: [...beatIds], attempt: attempt + 1 });
+    }
+
+    if (!accepted) group.content = snapshot;
+  }
+
+  const composed = composeChapterContent({ groups, mergeScenes });
+  const normalized = normalizeChapterShape(composed.content);
+  return {
+    groups,
+    content: normalized.content,
+    contentBeforeMerge: composed.contentBeforeMerge,
+    mergeScenes,
+    mergedParagraphs: composed.mergedParagraphs,
+    calls,
+    callCount: count,
+    degraded,
+    finishReason,
+    expanded,
+    unconverged,
+    truncated: normalized.truncated,
+    originalChars: normalized.originalChars,
+    chars: normalized.chars,
+    usage: usageSum(calls),
+  };
+}
+
 /** 分段起稿降级时给作者看的徽标。 */
 function segmentBadge(degraded) {
   if (!degraded) return '';
@@ -1548,10 +1788,16 @@ module.exports = {
   MAX_SEGMENT_CALLS,
   MIN_TARGET_RATIO,
   SHOT_FILL_RATIO,
+  SHOT_RECORD_RATIO,
   beatTargetChars,
   shotCharStats,
   findShortShots,
   underFilledShots,
+  buildExpandInstruction,
+  expandedBeatsFrom,
+  expandBeatProblems,
+  spliceExpandedBeats,
+  expandMissingBeats,
   RESTATEMENT_SIMILARITY,
   MERGE_MAX_PARAGRAPH_CHARS,
   SCENE_SHIFT_RE,

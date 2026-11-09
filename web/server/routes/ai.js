@@ -1351,7 +1351,15 @@ router.post('/chat', async (req, res) => {
 
         const segmentParsed = result.parsed;
         let content = '';
-        if (segmentParsed && typeof segmentParsed.content === 'string') {
+        // 扩写按逐拍返回（beats[].paragraphs），这里拼成正文供长度统计与落库。
+        if (Array.isArray(segmentParsed?.beats)) {
+          content = segmentParsed.beats
+            .flatMap((beat) => (Array.isArray(beat?.paragraphs) ? beat.paragraphs : []))
+            .map((paragraph) => String(paragraph || '').trim())
+            .filter(Boolean)
+            .join('\n\n');
+        }
+        if (!content && segmentParsed && typeof segmentParsed.content === 'string') {
           content = segmentParsed.content;
         } else if (!segmentParsed) {
           // 和单次起稿同一条回退规则：没按 JSON 返回时，原文就是正文。
@@ -1361,6 +1369,7 @@ router.post('/chat', async (req, res) => {
         return {
           content: String(content || '').trim(),
           action: segmentParsed?.action,
+          parsed: segmentParsed,
           finishReason: result.finishReason,
           usage: result.usage,
         };
@@ -2101,12 +2110,9 @@ router.post('/chat', async (req, res) => {
         });
         try {
           const expandStartedAt = Date.now();
-          const expandedBody = await segmentWriter.rewriteMissingGroups({
+          const expandedBody = await segmentWriter.expandMissingBeats({
             plan: beatPlan,
             groups: segmented.groups,
-            coverage: { missing: [], weak: [], handoverDuplicated: [] },
-            brief,
-            mustReveal: revealMissing.map((fact) => fact.content),
             expandShots: shortShots,
             runSegment: segmentRun,
             maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
@@ -2171,6 +2177,8 @@ router.post('/chat', async (req, res) => {
               || (brief && brief.handoverBeat ? String(brief.handoverBeat) : planBrief.handoverBeatId(brief, beatPlan));
 
             shotExpand = {
+              groups: expandedBody.expanded,
+              unconverged: expandedBody.unconverged,
               before: shortShots,
               after: segmentWriter
                 .shotCharStats(beatPlan, sharesAfter)
@@ -2184,6 +2192,8 @@ router.post('/chat', async (req, res) => {
                 userId: req.userId,
                 durationMs: Date.now() - expandStartedAt,
                 shots: shortShots,
+                expandedGroups: expandedBody.expanded,
+                unconverged: expandedBody.unconverged,
                 contentLength: payload.content.length,
                 degraded: expandedBody.degraded || '',
                 finishReason: expandedBody.finishReason || '',

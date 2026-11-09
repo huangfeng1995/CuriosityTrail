@@ -331,6 +331,128 @@ test('S2 扩写一次后仍不足：1300 → 不再重试，但记 underFilledSh
   );
 });
 
+test('U2 记录口径：扩写过的拍 1450/1500（96.7%）不再记，1400（93.3%）仍记', () => {
+  const plan = shotQuotaPlan();
+
+  assert.deepStrictEqual(
+    segmentWriter.underFilledShots(plan, shotReport({ B3: 1450 }), ['B3']),
+    [],
+    '95%–100% 的尾差不打扰作者'
+  );
+  assert.deepStrictEqual(
+    segmentWriter.underFilledShots(plan, shotReport({ B3: 1400 }), ['B3']),
+    [{ beatId: 'B3', chars: 1400, target: 1500, note: '【篇幅自检：第B3拍 1400/1500】' }],
+    '低于 95% 仍要如实记录'
+  );
+});
+
+test('U1 扩写指令只点名不足的拍，写死计划段数与 80–140，禁止合并凑字数', () => {
+  const instruction = segmentWriter.buildExpandInstruction({
+    group: { index: 0 },
+    groups: [{}, {}],
+    beats: [{ id: 'B3', paragraphs: 12 }],
+    shots: [{ id: 'B3', chars: 709, target: 1500 }],
+  });
+
+  assert.match(instruction, /只扩写第 1\/2 组中的 B3/);
+  assert.match(instruction, /B3：本拍必须 12 段（容差 ±2），每段 80–140 字/);
+  assert.match(instruction, /当前 709 个汉字，目标 1500 个汉字/);
+  assert.match(instruction, /禁止把两段合并成一段来凑字数/);
+  assert.ok(!/B4/.test(instruction), '不得点名其他拍');
+});
+
+test('U1 只替换点名拍的段落，同组其他拍原样保留', () => {
+  const group = {
+    index: 0,
+    beatIds: ['B1', 'B2'],
+    beats: [{ id: 'B1', paragraphs: 2 }, { id: 'B2', paragraphs: 2 }],
+    content: ['甲'.repeat(90), '乙'.repeat(90), '丙'.repeat(90), '丁'.repeat(90)].join('\n\n'),
+  };
+
+  const replaced = segmentWriter.spliceExpandedBeats(group, [
+    { id: 'B2', paragraphs: ['戊'.repeat(100), '己'.repeat(100)] },
+  ]);
+
+  assert.strictEqual(replaced, true);
+  const rows = group.content.split('\n\n');
+  assert.strictEqual(rows.length, 4);
+  assert.match(rows[0], /^甲/);
+  assert.match(rows[1], /^乙/);
+  assert.match(rows[2], /^戊/);
+  assert.match(rows[3], /^己/);
+});
+
+/** 两拍、每拍 5 段、每段 90 字，形态与计划完全对齐。 */
+function expandablePlan() {
+  return {
+    beats: [
+      { id: 'B1', paragraphs: 5 },
+      { id: 'B2', paragraphs: 5 },
+    ],
+  };
+}
+
+function expandableGroup() {
+  return {
+    index: 0,
+    beatIds: ['B1', 'B2'],
+    beats: [
+      { id: 'B1', paragraphs: 5 },
+      { id: 'B2', paragraphs: 5 },
+    ],
+    content: Array.from({ length: 10 }, () => '原'.repeat(90)).join('\n\n'),
+  };
+}
+
+test('U1 扩写不收敛时内部再扩一次，段数补齐后接受', async () => {
+  const plan = expandablePlan();
+  const groups = [expandableGroup()];
+  let attempts = 0;
+  const runSegment = async () => {
+    attempts += 1;
+    const paragraphs = attempts === 1
+      ? ['短'.repeat(30)]
+      : Array.from({ length: 5 }, () => '补'.repeat(100));
+    return { content: '', parsed: { beats: [{ id: 'B2', paragraphs }] }, finishReason: 'stop' };
+  };
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [{ id: 'B2', chars: 300, target: 700 }],
+    runSegment,
+  });
+
+  assert.strictEqual(out.callCount, 2, '第一次不合规，必须再扩一次');
+  assert.deepStrictEqual(out.unconverged, []);
+  assert.strictEqual(out.expanded.length, 1);
+  assert.strictEqual(out.expanded[0].attempt, 2);
+  assert.strictEqual(out.calls.filter((call) => call.kind === 'expand').length, 2);
+});
+
+test('U1 两次都不合规：保留原稿并记 unconverged', async () => {
+  const plan = expandablePlan();
+  const groups = [expandableGroup()];
+  const before = groups[0].content;
+  const runSegment = async () => ({
+    content: '',
+    parsed: { beats: [{ id: 'B2', paragraphs: ['短'.repeat(30), '短'.repeat(30)] }] },
+    finishReason: 'stop',
+  });
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [{ id: 'B2', chars: 300, target: 700 }],
+    runSegment,
+  });
+
+  assert.strictEqual(groups[0].content, before, '不合规的正文不能写回');
+  assert.strictEqual(out.unconverged.length, 1);
+  assert.strictEqual(out.unconverged[0].beatIds[0], 'B2');
+  assert.ok(out.unconverged[0].problems.length > 0);
+});
+
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
 function fixedBody(count) {
   return Array.from({ length: count }, () => '字'.repeat(100)).join('\n\n');
