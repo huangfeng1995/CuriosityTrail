@@ -2118,6 +2118,8 @@ router.post('/chat', async (req, res) => {
             groups: segmented.groups,
             expandShots: shortShots,
             runSegment: segmentRun,
+            // 扩写替换会移动拍区间：同一轮内按新正文重算一次，补上刚掉线的拍。
+            measureShots: (content) => checkWordShares(beatPlan, content),
             maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
             callCount: segmented.callCount,
             log: (entry) => {
@@ -2181,11 +2183,16 @@ router.post('/chat', async (req, res) => {
 
             shotExpand = {
               groups: expandedBody.expanded,
+              supplement: expandedBody.supplement,
               unconverged: expandedBody.unconverged,
               before: shortShots,
               after: segmentWriter
                 .shotCharStats(beatPlan, sharesAfter)
-                .filter((shot) => shortShots.some((item) => item.id === shot.id)),
+                .filter((shot) =>
+                  [...shortShots, ...(expandedBody.supplement || [])].some(
+                    (item) => item.id === shot.id
+                  )
+                ),
             };
 
             console.log(
@@ -2196,6 +2203,7 @@ router.post('/chat', async (req, res) => {
                 durationMs: Date.now() - expandStartedAt,
                 shots: shortShots,
                 expandedGroups: expandedBody.expanded,
+                supplement: expandedBody.supplement,
                 unconverged: expandedBody.unconverged,
                 contentLength: payload.content.length,
                 degraded: expandedBody.degraded || '',
@@ -2212,10 +2220,13 @@ router.post('/chat', async (req, res) => {
 
     // 扩写后仍不足 85% 的拍：交付，但必须把差距写进 beatCheck，不能静默。
     if (beatCheck && wordSharesReport && wordSharesReport.applicable) {
+      const expandedIds = shotExpand
+        ? [...shotExpand.before, ...(shotExpand.supplement || [])].map((shot) => shot.id)
+        : [];
       beatCheck.underFilledShots = segmentWriter.underFilledShots(
         beatPlan,
         wordSharesReport,
-        shotExpand ? shotExpand.before.map((shot) => shot.id) : []
+        expandedIds
       );
       beatCheck.shotExpanded = Boolean(shotExpand);
     }

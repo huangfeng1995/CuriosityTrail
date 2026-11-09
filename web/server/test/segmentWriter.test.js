@@ -386,8 +386,8 @@ test('U1 只替换点名拍的段落，同组其他拍原样保留', () => {
 function expandablePlan() {
   return {
     beats: [
-      { id: 'B1', paragraphs: 5 },
-      { id: 'B2', paragraphs: 5 },
+      { id: 'B1', paragraphs: 5, targetChars: 700 },
+      { id: 'B2', paragraphs: 5, targetChars: 700 },
     ],
   };
 }
@@ -551,6 +551,80 @@ test('V1 重写后总字数少 15% 以上：记录缩水拍与差值', async () 
   assert.ok(out.shrink.after < out.shrink.before * 0.85, 'after 必须低于 before 的 85%');
   assert.strictEqual(out.shrink.beats[0].beatId, 'B2', '要标出缩水拍');
   assert.ok(out.shrink.beats[0].delta < 0, '要给出差值');
+});
+
+test('V2 扩写后重算：新掉到 85% 以下的拍补进第二遍', async () => {
+  const plan = expandablePlan();
+  const groups = [expandableGroup()];
+  let calls = 0;
+  const runSegment = async () => {
+    calls += 1;
+    const id = calls === 1 ? 'B1' : 'B2';
+    return {
+      content: '',
+      parsed: { beats: [{ id, paragraphs: Array.from({ length: 5 }, () => '补'.repeat(100)) }] },
+      finishReason: 'stop',
+    };
+  };
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [{ id: 'B1', chars: 300, target: 700 }],
+    runSegment,
+    measureShots: () => ({
+      applicable: true,
+      beats: [
+        { id: 'B1', chars: 500, target: 700 },
+        { id: 'B2', chars: 300, target: 700 },
+      ],
+    }),
+  });
+
+  assert.strictEqual(out.callCount, 2, '补入的新不足拍要再扩一次');
+  assert.deepStrictEqual(out.supplement.map((shot) => shot.id), ['B2']);
+  assert.strictEqual(out.expanded.length, 2, '两遍各记一次扩写成功');
+});
+
+test('V2 补完仍不足：不再循环，记 underFilledShots', async () => {
+  const plan = expandablePlan();
+  const groups = [expandableGroup()];
+  const report = {
+    applicable: true,
+    beats: [
+      { id: 'B1', chars: 500, target: 700 },
+      { id: 'B2', chars: 300, target: 700 },
+    ],
+  };
+  const runSegment = async () => ({
+    content: '',
+    parsed: {
+      beats: [
+        { id: 'B1', paragraphs: Array.from({ length: 5 }, () => '补'.repeat(100)) },
+        { id: 'B2', paragraphs: Array.from({ length: 5 }, () => '补'.repeat(100)) },
+      ],
+    },
+    finishReason: 'stop',
+  });
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [{ id: 'B1', chars: 300, target: 700 }],
+    runSegment,
+    measureShots: () => report,
+  });
+
+  assert.strictEqual(out.callCount, 2, '同一轮最多补一次，不能开第三遍');
+  const under = segmentWriter.underFilledShots(
+    plan,
+    report,
+    ['B1', 'B2']
+  );
+  assert.ok(
+    under.some((shot) => shot.beatId === 'B2'),
+    '补完仍不足的拍要记进 underFilledShots'
+  );
 });
 
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
