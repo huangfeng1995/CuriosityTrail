@@ -55,9 +55,9 @@ const MIN_PARAGRAPHS = 3;
 /**
  * 单拍段数上限。
  *
- * 30% 的身世拍在 40 段的长章里要约 12 段；上限卡在 10 会逼出
- * 每段 150 字以上的超长段，正好撞上 P3 的 80–140 字硬约束。
- * 12 段 × 125 字 ≈ 1500 字，才装得下范文的 30% 份额。
+ * 范文实测的最大功能拍是「议论」25.2%（约 1260 字），按段均 112 字约 11 段；
+ * 上限卡在 10 会把议论拍逼成每段 120 字以上的超长段。12 段 × 105 字
+ * ≈ 1260 字，才装得下范文的 25.2% 份额。
  */
 const MAX_PARAGRAPHS = 12;
 // 段落数只做安全下限（防止把长章规划成几段），不作为文章结构的验收门槛。
@@ -75,27 +75,52 @@ const ARC_BEAT_RE = /回城|到家|进城|身世|寄养|旧事|年龄|籍贯/;
 /**
  * 判「身世被并进过渡拍」只认身世语义，不认「回城」这个地点词。
  *
- * 范文里「下山议论」这一拍本来就发生在回城路上（14%），如果拿「回城」
+ * 范文里「下山议论」这一拍本来就发生在回城路上（25%），如果拿「回城」
  * 当判据，会把合法的途中议论拍全部打成「身世合并」，整章计划被拒后
  * 降级直写，后面的自检连跑都跑不到。
  */
 const IDENTITY_MERGE_RE = /身世|寄养|旧事|年龄|籍贯|小时候|自幼|童年/;
-const ARC_MIN_SHARE = 20;
+/** 身世拍的最低份额 = 范文实测 identity 16.2%（见 SAMPLE_SHARES），不是手调值。 */
+const ARC_MIN_SHARE = 16.2;
 
 /**
- * 范文实测的六段功能配比（百分点）。
+ * 范文实测的六段功能配比（百分点，纯汉字占比）。
+ *
+ * 切分依据（sample.md 45 段，1-based 段号）：
+ *   - opening 1–5（9.0%）：瞄准母鹿→松弦→箭偏→起身苦笑，完成「放走母鹿」的损失。
+ *   - discussion 6–17（25.2%）：司马懿从雪堆出来，两人争论仁心/猎杀，随后上路、
+ *     回城并议论河内形势；段 18 起转入籍贯回忆，不属议论。
+ *   - identity 18–23（16.2%）：P18「温县并非他的乡籍所在」起，插叙籍贯、父亲、
+ *     寄养旧事与「如果一直这样生活下去」的安稳感，到 P23 止。
+ *   - father 24–35（24.6%）：马蹄声打断→报信→回府→见杨俊→符传形制→司马防解释。
+ *     P34–35 仍是长辈报信/解释，不是告别。
+ *   - farewell 36–42（18.4%）：P36 末尾交弓起，接弓、拥抱、出府、上车、司马防托付。
+ *   - departure 43–45（6.7%）：车出城，司马防喃喃与「许都」险恶的收束/钩子。
  *
  * 只看显式 function，不按文案关键词猜。模型可以写 6–8 拍，但每一类
  * 功能的目标份额是固定的；同类功能有多拍时按计划段数分摊。
  * 容差 ±5pp 由 checkWordShares 统一处理，这里只给中心值。
+ *
+ * 注：旧值 9 / 14 / 30 / 15.5 / 25 / 6.5 是推算值，全部作废；
+ * 用户上一轮引用的 8.6 / 25.6 / 15.9 / 24.8 / 18.5 / 6.6 是同一刀切的
+ * countWords（含标点）占比；本表按 targetChars 的口径换算成纯汉字。
  */
+const SAMPLE_SHARES = Object.freeze({
+  opening: 9.0,
+  discussion: 25.2,
+  identity: 16.2,
+  father: 24.6,
+  farewell: 18.4,
+  departure: 6.7,
+});
+
 const SHARE_ROLES = [
-  { role: 'opening', label: FUNCTION_LABELS.opening, target: 9 },
-  { role: 'discussion', label: FUNCTION_LABELS.discussion, target: 14 },
-  { role: 'identity', label: FUNCTION_LABELS.identity, target: 30 },
-  { role: 'father', label: FUNCTION_LABELS.father, target: 15.5 },
-  { role: 'farewell', label: FUNCTION_LABELS.farewell, target: 25 },
-  { role: 'departure', label: FUNCTION_LABELS.departure, target: 6.5 },
+  { role: 'opening', label: FUNCTION_LABELS.opening, target: SAMPLE_SHARES.opening },
+  { role: 'discussion', label: FUNCTION_LABELS.discussion, target: SAMPLE_SHARES.discussion },
+  { role: 'identity', label: FUNCTION_LABELS.identity, target: SAMPLE_SHARES.identity },
+  { role: 'father', label: FUNCTION_LABELS.father, target: SAMPLE_SHARES.father },
+  { role: 'farewell', label: FUNCTION_LABELS.farewell, target: SAMPLE_SHARES.farewell },
+  { role: 'departure', label: FUNCTION_LABELS.departure, target: SAMPLE_SHARES.departure },
 ];
 const SHARE_TOLERANCE = 5;
 
@@ -116,8 +141,8 @@ function classifyShareRole(beat) {
  * 把每拍的份额换回「目标字数」，并在份额偏差较大时就地调整段落数。
  *
  * R3 的约束只允许调这一拍的 paragraphs 与目标字数，不许为配比重排整章。
- * 目标段数按 120 字/段估算：1500 字的身世拍 → 12 段，正好落在
- * 80–140 字的形态硬约束里，而不是写成 10 段 150 字的超长段。
+ * 目标段数按 120 字/段估算：范文最大的议论拍 25.2% ≈ 1260 字 → 11 段，
+ * 身世拍 16.2% ≈ 810 字 → 7 段；都落在范文的段长分布内。
  */
 function applyTargetChars(beats) {
   for (const beat of beats) {
@@ -203,10 +228,12 @@ function 按事件语义判，不许按关键词猜：判断依据写进 functio
 错误示例：把雪地猎鹿的开场拍写成 departure、把门前告别写成 departure、把回城身世并进过渡拍。
 单章是 5000 字量级的长章：按内容需要给每拍估段数，长章大致 35–65 段即可，不必凑固定段数。
 paragraphs 是这一拍的段落数，硬上限 12；targetChars 是这一拍的目标纯汉字数（不含标点），
-wordShare 是这一拍占全章正文的百分比。范文实测配比：
-opening 8–10%、discussion 14%、identity ≈30%、father 15–16%、farewell 25%、departure 6–7%，允许 ±5pp。
+wordShare 是这一拍占全章正文的百分比。范文实测配比（纯汉字）：
+opening 9%、discussion 25%、identity 16%、father 25%、farewell 18%、departure 7%，允许 ±5pp。
 targetChars 与 wordShare 要能对上：targetChars ≈ wordShare × 5000 / 100。
-回城/身世这一拍不能并进过渡拍，目标份额低于 20 会被判不合格。
+身世只占 16%：范文把籍贯、父亲、寄养旧事拆进回城路上与府门口的对话里穿插交代（6 段），
+不单独集中铺陈成长篇回忆；议论才是第二长拍（25%），靠一来一回的信息交换推进。
+回城/身世这一拍不能并进过渡拍，目标份额低于 16% 会被判不合格。
 每个节拍必须让至少一个变量发生改变，必须写出代价，禁止空转抒情段。
 mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不新增未提供的人物或设定。`;
 
@@ -935,7 +962,7 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
     });
   }
 
-  // 按功能汇总：检查表要的是「identity ≥25%、farewell ≥20%」，
+  // 按功能汇总：检查表要的是「discussion 25%、farewell 18%」这类实测配比，
   // 不是逐拍数字。同类功能多拍时把实际份额相加再和规则目标比。
   const roleShares = SHARE_ROLES.map((rule) => {
     const sameRole = rows.filter((row) => row.function === rule.role);
@@ -979,6 +1006,9 @@ module.exports = {
   BEAT_FUNCTIONS,
   FUNCTION_LABELS,
   DELTA_VARIABLES,
+  SAMPLE_SHARES,
+  SHARE_ROLES,
+  SHARE_TOLERANCE,
   PLAN_PROMPT,
   COVERAGE_PROMPT,
   validateBeatPlan,
