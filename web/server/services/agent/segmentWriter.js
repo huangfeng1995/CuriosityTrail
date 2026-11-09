@@ -344,6 +344,83 @@ function beatSummary(beats) {
 }
 
 /**
+ * 篇幅未完成线：该拍纯汉字不足计划目标的 85%，视为写手没把分到的份额写足。
+ *
+ * 判定必须用「目标汉字数」，不能用 wordShare（那是份额百分比）：
+ * B3 的 30 是 30%，不是 30 字；拿它乘 0.85 得到的 25.5 永远小于实际字数，
+ * 扩写会一直判不触发。
+ */
+const SHOT_FILL_RATIO = 0.85;
+
+/** 某拍的计划目标汉字数：优先取计划里的 targetChars，老计划按份额折算。 */
+function beatTargetChars(beat) {
+  const explicit = Number(beat && beat.targetChars);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+  const share = Number(beat && beat.wordShare);
+  if (Number.isFinite(share) && share > 0) {
+    return Math.round((share / 100) * TARGET_CHAPTER_CHARS);
+  }
+  return 0;
+}
+
+/**
+ * 按拍对齐「实际纯汉字数 / 计划目标汉字数」。
+ *
+ * report 来自 beatPlan.checkWordShares，chars 已是纯汉字计数（不含标点），
+ * 与 groupQuotaBlock 给写手的目标口径一致。
+ *
+ * @param {Object} plan 节拍表
+ * @param {Object} report checkWordShares 的输出
+ * @returns {Array<{id: string, chars: number, target: number}>}
+ */
+function shotCharStats(plan, report) {
+  const targets = new Map(
+    (plan && Array.isArray(plan.beats) ? plan.beats : []).map((beat) => [
+      beat.id,
+      beatTargetChars(beat),
+    ])
+  );
+  return (report && Array.isArray(report.beats) ? report.beats : []).map((row) => ({
+    id: row.id,
+    chars: Number(row.chars) || 0,
+    target: targets.get(row.id) || 0,
+  }));
+}
+
+/** 不足目标 ratio（默认 85%）的拍，返回实际/目标汉字数，供扩写指令与自检共用。 */
+function findShortShots(plan, report, ratio = SHOT_FILL_RATIO) {
+  return shotCharStats(plan, report).filter(
+    (shot) => shot.target > 0 && shot.chars < Math.round(shot.target * ratio)
+  );
+}
+
+/**
+ * 交付时的篇幅自检。
+ *
+ * 只报两类：扩写过的拍仍没到目标；没扩写（预算不够）但低于 85%。
+ * 已经过了 85% 且没扩写的拍不再打扰作者。
+ *
+ * @param {Object} plan
+ * @param {Object} report
+ * @param {Array<string>} expandedIds 本次实际扩写过的拍号
+ * @returns {Array<{beatId: string, chars: number, target: number, note: string}>}
+ */
+function underFilledShots(plan, report, expandedIds = []) {
+  const expanded = new Set(expandedIds || []);
+  return shotCharStats(plan, report)
+    .filter((shot) => shot.target > 0 && shot.chars < shot.target)
+    .filter(
+      (shot) => expanded.has(shot.id) || shot.chars < Math.round(shot.target * SHOT_FILL_RATIO)
+    )
+    .map((shot) => ({
+      beatId: shot.id,
+      chars: shot.chars,
+      target: shot.target,
+      note: `【篇幅自检：第${shot.id}拍 ${shot.chars}/${shot.target}】`,
+    }));
+}
+
+/**
  * 本组各拍的篇幅配额（纯汉字）。
  *
  * 组级总字数会被写手平均摊开：身世拍分到 30%，落到正文就变成 19%。
@@ -1470,6 +1547,11 @@ module.exports = {
   MAX_CHAPTER_CHARS,
   MAX_SEGMENT_CALLS,
   MIN_TARGET_RATIO,
+  SHOT_FILL_RATIO,
+  beatTargetChars,
+  shotCharStats,
+  findShortShots,
+  underFilledShots,
   RESTATEMENT_SIMILARITY,
   MERGE_MAX_PARAGRAPH_CHARS,
   SCENE_SHIFT_RE,

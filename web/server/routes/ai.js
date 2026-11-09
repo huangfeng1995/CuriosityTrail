@@ -2091,9 +2091,9 @@ router.post('/chat', async (req, res) => {
       && wordSharesReport.applicable
       && !roundSignal.aborted
     ) {
-      const shortShots = wordSharesReport.beats
-        .filter((beat) => beat.target > 0 && beat.chars < Math.round(beat.target * 0.85))
-        .map((beat) => ({ id: beat.id, chars: beat.chars, target: beat.target }));
+      // 目标必须是该拍的计划汉字数（targetChars），不是 wordShare 百分比：
+      // B3 的 30 表示 30%，拿它乘 0.85 永远小于实际字数，扩写会判不触发。
+      const shortShots = segmentWriter.findShortShots(beatPlan, wordSharesReport);
       const affectedGroups = segmentWriter.groupsForIds(segmented.groups, shortShots.map((shot) => shot.id));
       const remainingMs = ROUND_BUDGET_MS - (Date.now() - startedAt);
       const cheapest = affectedGroups.length * SEGMENT_CALL_TIMEOUT_MS + CHECK_TIMEOUT_MS;
@@ -2176,9 +2176,9 @@ router.post('/chat', async (req, res) => {
 
             shotExpand = {
               before: shortShots,
-              after: sharesAfter.beats
-                .filter((beat) => shortShots.some((shot) => shot.id === beat.id))
-                .map((beat) => ({ id: beat.id, chars: beat.chars, target: beat.target })),
+              after: segmentWriter
+                .shotCharStats(beatPlan, sharesAfter)
+                .filter((shot) => shortShots.some((item) => item.id === shot.id)),
             };
 
             console.log(
@@ -2203,14 +2203,11 @@ router.post('/chat', async (req, res) => {
 
     // 扩写后仍不足 85% 的拍：交付，但必须把差距写进 beatCheck，不能静默。
     if (beatCheck && wordSharesReport && wordSharesReport.applicable) {
-      beatCheck.underFilledShots = wordSharesReport.beats
-        .filter((beat) => beat.target > 0 && beat.chars < Math.round(beat.target * 0.85))
-        .map((beat) => ({
-          beatId: beat.id,
-          chars: beat.chars,
-          target: beat.target,
-          note: `【篇幅自检：第${beat.id}拍 ${beat.chars}/${beat.target}】`,
-        }));
+      beatCheck.underFilledShots = segmentWriter.underFilledShots(
+        beatPlan,
+        wordSharesReport,
+        shotExpand ? shotExpand.before.map((shot) => shot.id) : []
+      );
       beatCheck.shotExpanded = Boolean(shotExpand);
     }
 

@@ -266,6 +266,71 @@ test('S2 篇幅配额：组指令带每拍目标汉字数与 85% 未完成线，
   assert.match(rewrite, /扩写后必须仍满足每段 80–140 字、本拍段数在计划区间 ±2/);
 });
 
+/** 六拍计划，B3（identity）目标 1500 汉字 = 30% × 5000。 */
+function shotQuotaPlan() {
+  const plan = makePlan(6, 5);
+  const functions = ['opening', 'discussion', 'identity', 'father', 'farewell', 'departure'];
+  const shares = [9, 14, 30, 15.5, 25, 6.5];
+  plan.beats = plan.beats.map((beat, index) => ({
+    ...beat,
+    function: functions[index],
+    wordShare: shares[index],
+    targetChars: Math.round(shares[index] * 50),
+  }));
+  return plan;
+}
+
+/** checkWordShares 的最小形状：篇幅判定只需要 id 与纯汉字数。 */
+function shotReport(charsById) {
+  return {
+    applicable: true,
+    beats: Object.entries(charsById).map(([id, chars]) => ({ id, chars, target: 0 })),
+  };
+}
+
+test('S2 扩写触发：B3 目标 1500 实际 600 → 判不足并进入扩写', () => {
+  const plan = shotQuotaPlan();
+  const report = shotReport({ B1: 450, B2: 700, B3: 600, B4: 775, B5: 1250, B6: 325 });
+
+  assert.deepStrictEqual(
+    segmentWriter.findShortShots(plan, report),
+    [{ id: 'B3', chars: 600, target: 1500 }],
+    '只有 B3 低于 1275（1500 × 85%），必须触发扩写'
+  );
+
+  const under = segmentWriter.underFilledShots(plan, report);
+  assert.deepStrictEqual(under, [
+    { beatId: 'B3', chars: 600, target: 1500, note: '【篇幅自检：第B3拍 600/1500】' },
+  ]);
+});
+
+test('S2 扩写不触发：B3 目标 1500 实际 1400（93%）→ 不扩写', () => {
+  const plan = shotQuotaPlan();
+  const report = shotReport({ B1: 450, B2: 700, B3: 1400, B4: 775, B5: 1250, B6: 325 });
+
+  assert.deepStrictEqual(
+    segmentWriter.findShortShots(plan, report),
+    [],
+    '1400 已过 85% 线（1275），不该再占一次扩写调用'
+  );
+});
+
+test('S2 扩写一次后仍不足：1300 → 不再重试，但记 underFilledShots', () => {
+  const plan = shotQuotaPlan();
+  const report = shotReport({ B3: 1300 });
+
+  assert.deepStrictEqual(
+    segmentWriter.findShortShots(plan, report),
+    [],
+    '1300 已过 85%，扩写只允许一次，不能再触发'
+  );
+  assert.deepStrictEqual(
+    segmentWriter.underFilledShots(plan, report, ['B3']),
+    [{ beatId: 'B3', chars: 1300, target: 1500, note: '【篇幅自检：第B3拍 1300/1500】' }],
+    '扩写过的拍没到目标，交付时必须显式记录'
+  );
+});
+
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
 function fixedBody(count) {
   return Array.from({ length: count }, () => '字'.repeat(100)).join('\n\n');
