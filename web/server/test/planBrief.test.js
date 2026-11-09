@@ -17,6 +17,7 @@ const {
   validatePlanBrief,
   formatPlanBrief,
   briefCoverage,
+  withholdDegradedNote,
   briefWriterBlock,
   partitionCoverage,
   buildReplanInstruction,
@@ -1241,7 +1242,33 @@ test('悬念自检：没有 mustWithhold 项时明确 unmapped，不能判通过
   assert.strictEqual(result.applicable, true, '有 brief 就要给出明确结论');
   assert.deepStrictEqual(result.unmapped, ['none']);
   assert.strictEqual(result.passed, false, '0 条违规不能读成检查通过');
+  assert.strictEqual(result.reason, '未设置禁写目标', '对外只能报未设置目标，不能出现通过字样');
+  assert.ok(!/通过/.test(result.reason), '结论文案不允许出现「通过」');
   assert.ok(WITHHOLD_TERMS.includes('符传'), '制度词表可被外部复核');
+});
+
+test('零 MW：brief 一项 mustWithhold 都没有 → plan_degraded 写 withhold:unmapped:无MW项', () => {
+  const brief = {
+    items: [
+      { id: 'MR1', kind: 'mustReveal', text: '杨平今年十八岁', source: '背景事实' },
+      { id: 'MP1', kind: 'mustPresent', text: '司马懿同在山中打猎', source: '本章大纲' },
+    ],
+  };
+  const plan = withholdPlan();
+  const coverage = briefCoverage(brief, plan);
+
+  assert.strictEqual(coverage.withholdTotal, 0);
+  assert.deepStrictEqual(coverage.withholdUnmapped, []);
+  assert.strictEqual(coverage.withholdUnmappedReason, '无MW项');
+  assert.strictEqual(
+    withholdDegradedNote(coverage),
+    'withhold:unmapped:无MW项',
+    '没有守卫目标必须写进 plan_degraded，不能静默'
+  );
+
+  const guard = checkMustWithhold(brief, '雪停了。', plan);
+  assert.strictEqual(guard.passed, false);
+  assert.strictEqual(guard.reason, '未设置禁写目标');
 });
 
 test('悬念覆盖：关键词落空但语义可归属 → 仍算覆盖，不进 unmapped', () => {
@@ -1306,10 +1333,35 @@ test('悬念覆盖：归不到任何场景 → withholdUnmapped，自检不通�
   const coverage = briefCoverage(brief, plan);
   assert.ok(coverage.missing.some((item) => item.id === 'MW1' && item.unmapped === true));
   assert.deepStrictEqual(coverage.withholdUnmapped, ['MW1']);
+  assert.strictEqual(coverage.withholdUnmappedReason, '语义无法归属');
+  assert.strictEqual(withholdDegradedNote(coverage), 'withhold:unmapped:MW1');
 
   const guard = checkMustWithhold(brief, '雪停了。', plan);
   assert.deepStrictEqual(guard.unmapped, ['MW1']);
   assert.strictEqual(guard.passed, false);
+});
+
+test('MW 有可归属场景 → plan_degraded 不写 withhold:unmapped', () => {
+  const brief = {
+    items: [
+      {
+        id: 'MW1',
+        kind: 'mustWithhold',
+        text: '不得解释司空府为何逾制发符传',
+        keywords: ['逾制', '私辟'],
+        source: '设定',
+        slot: 'father',
+      },
+    ],
+  };
+  const plan = withholdPlan();
+  plan.beats[3].function = 'father';
+  const coverage = briefCoverage(brief, plan);
+
+  assert.strictEqual(coverage.withholdTotal, 1);
+  assert.deepStrictEqual(coverage.withholdUnmapped, []);
+  assert.strictEqual(coverage.withholdUnmappedReason, '');
+  assert.strictEqual(withholdDegradedNote(coverage), '');
 });
 
 // ---- 全章不变项 ----

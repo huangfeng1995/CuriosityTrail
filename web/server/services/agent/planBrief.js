@@ -865,7 +865,31 @@ function briefCoverage(brief, plan) {
     openingBeatId: opponentCoverage.openingBeatId,
     handover: handoverStatus,
     withholdUnmapped,
+    // 0 条 MW 与「MW 归不到拍」都不等于检查通过：前者没有守卫目标，
+    // 后者有目标但定位失败。两种都要进 plan_degraded，不能静默。
+    withholdTotal: withholds.length,
+    withholdUnmappedReason: withholds.length
+      ? (withholdUnmapped.length ? '语义无法归属' : '')
+      : '无MW项',
   };
+}
+
+/**
+ * plan_degraded 里的悬念标记。
+ *
+ * 没有任何 MW 项时，0 条违规只是「没检查」，不是「干净」；
+ * 有 MW 项但归不到任何一拍时，同样没有可执行的守卫目标。
+ *
+ * @param {Object} coverage briefCoverage 的输出
+ * @returns {string} 空串表示有可归属的守卫目标
+ */
+function withholdDegradedNote(coverage) {
+  if (!coverage) return '';
+  const unmapped = Array.isArray(coverage.withholdUnmapped) ? coverage.withholdUnmapped : [];
+  if (Number.isFinite(Number(coverage.withholdTotal)) && Number(coverage.withholdTotal) === 0) {
+    return 'withhold:unmapped:无MW项';
+  }
+  return unmapped.length ? `withhold:unmapped:${unmapped.join('、')}` : '';
 }
 
 /**
@@ -1895,7 +1919,7 @@ function checkMustWithhold(brief, body, plan) {
       itemBeats: {},
       unmapped: ['none'],
       passed: false,
-      reason: 'brief 未列出 mustWithhold',
+      reason: '未设置禁写目标',
     };
   }
 
@@ -1959,6 +1983,7 @@ module.exports = {
   validatePlanBrief,
   formatPlanBrief,
   briefCoverage,
+  withholdDegradedNote,
   openingOpponentCoverage,
   openingBeat,
   briefWriterBlock,

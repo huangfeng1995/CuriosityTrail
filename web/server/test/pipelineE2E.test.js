@@ -519,11 +519,12 @@ test('PV4：第 45 章写到曹操 → 命中 1 条，quote 可 slice 回原句'
   assert.strictEqual(action.action, 'append');
   assert.match(action.content, /曹操端坐堂上/);
 
-  // 规划成功：节拍覆盖齐全，没有降级。
+  // 规划成功：节拍覆盖齐全；但 brief 没有 MW 项，悬念这一项要如实标注。
   assert.ok(action.beatCheck, '规划成功时应带覆盖报告');
   assert.deepStrictEqual(action.beatCheck.missing, []);
   assert.ok(action.beatCheck.covered.length >= 4);
-  assert.strictEqual(action.planDegraded, '');
+  // 规划本身成功，但 brief 没有 MW 项：悬念自检没有守卫目标，必须写明。
+  assert.strictEqual(action.planDegraded, 'withhold:unmapped:无MW项');
 
   const violationEvent = events.find((e) => e.type === 'anchor_violation');
   assert.ok(violationEvent, '应当下发 anchor_violation 事件');

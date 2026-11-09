@@ -1153,14 +1153,10 @@ router.post('/chat', async (req, res) => {
               `opponent:unplaced:${who || '对手未登记'}/${gap.oppMissing.openingBeatId || '无 function=opening 拍'}`
             );
           }
-          if (
-            briefCoverageResult
-            && Array.isArray(briefCoverageResult.withholdUnmapped)
-            && briefCoverageResult.withholdUnmapped.length
-          ) {
-            // 悬念没有落位就没有自检目标：这条必须写明，不能只留 0 条违规。
-            degradedParts.push(`withhold:unmapped:${briefCoverageResult.withholdUnmapped.join('、')}`);
-          }
+          // 悬念没有落位就没有自检目标：0 条 MW 与「MW 归不到拍」都要写明，
+          // 不能只留 0 条违规让读者以为检查过且干净。
+          const withholdNote = planBrief.withholdDegradedNote(briefCoverageResult);
+          if (withholdNote) degradedParts.push(withholdNote);
           if (briefCoverageResult && briefCoverageResult.missing.length) {
             degradedParts.push(
               `brief_missing:${briefCoverageResult.missing
@@ -2234,11 +2230,14 @@ router.post('/chat', async (req, res) => {
     }
 
     // 悬念自检徽标：重写后仍有违规才挂，说明这一拍仍把制度结论讲完了。
+    // 没有任何 MW 项时只报「未设置禁写目标」——不能把 0 条违规说成通过。
     const withholdBadge = withholdCheck.violations.length
       ? `【悬念自检：第${withholdCheck.violations
           .map((v) => String(v.id).replace(/^B/i, ''))
           .join('、')}拍解释掉制度悬念】`
-      : '';
+      : (withholdCheck.applicable && withholdCheck.total === 0
+          ? '【悬念自检：未设置禁写目标】'
+          : '');
     if (withholdCheck.applicable) {
       console.log(
         JSON.stringify({

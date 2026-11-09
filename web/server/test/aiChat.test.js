@@ -802,7 +802,13 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
   for (const item of action.beatCheck.evidence) {
     assert.ok(Array.from(item.evidence).length <= 30, '证据不能超过 30 字');
   }
-  assert.strictEqual(action.planDegraded, '', '规划成功时不应打降级标记');
+  // brief 里没有 MW 项时针笔自检没有映射目标，必须写明「无 MW 项」，
+  // 不能因为 0 条违规就当成没有降级。
+  assert.strictEqual(
+    action.planDegraded,
+    'withhold:unmapped:无MW项',
+    '没有禁写目标必须进 plan_degraded，不能静默'
+  );
   assert.doesNotMatch(action.reason, /编排自检/, '覆盖齐全时不该给作者加徽标');
 
   // 规划的 JSON 是内部协议，不能作为 token 流到作者界面上
