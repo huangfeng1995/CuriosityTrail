@@ -1380,7 +1380,9 @@ router.post('/chat', async (req, res) => {
         plan: beatPlan,
         brief,
         runSegment: segmentRun,
-        maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
+        // 起稿只拿预算表里的 4 次：3 组初稿 + 最多 1 次续写。
+        // 续写是最低优先级，剩余的 4 次留给重写与扩写。
+        maxCalls: segmentWriter.SEGMENT_CALL_BUDGET.draft,
         log: (entry) => {
           console.log(
             JSON.stringify({
@@ -1753,6 +1755,20 @@ router.post('/chat', async (req, res) => {
       const remainingMs = ROUND_BUDGET_MS - (Date.now() - startedAt);
       const neededMs = affected.length * SEGMENT_CALL_TIMEOUT_MS + CHECK_TIMEOUT_MS;
 
+      // 显式预算表：重写只能用自己的 2 次，且必须给扩写留住 2 次。
+      // 旧逻辑让重写吃剩余预算，线上把最后的 2 次全用在形态重写上，
+      // 扩写一次都没跑。这里按类别切死，剩余额度不再先到先得。
+      const shortShotsBeforeRewrite = beatPlan && wordSharesReport && wordSharesReport.applicable
+        ? segmentWriter.findShortShots(beatPlan, wordSharesReport)
+        : [];
+      const expandReserve = shortShotsBeforeRewrite.length
+        ? segmentWriter.SEGMENT_CALL_BUDGET.expand
+        : 0;
+      const rewriteMaxCalls = Math.min(
+        segmentWriter.MAX_SEGMENT_CALLS - expandReserve,
+        segmented.callCount + segmentWriter.SEGMENT_CALL_BUDGET.rewrite
+      );
+
       if (!affected.length) {
         console.log(
           JSON.stringify({
@@ -1793,7 +1809,7 @@ router.post('/chat', async (req, res) => {
             invariantConflicts,
             shapeViolations: shapeCheck.violations,
             runSegment: segmentRun,
-            maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
+            maxCalls: rewriteMaxCalls,
             callCount: segmented.callCount,
             log: (entry) => {
               console.log(
@@ -1829,6 +1845,12 @@ router.post('/chat', async (req, res) => {
               calls: [...segmented.calls, ...rewrite.calls],
               callCount: rewrite.callCount,
               degraded: rewrite.degraded || segmented.degraded,
+              // 预算归因：重写如果是因为配额/总上限停下，必须把类别带出去。
+              budgetExhaustedBy: rewrite.budgetExhaustedBy || segmented.budgetExhaustedBy || '',
+              skippedGroups: [
+                ...(segmented.skippedGroups || []),
+                ...(rewrite.skippedGroups || []),
+              ],
 
               truncated: rewrite.truncated,
               originalChars: rewrite.originalChars,
@@ -2141,6 +2163,20 @@ router.post('/chat', async (req, res) => {
             },
           });
 
+          if (expandedBody.degraded) {
+            // 扩写一次都没轮到时也要留痕，否则卡片只看到上一步的「到上限」。
+            segmented = {
+              ...segmented,
+              degraded: expandedBody.degraded || segmented.degraded,
+              budgetExhaustedBy:
+                expandedBody.budgetExhaustedBy || segmented.budgetExhaustedBy || '',
+              skippedGroups: [
+                ...(segmented.skippedGroups || []),
+                ...(expandedBody.skippedGroups || []),
+              ],
+            };
+          }
+
           if (expandedBody.content.trim()) {
             payload.content = expandedBody.content;
             finalResult.parsed.content = expandedBody.content;
@@ -2150,7 +2186,11 @@ router.post('/chat', async (req, res) => {
               groups: expandedBody.groups,
               calls: [...segmented.calls, ...expandedBody.calls],
               callCount: expandedBody.callCount,
+              // 预算归因：扩写被挡下时记明是扩写自己用尽了额度，
+              // 不能沿用上一步的 degraded 让卡片误报成「分段起稿」。
               degraded: expandedBody.degraded || segmented.degraded,
+              budgetExhaustedBy:
+                expandedBody.budgetExhaustedBy || segmented.budgetExhaustedBy || '',
               truncated: expandedBody.truncated,
               chars: expandedBody.chars,
               originalChars: expandedBody.originalChars,
@@ -2181,20 +2221,23 @@ router.post('/chat', async (req, res) => {
             beatCheck.handoverBeatId = (expandDup.evidence.length ? expandDup.evidence[0].id : '')
               || (brief && brief.handoverBeat ? String(brief.handoverBeat) : planBrief.handoverBeatId(brief, beatPlan));
 
-            shotExpand = {
-              groups: expandedBody.expanded,
-              supplement: expandedBody.supplement,
-              unconverged: expandedBody.unconverged,
-              rejected: expandedBody.expandRejected,
-              before: shortShots,
-              after: segmentWriter
-                .shotCharStats(beatPlan, sharesAfter)
-                .filter((shot) =>
-                  [...shortShots, ...(expandedBody.supplement || [])].some(
-                    (item) => item.id === shot.id
-                  )
-                ),
-            };
+            // 0 次调用不是「扩写过」：只改记账，不改正文，也不打 shotExpanded。
+            shotExpand = expandedBody.calls.length
+              ? {
+                  groups: expandedBody.expanded,
+                  supplement: expandedBody.supplement,
+                  unconverged: expandedBody.unconverged,
+                  rejected: expandedBody.expandRejected,
+                  before: shortShots,
+                  after: segmentWriter
+                    .shotCharStats(beatPlan, sharesAfter)
+                    .filter((shot) =>
+                      [...shortShots, ...(expandedBody.supplement || [])].some(
+                        (item) => item.id === shot.id
+                      )
+                    ),
+                }
+              : null;
 
             console.log(
               JSON.stringify({
@@ -2311,6 +2354,7 @@ router.post('/chat', async (req, res) => {
     }
 
     // 段落形态徽标：重写后仍不合规才挂，避免把「查过且合格」写成打扰。
+    if (beatCheck && shapeCheck) beatCheck.shapeSummary = shapeCheck.summary;
     const shapeBadge = shapeCheck.applicable && shapeCheck.violations.length
       ? `【段落自检：第${shapeCheck.beatIds
           .map((id) => String(id).replace(/^B/i, ''))
@@ -2324,6 +2368,7 @@ router.post('/chat', async (req, res) => {
           userId: req.userId,
           paragraphs: shapeCheck.totalParagraphs,
           avgChars: shapeCheck.avgChars,
+          summary: shapeCheck.summary,
           beatIds: shapeCheck.beatIds,
           violations: shapeCheck.violations.map((row) => ({
             beat: row.beatId,
@@ -2336,6 +2381,32 @@ router.post('/chat', async (req, res) => {
       );
     }
 
+    // 调用预算记账：按类别统计实际消耗，并记明哪一类把预算用掉。
+    // 旧交付只写「达到上限」，看不出是重写吃光了扩写的份额。
+    let callBudget = null;
+    if (segmented) {
+      callBudget = segmentWriter.summarizeCallBudget(segmented.calls, {
+        limit: segmentWriter.MAX_SEGMENT_CALLS,
+        exhaustedBy: segmented.budgetExhaustedBy || '',
+        skippedGroups: segmented.skippedGroups || [],
+        continuationSkipped: segmented.continuationSkipped || 0,
+      });
+      if (beatCheck) beatCheck.callBudget = callBudget;
+      console.log(
+        JSON.stringify({
+          event: 'ai_segment_budget',
+          traceId,
+          userId: req.userId,
+          ...callBudget,
+        })
+      );
+      const labels = { initial: '起稿', continuation: '续写', rewrite: '重写', expand: '扩写' };
+      const parts = Object.keys(labels)
+        .filter((kind) => callBudget.byKind[kind])
+        .map((kind) => `${labels[kind]} ${callBudget.byKind[kind]}`);
+      payload.reason = `分段起稿（${segmented.groups.length} 组 / ${callBudget.used} 次调用：${parts.join('、')}）`;
+    }
+
     const badge = beatPlan
       ? beatBadge({
           coverage: beatCheck,
@@ -2345,7 +2416,9 @@ router.post('/chat', async (req, res) => {
           truncated: finalResult.finishReason === 'length',
         })
       : '';
-    const segmentBadge = segmented ? segmentWriter.segmentBadge(segmented.degraded) : '';
+    const segmentBadge = segmented
+      ? segmentWriter.segmentBadge(segmented.degraded, segmented.budgetExhaustedBy)
+      : '';
     const truncationBadge =
       segmented && segmented.truncated
         ? `【字数安全上限 ${segmentWriter.MAX_CHAPTER_CHARS}：已截到最后一个完整段】`

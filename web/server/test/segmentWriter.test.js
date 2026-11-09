@@ -806,6 +806,184 @@ test('总调用超限时降级交付并打徽标，不无限重试', async () =>
   assert.match(segmentWriter.segmentBadge(draft.degraded), /调用次数达到上限/);
 });
 
+test('W1 预算表四类之和等于总上限，优先级固定', () => {
+  const budget = segmentWriter.SEGMENT_CALL_BUDGET;
+  assert.strictEqual(
+    Object.values(budget).reduce((sum, n) => sum + n, 0),
+    segmentWriter.MAX_SEGMENT_CALLS,
+    '分类配额必须刚好等于总上限，不能偷偷加钱'
+  );
+  assert.strictEqual(budget.draft, 4);
+  assert.strictEqual(budget.rewrite, 2);
+  assert.strictEqual(budget.expand, 2);
+});
+
+test('W1 三组起稿只拿 4 次：3 次初稿 + 最多 1 次续写，续写让位', async () => {
+  const plan = makePlan(8);
+  const runner = makeRunner([body('甲', 8), body('乙', 8), body('丙', 8)]);
+
+  const draft = await segmentWriter.draftInSegments({
+    plan,
+    runSegment: runner,
+    maxCalls: segmentWriter.SEGMENT_CALL_BUDGET.draft,
+  });
+
+  assert.strictEqual(draft.groups.length, 3);
+  assert.strictEqual(draft.callCount, 4, '起稿阶段只能花 4 次');
+  assert.strictEqual(
+    draft.calls.filter((call) => call.kind === 'initial').length,
+    3,
+    '三组初稿必须都写到'
+  );
+  assert.strictEqual(
+    draft.calls.filter((call) => call.kind === 'continuation').length,
+    1,
+    '续写最多一次'
+  );
+  assert.strictEqual(draft.continuationSkipped, 2, '另外两组的续写必须让给重写/扩写');
+  assert.ok(draft.content.includes('丙第1段'), '续写不能挤掉第三组初稿');
+});
+
+test('W1 重写只吃自己的 2 次配额，剩余组记名并归因到 rewrite', async () => {
+  const plan = makePlan(8);
+  const groups = segmentWriter.planSegments(plan);
+  groups.forEach((group) => {
+    group.content = body(`原${group.index}`, 8);
+  });
+  const runner = parsedRunner([
+    beatReply('B1', Array.from({ length: 3 }, () => '改'.repeat(100))),
+    beatReply('B4', Array.from({ length: 3 }, () => '改'.repeat(100))),
+    beatReply('B7', Array.from({ length: 3 }, () => '改'.repeat(100))),
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: ['B1', 'B4', 'B7'], weak: [] },
+    runSegment: runner,
+    callCount: segmentWriter.SEGMENT_CALL_BUDGET.draft,
+    maxCalls: segmentWriter.SEGMENT_CALL_BUDGET.draft + segmentWriter.SEGMENT_CALL_BUDGET.rewrite,
+  });
+
+  assert.strictEqual(out.calls.length, 2, '重写只能发起 2 次');
+  assert.strictEqual(out.callCount, 6);
+  assert.strictEqual(out.degraded, 'call_limit');
+  assert.strictEqual(out.budgetExhaustedBy, 'rewrite', '必须记明是重写把配额用掉');
+  assert.deepStrictEqual(out.skippedGroups, [2], '第三组必须留名，不能静默跳过');
+});
+
+test('W1 两组起稿仍可各续写一次，不浪费配额', async () => {
+  const plan = makePlan(4);
+  const runner = makeRunner([body('甲', 8), body('乙', 8)]);
+
+  const draft = await segmentWriter.draftInSegments({
+    plan,
+    runSegment: runner,
+    maxCalls: segmentWriter.SEGMENT_CALL_BUDGET.draft,
+  });
+
+  assert.strictEqual(draft.groups.length, 2);
+  assert.strictEqual(draft.callCount, 4);
+  assert.strictEqual(draft.continuationSkipped, 0);
+});
+
+test('W1 预算记账按类别统计实际消耗，并带出耗尽类别', () => {
+  const calls = [
+    { kind: 'initial' },
+    { kind: 'initial' },
+    { kind: 'initial' },
+    { kind: 'continuation' },
+    { kind: 'rewrite' },
+    { kind: 'rewrite' },
+    { kind: 'expand' },
+    { kind: 'expand' },
+  ];
+  const out = segmentWriter.summarizeCallBudget(calls, {
+    exhaustedBy: 'expand',
+    skippedGroups: [2],
+  });
+
+  assert.deepStrictEqual(out.byKind, {
+    initial: 3,
+    continuation: 1,
+    rewrite: 2,
+    expand: 2,
+  });
+  assert.strictEqual(out.used, 8);
+  assert.strictEqual(out.remaining, 0);
+  assert.strictEqual(out.exhaustedBy, 'expand');
+  assert.deepStrictEqual(out.skippedGroups, [2]);
+  assert.strictEqual(out.limit, segmentWriter.MAX_SEGMENT_CALLS);
+});
+
+test('W1 预算耗尽徽标写明类别，不再统称分段起稿到上限', () => {
+  assert.match(segmentWriter.segmentBadge('call_limit', 'rewrite'), /重写的调用预算用尽/);
+  assert.match(segmentWriter.segmentBadge('call_limit', 'expand'), /扩写的调用预算用尽/);
+  assert.match(segmentWriter.segmentBadge('call_limit'), /调用次数达到上限/);
+});
+
+test('W1 扩写预算不够时先覆盖每个组，不让第一组吃光两次额度', async () => {
+  const plan = makePlan(4, 5);
+  const groups = segmentWriter.planSegments(plan);
+  groups.forEach((group, index) => {
+    group.content = body(`原${index}`, 10);
+  });
+  const seen = [];
+  const runSegment = async (meta) => {
+    seen.push(meta.group.index);
+    return {
+      content: '',
+      parsed: {
+        beats: meta.group.beats.map((beat) => ({
+          id: beat.id,
+          paragraphs: ['短'.repeat(30), '短'.repeat(30)],
+        })),
+      },
+      finishReason: 'stop',
+    };
+  };
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [
+      { id: 'B1', chars: 300, target: 700 },
+      { id: 'B3', chars: 300, target: 700 },
+    ],
+    runSegment,
+    callCount: 0,
+    maxCalls: 2,
+  });
+
+  assert.deepStrictEqual(seen, [0, 1], '两次预算必须一组一次，不能 0,0');
+  assert.strictEqual(out.calls.length, 2);
+  assert.strictEqual(out.degraded, 'call_limit');
+  assert.strictEqual(out.budgetExhaustedBy, 'expand');
+  assert.deepStrictEqual(out.skippedGroups, [0], '第二轮没预算时留下被挡的组');
+});
+
+test('W2 形态违规按类型计数，总数与违规数组一致', () => {
+  const plan = makePlan(2, 3);
+  const text = [
+    '短'.repeat(30),
+    '长'.repeat(150),
+    '中'.repeat(100),
+    '中'.repeat(100),
+    '中'.repeat(100),
+    '中'.repeat(100),
+  ].join('\n\n');
+
+  const shape = segmentWriter.checkParagraphShape(plan, text);
+
+  assert.strictEqual(shape.summary.total, shape.violations.length);
+  assert.strictEqual(shape.summary.fragment, 1);
+  assert.strictEqual(shape.summary.too_long, 1);
+  assert.strictEqual(
+    Object.keys(shape.summary).sort().join(','),
+    'corner_quote,count,dialogue_stack,fragment,short_run,too_long,total'
+  );
+});
+
 test('缺拍只重写对应组，其他组正文原样保留', async () => {
   const plan = makePlan(4);
   const draftRunner = makeRunner([body('甲', 8), body('乙', 8)]);

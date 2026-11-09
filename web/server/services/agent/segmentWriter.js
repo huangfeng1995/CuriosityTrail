@@ -31,8 +31,29 @@ const TARGET_CHAPTER_CHARS = 5000;
 /** 安全上限：只防跑飞（7000 以上），正常写作不会触发截断。 */
 const MAX_CHAPTER_CHARS = 7000;
 
-/** 总调用上限：3 组起稿 + 3 次续写 + 2 次分组重写，留一点余量 */
+/** 总调用上限：成本闸门，不随阶段需要临时抬高。 */
 const MAX_SEGMENT_CALLS = 8;
+
+/**
+ * 显式调用预算表（四类之和 = MAX_SEGMENT_CALLS）。
+ *
+ * 旧的分配是「先到先得」：起稿每组最多两次（初稿 + 续写），3 组就用掉 6 次，
+ * 剩下的 2 次被形态重写吃光，扩写一次都轮不到。线上实测正是这样交付的。
+ *
+ * 现在按类别切死配额：
+ *   - draft 4：3 组初稿 + 最多 1 次续写。续写和扩写做的是同一件事（补字数），
+ *     但扩写能按拍点名、能验 80–140 字，所以续写是四类里最低优先级。
+ *   - rewrite 2：形态/禁写/缺拍按拍重写，只保最要紧的两组。
+ *   - expand 2：内容量扩写，含同拍内部再收敛一次。
+ *
+ * 固定优先级：起稿初稿（必写）> 扩写（内容量）> 重写（合规）> 续写（补字数）。
+ * 续写在起稿阶段就让位；扩写的 2 次在重写阶段被保留，不允许被重写借走。
+ */
+const SEGMENT_CALL_BUDGET = Object.freeze({
+  draft: 4,
+  rewrite: 2,
+  expand: 2,
+});
 
 /** 一组写到目标的这个比例以下，就认为提前收尾。实测 70% 会放过 72% 的短组，提到 80%。 */
 const MIN_TARGET_RATIO = 0.8;
@@ -989,7 +1010,14 @@ function checkParagraphShape(plan, body) {
   const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
   const paragraphs = splitParagraphs(body);
   if (!beats.length || !paragraphs.length) {
-    return { applicable: false, totalParagraphs: 0, avgChars: 0, beatIds: [], violations: [] };
+    return {
+      applicable: false,
+      totalParagraphs: 0,
+      avgChars: 0,
+      beatIds: [],
+      violations: [],
+      summary: summarizeShapeViolations([]),
+    };
   }
 
   const ranges = beatParagraphRanges(beats, paragraphs.length);
@@ -1127,7 +1155,30 @@ function checkParagraphShape(plan, body) {
     avgChars: Math.round((totalChars / paragraphs.length) * 10) / 10,
     beatIds: [...new Set(violations.map((row) => row.beatId))],
     violations,
+    summary: summarizeShapeViolations(violations),
   };
+}
+
+/** 违规按类型计数：先分清 42 条里各类占多少，再谈放宽还是改判定。 */
+const SHAPE_KINDS = [
+  'count',
+  'fragment',
+  'too_long',
+  'short_run',
+  'dialogue_stack',
+  'corner_quote',
+];
+
+function summarizeShapeViolations(violations) {
+  const summary = { total: 0 };
+  for (const kind of SHAPE_KINDS) summary[kind] = 0;
+  for (const row of violations || []) {
+    const kind = String(row && row.kind ? row.kind : '');
+    if (!kind) continue;
+    summary[kind] = (summary[kind] || 0) + 1;
+    summary.total += 1;
+  }
+  return summary;
 }
 
 /**
@@ -1270,6 +1321,8 @@ async function draftInSegments({
   const calls = [];
   let callCount = 0;
   let degraded = '';
+  let budgetExhaustedBy = '';
+  let continuationSkipped = 0;
   let finishReason = 'stop';
   let boundaryTrimmed = 0;
   let boundaryConflicts = 0;
@@ -1301,6 +1354,7 @@ async function draftInSegments({
     if (degraded) break;
     if (callCount >= maxCalls) {
       degraded = 'call_limit';
+      budgetExhaustedBy = 'draft';
       break;
     }
 
@@ -1333,11 +1387,18 @@ async function draftInSegments({
     group.content = bounded.content;
 
     // 续写只补到本组目标的字数；到量即停，不再用段数或 105% 硬线二次裁剪。
-    if (
-      needsContinuation(group, closingHit) &&
-      callCount < maxCalls &&
-      countWords(group.content) < group.targetChars
-    ) {
+    //
+    // 续写是四类调用里最低优先级：必须给后面尚未起稿的组留出初稿调用。
+    // 旧逻辑只看 callCount < maxCalls，3 组时前两组各续写一次就把 8 次预算
+    // 吃掉了 6 次，轮到形态重写只剩 2 次，扩写直接为 0。
+    const remainingInitials = groups.length - 1 - groups.indexOf(group);
+    const needsMore =
+      needsContinuation(group, closingHit) && countWords(group.content) < group.targetChars;
+    const canContinue = callCount + 1 + remainingInitials <= maxCalls;
+    if (needsMore && !canContinue) {
+      continuationSkipped += 1;
+    }
+    if (needsMore && canContinue) {
       progress({ phase: 'continue', index: group.index, total: groups.length });
       const remainingChars = Math.max(120, group.targetChars - countWords(group.content));
       const contInstruction = buildContinuationInstruction({
@@ -1388,6 +1449,8 @@ async function draftInSegments({
     calls,
     callCount,
     degraded,
+    budgetExhaustedBy,
+    continuationSkipped,
     continuations: groups.filter((g) => g.continued).length,
     continuationDropped,
     boundaryTrimmed,
@@ -1437,6 +1500,8 @@ async function rewriteMissingGroups({
   const calls = [];
   let count = callCount;
   let degraded = '';
+  let budgetExhaustedBy = '';
+  const skippedGroups = [];
   let finishReason = 'stop';
   let rewroteGroups = 0;
   let boundaryTrimmed = 0;
@@ -1464,13 +1529,17 @@ async function rewriteMissingGroups({
   );
 
   for (const group of affected) {
-    if (count >= maxCalls) {
-      degraded = 'call_limit';
-      break;
-    }
-
     const beats = factsOnly ? group.beats : group.beats.filter((beat) => wanted.has(beat.id));
     if (!beats.length) continue;
+
+    // 预算表切死的重写配额：到顶只交付已改的组，剩余组必须记名，
+    // 不能只写一句「到上限」——线上就是这样把「重写吃光预算」藏起来的。
+    if (count >= maxCalls) {
+      degraded = 'call_limit';
+      budgetExhaustedBy = 'rewrite';
+      skippedGroups.push(group.index);
+      continue;
+    }
 
     progress({ phase: 'rewrite', index: group.index, total: groups.length, beatIds: beats.map((b) => b.id) });
     const before = groups
@@ -1600,6 +1669,8 @@ async function rewriteMissingGroups({
     calls,
     callCount: count,
     degraded,
+    budgetExhaustedBy,
+    skippedGroups,
     rewroteGroups,
     failedGroups,
     boundaryTrimmed,
@@ -1736,6 +1807,8 @@ async function expandMissingBeats({
   const calls = [];
   let count = callCount;
   let degraded = '';
+  let budgetExhaustedBy = '';
+  const skippedGroups = [];
   let finishReason = 'stop';
   const expanded = [];
   const unconverged = [];
@@ -1743,83 +1816,90 @@ async function expandMissingBeats({
   const supplemented = [];
 
   let passShots = shots;
+  const acceptedBeatIds = new Set();
+  const attemptHistory = new Map();
+  const feedbackHistory = new Map();
+
   for (let pass = 0; passShots.length && pass < 2; pass += 1) {
     const affected = groupsForIds(groups, passShots.map((shot) => shot.id));
 
+    // 每轮先给每个待补的组各一次机会（广度优先），预算不够时不会让第一组
+    // 把两次额度吃光、后面的组一次都轮不到。第二次尝试放在下一轮。
     for (const group of affected) {
       const groupShots = passShots.filter((shot) => group.beatIds.includes(shot.id));
       const beats = group.beats.filter((beat) => groupShots.some((shot) => shot.id === beat.id));
       if (!beats.length) continue;
 
       const snapshot = group.content;
-      let feedback = '';
+      let feedback = feedbackHistory.get(group.index) || '';
       let accepted = false;
       let lastProblems = [];
-      const attemptRecords = [];
 
-      for (let attempt = 0; attempt < 2 && !accepted; attempt += 1) {
-        if (count >= maxCalls) {
-          degraded = 'call_limit';
-          break;
-        }
-        progress({ phase: 'expand', index: group.index, total: groups.length, beatIds: beats.map((b) => b.id) });
-        const instruction = buildExpandInstruction({ group, groups, beats, shots: groupShots, feedback });
-        count += 1;
-        const startedAt = Date.now();
-        let out;
-        try {
-          out = await runSegment({ instruction, group, kind: 'expand', callIndex: count });
-        } catch (err) {
-          if (err.name === 'AbortError' || err.code === 'AI_ABORTED') throw err;
-          degraded = err.code === 'AI_TIMEOUT' ? 'timeout' : 'error';
-          break;
-        }
+      if (count >= maxCalls) {
+        degraded = 'call_limit';
+        budgetExhaustedBy = 'expand';
+        skippedGroups.push(group.index);
+        break;
+      }
+      progress({ phase: 'expand', index: group.index, total: groups.length, beatIds: beats.map((b) => b.id) });
+      const instruction = buildExpandInstruction({ group, groups, beats, shots: groupShots, feedback });
+      count += 1;
+      const startedAt = Date.now();
+      let out;
+      try {
+        out = await runSegment({ instruction, group, kind: 'expand', callIndex: count });
+      } catch (err) {
+        if (err.name === 'AbortError' || err.code === 'AI_ABORTED') throw err;
+        degraded = err.code === 'AI_TIMEOUT' ? 'timeout' : 'error';
+        break;
+      }
 
-        const entry = {
-          call: count,
-          kind: 'expand',
-          group: group.index,
-          beatIds: beats.map((b) => b.id),
-          durationMs: Date.now() - startedAt,
-          finishReason: out?.finishReason || '',
-          chars: countWords(String(out?.content || '')),
-          attempt: attempt + 1,
-          usage: out?.usage || null,
-        };
-        calls.push(entry);
-        log(entry);
-        if (out?.finishReason) finishReason = out.finishReason;
+      const entry = {
+        call: count,
+        kind: 'expand',
+        group: group.index,
+        beatIds: beats.map((b) => b.id),
+        durationMs: Date.now() - startedAt,
+        finishReason: out?.finishReason || '',
+        chars: countWords(String(out?.content || '')),
+        attempt: pass + 1,
+        usage: out?.usage || null,
+      };
+      calls.push(entry);
+      log(entry);
+      if (out?.finishReason) finishReason = out.finishReason;
 
-        const rows = expandedBeatsFrom(out, groupShots);
-        const lengths = {};
-        for (const beat of beats) {
-          const row = rows.find((item) => item.id === beat.id);
-          lengths[beat.id] = row ? row.paragraphs.map((paragraph) => countWords(paragraph)) : [];
-        }
-        attemptRecords.push(lengths);
+      const rows = expandedBeatsFrom(out, groupShots);
+      const lengths = {};
+      for (const beat of beats) {
+        const row = rows.find((item) => item.id === beat.id);
+        lengths[beat.id] = row ? row.paragraphs.map((paragraph) => countWords(paragraph)) : [];
+      }
+      const history = attemptHistory.get(group.index) || [];
+      history.push(lengths);
+      attemptHistory.set(group.index, history);
 
-        const problems = [];
-        for (const beat of beats) {
-          const row = rows.find((item) => item.id === beat.id);
-          if (!row) {
-            problems.push(`${beat.id}: 没有返回这一拍的正文`);
-            continue;
-          }
-          for (const problem of expandBeatProblems(beat, row.paragraphs)) {
-            problems.push(`${beat.id}: ${problem}`);
-          }
-        }
-
-        // 先按单拍约束判，避免把不合规段落写回正文。
-        if (problems.length) {
-          lastProblems = problems;
-          feedback = problems.join('\n');
-          if (attempt === 1) {
-            unconverged.push({ group: group.index, beatIds: beats.map((b) => b.id), problems });
-          }
+      const problems = [];
+      for (const beat of beats) {
+        const row = rows.find((item) => item.id === beat.id);
+        if (!row) {
+          problems.push(`${beat.id}: 没有返回这一拍的正文`);
           continue;
         }
+        for (const problem of expandBeatProblems(beat, row.paragraphs)) {
+          problems.push(`${beat.id}: ${problem}`);
+        }
+      }
 
+      // 先按单拍约束判，避免把不合规段落写回正文。
+      if (problems.length) {
+        lastProblems = problems;
+        feedback = problems.join('\n');
+        feedbackHistory.set(group.index, feedback);
+        if (pass === 1) {
+          unconverged.push({ group: group.index, beatIds: beats.map((b) => b.id), problems });
+        }
+      } else {
         group.content = snapshot;
         spliceExpandedBeats(group, rows);
 
@@ -1843,46 +1923,59 @@ async function expandMissingBeats({
             .join('\n');
           lastProblems = [detail];
           feedback = detail;
+          feedbackHistory.set(group.index, feedback);
           group.content = snapshot;
-          if (attempt === 1) {
+          if (pass === 1) {
             unconverged.push({ group: group.index, beatIds: [...beatIds], problems: [feedback] });
           }
-          continue;
+        } else {
+          accepted = true;
+          expanded.push({ group: group.index, beatIds: [...beatIds], attempt: pass + 1 });
+          for (const beat of beats) acceptedBeatIds.add(beat.id);
         }
-
-        accepted = true;
-        expanded.push({ group: group.index, beatIds: [...beatIds], attempt: attempt + 1 });
       }
 
       if (!accepted) {
         group.content = snapshot;
-        // 两次都被拒：逐拍记录两次实际段长，不再只留一句「未收敛」。
-        if (!degraded && attemptRecords.length === 2) {
+        // 两轮都被拒：逐拍记录两次实际段长，不再只留一句「未收敛」。
+        const records = attemptHistory.get(group.index) || [];
+        if (!degraded && records.length === 2) {
           for (const beat of beats) {
             expandRejected.push({
               group: group.index,
               beatId: beat.id,
-              attempts: attemptRecords.map((record) => record[beat.id] || []),
+              attempts: records.map((record) => record[beat.id] || []),
               problems: lastProblems.filter((problem) => problem.startsWith(`${beat.id}: `)),
             });
           }
         }
       }
+      if (degraded) break;
     }
 
     if (degraded || pass === 1) break;
 
-    // 扩写后重算拍区间与纯汉字数：替换会让后面的拍区间整体漂移。
-    if (typeof measureShots !== 'function') break;
-    const report = measureShots(composeChapterContent({ groups, mergeScenes }).content);
-    if (!report || report.applicable === false) break;
-    const newly = findShortShots(plan, report).filter(
-      (shot) => !allShots.some((item) => item.id === shot.id)
-    );
-    if (!newly.length) break;
-    allShots.push(...newly);
-    supplemented.push(...newly);
-    passShots = newly;
+    // 第二轮：先保留仍被拒的拍（补一次），再加上扩写后重算发现的新欠额拍。
+    // 同一轮内允许补一次，不无限循环。
+    const stillShots = passShots.filter((shot) => !acceptedBeatIds.has(shot.id));
+    let nextShots = stillShots;
+    if (typeof measureShots === 'function') {
+      const report = measureShots(composeChapterContent({ groups, mergeScenes }).content);
+      if (report && report.applicable !== false) {
+        const newly = findShortShots(plan, report).filter(
+          (shot) => !allShots.some((item) => item.id === shot.id)
+        );
+        if (newly.length) {
+          allShots.push(...newly);
+          supplemented.push(...newly);
+        }
+        const byId = new Map();
+        for (const shot of [...stillShots, ...newly]) byId.set(shot.id, shot);
+        nextShots = [...byId.values()];
+      }
+    }
+    if (!nextShots.length) break;
+    passShots = nextShots;
   }
 
   const composed = composeChapterContent({ groups, mergeScenes });
@@ -1896,6 +1989,8 @@ async function expandMissingBeats({
     calls,
     callCount: count,
     degraded,
+    budgetExhaustedBy,
+    skippedGroups,
     finishReason,
     expanded,
     supplement: supplemented,
@@ -1908,10 +2003,41 @@ async function expandMissingBeats({
   };
 }
 
+/**
+ * 调用预算记账：按调用类别统计实际消耗，并把「哪一类把预算用掉」带出来。
+ *
+ * 交付时写进 beatCheck.callBudget。只写「达到上限」不够——线上那次
+ * 看到的是 6 次起稿调用，真正把剩余预算用光的是形态重写，扩写一次没跑。
+ */
+function summarizeCallBudget(calls, options = {}) {
+  const limit = Number(options.limit) || MAX_SEGMENT_CALLS;
+  const byKind = { initial: 0, continuation: 0, rewrite: 0, expand: 0 };
+  for (const call of calls || []) {
+    const kind = String(call && call.kind ? call.kind : 'unknown');
+    byKind[kind] = (byKind[kind] || 0) + 1;
+  }
+  return {
+    limit,
+    used: (calls || []).length,
+    remaining: Math.max(0, limit - (calls || []).length),
+    quotas: { ...SEGMENT_CALL_BUDGET },
+    byKind,
+    exhaustedBy: options.exhaustedBy || '',
+    skippedGroups: options.skippedGroups || [],
+    continuationSkipped: Number(options.continuationSkipped) || 0,
+    priority: ['initial', 'expand', 'rewrite', 'continuation'],
+  };
+}
+
 /** 分段起稿降级时给作者看的徽标。 */
-function segmentBadge(degraded) {
+function segmentBadge(degraded, exhaustedBy = '') {
   if (!degraded) return '';
-  if (degraded === 'call_limit') return '【分段起稿：调用次数达到上限，已交付已写部分】';
+  if (degraded === 'call_limit') {
+    const stage = { draft: '起稿', rewrite: '重写', expand: '扩写' }[exhaustedBy] || '';
+    return stage
+      ? `【分段起稿：${stage}的调用预算用尽，已交付已写部分】`
+      : '【分段起稿：调用次数达到上限，已交付已写部分】';
+  }
   if (degraded === 'timeout') return '【分段起稿：有分组超时，已交付已写部分】';
   if (degraded === 'empty') return '【分段起稿：有分组没有返回正文，已交付已写部分】';
   return '【分段起稿：有分组失败，已交付已写部分】';
@@ -1922,6 +2048,8 @@ module.exports = {
   TARGET_CHAPTER_CHARS,
   MAX_CHAPTER_CHARS,
   MAX_SEGMENT_CALLS,
+  SEGMENT_CALL_BUDGET,
+  summarizeCallBudget,
   MIN_TARGET_RATIO,
   SHOT_FILL_RATIO,
   SHOT_RECORD_RATIO,
