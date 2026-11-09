@@ -182,10 +182,12 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
     assert.match(instruction, /全章按长章体量写/);
     assert.match(instruction, /4800–5600 字/);
     assert.match(instruction, /每拍段数按节拍表给的段数为准/, '段数按拍，允许 ±2');
-    assert.match(instruction, /每个自然段 80–140 字（含标点）/, '段长是硬约束，不再只描述风格');
-    assert.match(instruction, /禁止连续 3 段不足 20 字/);
-    assert.match(instruction, /一段写一个小场景/, '段落要按小场景成段，不能切成碎片');
-    assert.match(instruction, /段内 3–6 句/);
+    assert.match(instruction, /段长按范文分布写，不逐段卡 80–140/, '段长改成分布校验');
+    assert.match(instruction, /单段不得超过 320 字/, '唯一硬拦是 320 字');
+    assert.match(instruction, /40–79 字段不超过全章 39%/, '40–79 占比按范文实测 +10pp');
+    assert.match(instruction, /连续 3 段都 <40 字才算「碎」/, '连续短段阈值来自实测');
+    assert.match(instruction, /段均向范文 112 字看齐/, '段均按范文中心值');
+    assert.match(instruction, /不要为凑 80 字把短段拉长/, '不能把短段硬拉长');
     assert.match(instruction, /对白必须与动作\/叙述合并在同一段/, '对白不得连续独立成段');
     assert.match(instruction, /引号统一用全角 “”，禁止使用「」/);
     assert.match(instruction, /关键交流必须写成直接引语/, '关键对话必须用人物原话');
@@ -215,7 +217,7 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
   // X1 长度优先于段数：段数只定优先区间，为压掉超长段多出的段不判失败。
   assert.match(rewrite, /段数优先落在 \d+–\d+ 段/);
   assert.match(rewrite, /允许超出计划 ±2，只记数、不判失败/);
-  assert.match(rewrite, /不许为凑段数把段落拉长/);
+  assert.match(rewrite, /不要为凑数拉长段落/);
 });
 
 test('S2 篇幅配额：组指令带每拍目标汉字数与 85% 未完成线，扩写只补不推进', () => {
@@ -265,8 +267,8 @@ test('S2 篇幅配额：组指令带每拍目标汉字数与 85% 未完成线，
   assert.match(rewrite, /只补细节、环境、动作、对话与人物心理，不推进情节、不新增事件、不提前揭示/);
   assert.match(rewrite, /这些拍节拍齐全，只是篇幅不足/);
   assert.match(rewrite, /不许用加空段、拆句、加标点凑字数/);
-  assert.match(rewrite, /扩写后仍须每段 80–140 字（含标点）/);
-  assert.match(rewrite, /为压掉超长段多出的段只记数、不判失败/);
+  assert.match(rewrite, /段长按范文分布（多数 80–140/);
+  assert.match(rewrite, /只记数、不判失败/);
 });
 
 /** 六拍计划，B3（identity）目标 1500 汉字 = 30% × 5000。 */
@@ -1000,40 +1002,44 @@ test('W1 扩写预算不够时先覆盖每个组，不让第一组吃光两次�
 });
 
 test('W2 形态违规按类型计数，总数与违规数组一致', () => {
-  const plan = makePlan(2, 3);
+  const plan = makePlan(2, 4); // 每拍计划 4 段，全章 8 段
   const text = [
     '短'.repeat(30),
-    '长'.repeat(150),
-    '中'.repeat(100),
-    '中'.repeat(100),
-    '中'.repeat(100),
-    '中'.repeat(100),
+    '短'.repeat(30),
+    '短'.repeat(30),
+    '中'.repeat(60),
+    '中'.repeat(60),
+    '中'.repeat(60),
+    '中'.repeat(60),
+    '长'.repeat(321),
   ].join('\n\n');
 
   const shape = segmentWriter.checkParagraphShape(plan, text);
 
   assert.strictEqual(shape.summary.total, shape.violations.length);
-  assert.strictEqual(shape.summary.fragment, 1);
-  assert.strictEqual(shape.summary.too_long, 1);
+  assert.strictEqual(shape.summary.short_run, 1, '连续 3 段 <40 判碎');
+  assert.strictEqual(shape.summary.fragment_ratio, 1, '40–79 占 50%，超过 38.9%');
+  assert.strictEqual(shape.summary.too_long, 1, '单段 321 字超过硬拦');
+  assert.strictEqual(shape.summary.avg, 1, '段均 81.4 低于 95.3');
   assert.strictEqual(
     Object.keys(shape.summary).sort().join(','),
-    'corner_quote,count,dialogue_stack,fragment,short_run,too_long,total'
+    'avg,corner_quote,count,dialogue_stack,fragment_ratio,short_run,too_long,total'
   );
 });
 
-test('X1 段长按含标点判：139 个汉字 + 2 个标点 = 141 字，必须报超长', () => {
+test('X1 硬拦只有单段 >320：319 个汉字 + 2 个标点 = 321 字必须报', () => {
   const plan = makePlan(1, 1);
-  const text = `${'字'.repeat(139)}，。`;
+  const text = `${'字'.repeat(319)}，。`;
   const shape = segmentWriter.checkParagraphShape(plan, text);
 
   const row = shape.violations.find((item) => item.kind === 'too_long');
-  assert.ok(row, '按含标点口径必须报超长');
-  assert.strictEqual(row.chars, 141);
-  // 纯汉字只有 139，按纯汉字口径会误放行——这正是口径必须定死的原因。
-  assert.strictEqual([...text].filter((ch) => /[\u4e00-\u9fa5]/.test(ch)).length, 139);
+  assert.ok(row, '超过 320 必须报');
+  assert.strictEqual(row.chars, 321);
+  // 141 字不再逐段硬拦：范文自己就有 9 段在 141 以上（最长 314）。
+  assert.ok(!shape.violations.some((item) => item.kind === 'too_long' && item.chars === 141));
 });
 
-test('X1 长度优先于段数：段数超计划 ±2 但每段 80–140（含标点）时只记数不判失败', () => {
+test('X1 段数超计划 ±2 只影响 distributionOk，不单独硬拦', () => {
   const plan = makePlan(2, 3); // 每拍计划 3 段
   const text = Array.from({ length: 12 }, () => '字'.repeat(100)).join('\n\n'); // 每拍实际 6 段
   const shape = segmentWriter.checkParagraphShape(plan, text);
@@ -1042,25 +1048,21 @@ test('X1 长度优先于段数：段数超计划 ±2 但每段 80–140（含标
   assert.strictEqual(shape.summary.too_long, 0);
 
   const delivery = segmentWriter.evaluateShapeDelivery(shape);
-  assert.strictEqual(delivery.countTolerated, true);
-  assert.strictEqual(delivery.passed, true, '长度全合规时，段数超出不许判失败');
-  assert.deepStrictEqual(delivery.blocking, []);
+  assert.strictEqual(delivery.hardBlocked, false, '没有 >320 就不进硬拦');
+  assert.strictEqual(delivery.distributionOk, false, '段数越界属于分布不合规');
+  assert.strictEqual(delivery.passed, false);
 });
 
-test('X1 反向不允许：为凑段数把段落拉长，仍按超长段判失败', () => {
+test('X1 反向不允许：单段超过 320 仍按硬拦判失败', () => {
   const plan = makePlan(2, 3);
   const rows = Array.from({ length: 12 }, () => '字'.repeat(100));
-  rows[0] = '字'.repeat(141);
+  rows[0] = '字'.repeat(321);
   const shape = segmentWriter.checkParagraphShape(plan, rows.join('\n\n'));
 
   const delivery = segmentWriter.evaluateShapeDelivery(shape);
-  assert.strictEqual(delivery.lengthOk, false);
+  assert.strictEqual(delivery.hardBlocked, true);
   assert.strictEqual(delivery.passed, false);
   assert.ok(delivery.blocking.some((row) => row.kind === 'too_long'));
-  assert.ok(
-    delivery.blocking.some((row) => row.kind === 'count'),
-    '长度没守住时，段数也一并作废'
-  );
 });
 
 test('W1 重写按原因记账：形态与禁写分开计数，同组只算一次调用', () => {
@@ -1316,7 +1318,7 @@ test('段落形态：合格正文（每拍 3 段、段长 80–140）不报违�
   assert.ok(result.avgChars >= 80 && result.avgChars <= 140);
 });
 
-test('段落形态：连续 3 段不足 20 字判违规，两段带前后动作是例外', () => {
+test('段落形态：连续 3 段不足 40 字判违规，两段带前后动作是例外', () => {
   const plan = makePlan(4, 3);
 
   const threeShort = shapeRows(12, (rows) => {
@@ -1335,21 +1337,25 @@ test('段落形态：连续 3 段不足 20 字判违规，两段带前后动作�
   assert.ok(!ok.violations.some((row) => row.kind === 'dialogue_stack'), '两句以内且前后有动作句应放行');
 });
 
-test('段落形态：20–79 字碎片段、超过 140 字长段、连续独立对白、直角引号都要报', () => {
+test('段落形态：40–79 字占比超限、超过 320 字长段、连续独立对白、直角引号都要报', () => {
   const plan = makePlan(4, 3);
 
   const fragment = segmentWriter.checkParagraphShape(
     plan,
     shapeRows(12, (rows) => {
-      rows[2] = '他把门环按下去，门里有人应了一声，随后脚步声往后退。';
+      rows[0] = '中'.repeat(60);
+      rows[1] = '中'.repeat(60);
+      rows[2] = '中'.repeat(60);
+      rows[3] = '中'.repeat(60);
+      rows[4] = '中'.repeat(60);
     })
   );
-  assert.ok(fragment.violations.some((row) => row.kind === 'fragment'));
+  assert.ok(fragment.violations.some((row) => row.kind === 'fragment_ratio'), '5/12=41.7% 超过 38.9%');
 
   const tooLong = segmentWriter.checkParagraphShape(
     plan,
     shapeRows(12, (rows) => {
-      rows[1] = `${rows[1]}${rows[1]}`;
+      rows[1] = '长'.repeat(321);
     })
   );
   assert.ok(tooLong.violations.some((row) => row.kind === 'too_long'));
@@ -1396,7 +1402,7 @@ test('段落形态违规只重写违规拍所在组，指令给出段数与合�
     coverage: { covered: [], missing: [], weak: [] },
     shapeViolations: [
       { beatId: 'B4', kind: 'count', expected: 3, actual: 9, tolerance: 2 },
-      { beatId: 'B4', kind: 'fragment', chars: 40, sample: '他把门环按下去。' },
+      { beatId: 'B4', kind: 'fragment_ratio', ratio: 42, limit: 38.9, count: 5, total: 12 },
     ],
     runSegment: rewriteRunner,
     callCount: draft.callCount,
@@ -1407,9 +1413,64 @@ test('段落形态违规只重写违规拍所在组，指令给出段数与合�
   assert.strictEqual(rewriteRunner.seen[0].group.index, 1);
   assert.match(rewriteRunner.seen[0].instruction, /B4：.*段落形态不合规/);
   assert.match(rewriteRunner.seen[0].instruction, /实际 9 段，目标是 3±2 段/);
-  assert.match(rewriteRunner.seen[0].instruction, /每段 80–140 字（含标点）/);
+  assert.match(rewriteRunner.seen[0].instruction, /40–79 字段占 42%（上限 38.9%）/);
+  assert.match(rewriteRunner.seen[0].instruction, /段长按范文分布（多数 80–140/);
   assert.match(rewriteRunner.seen[0].instruction, /重写后本拍段数优先落在 \d+–\d+ 段/);
-  assert.match(rewriteRunner.seen[0].instruction, /超长段用压缩改写/);
-  assert.match(rewriteRunner.seen[0].instruction, /不许为凑段数把段落拉长/);
+  assert.match(rewriteRunner.seen[0].instruction, /超过 320 的长段才压缩/);
+  assert.match(rewriteRunner.seen[0].instruction, /先保本拍纯汉字目标，再调形状/);
   assert.strictEqual(rewritten.groups[0].content, beforeGroup, '违规拍之外的组不能被改写');
+});
+
+// ---------------------------------------------------------------------------
+// Y3 验收放宽：扩写近失微补、重写按组留痕
+// ---------------------------------------------------------------------------
+
+test('Y3.1 扩写段只差 1–4 字到 80 时就地补一句，60–75 字仍拒绝', () => {
+  const paragraphs = [
+    '甲'.repeat(76),
+    '乙'.repeat(79),
+    '丙'.repeat(75),
+    '丁'.repeat(60),
+  ];
+
+  const patches = segmentWriter.microPatchNearMiss(paragraphs);
+
+  assert.deepStrictEqual(patches.map((row) => row.index), [0, 1], '只有 76 与 79 字两段补');
+  for (const row of patches) {
+    assert.ok(row.before >= 76 && row.before <= 79, '只处理 76–79 字的近失');
+    assert.ok(row.after >= segmentWriter.SHAPE_PARAGRAPH_MIN, '补后必须达到 80 字下限');
+  }
+  assert.strictEqual(countWords(paragraphs[2]), 75, '差 5 字不补，仍拒绝');
+  assert.strictEqual(countWords(paragraphs[3]), 60, '差 20 字不补，仍拒绝');
+});
+
+test('Y3.2 重写按组留痕：低于原稿 85% 的组进 shrunkGroups，且不丢正文', async () => {
+  const plan = makePlan(4);
+  const draftRunner = makeRunner([body('甲', 8), body('乙', 8)]);
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: draftRunner });
+
+  const beforeGroup = countWords(draft.groups[1].content);
+  // 只重写 B4，且只回 2 段：本组字数必然低于原稿 85%。
+  const rewriteRunner = makeRunner(['重写这一组：\n\n' + body('乙改', 2)]);
+
+  const rewritten = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups: draft.groups,
+    coverage: { covered: [], missing: [], weak: [] },
+    shapeViolations: [{ beatId: 'B4', kind: 'count', expected: 3, actual: 9, tolerance: 2 }],
+    runSegment: rewriteRunner,
+    callCount: draft.callCount,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(rewritten.shrunkGroups.length, 1, '缩水组必须留痕');
+  const row = rewritten.shrunkGroups[0];
+  assert.strictEqual(row.group, 1);
+  assert.strictEqual(row.before, beforeGroup);
+  assert.ok(row.ratio < 0.85, `组字数比例 ${row.ratio} 应低于 0.85`);
+  assert.ok(rewritten.content.length > 0, '缩水也必须交付正文，不能整组丢弃');
+  assert.ok(
+    rewritten.groupDeltas.every((item) => typeof item.after === 'number'),
+    '每个重写组都要有前后字数'
+  );
 });

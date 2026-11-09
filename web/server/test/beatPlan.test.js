@@ -513,11 +513,11 @@ test('篇幅配比：按范文六段功能套用目标份额，识别不出的�
     result.plan.beats.map((b) => [b.id, b.shareRole, b.wordShare]),
     [
       ['B1', 'opening', 9],
-      ['B2', 'discussion', 14],
-      ['B3', 'identity', 30],
-      ['B4', 'father', 15.5],
-      ['B5', 'farewell', 25],
-      ['B6', 'departure', 6.5],
+      ['B2', 'discussion', 25.2],
+      ['B3', 'identity', 16.2],
+      ['B4', 'father', 24.6],
+      ['B5', 'farewell', 18.4],
+      ['B6', 'departure', 6.7],
     ]
   );
 });
@@ -548,11 +548,11 @@ test('篇幅配比：按 function 给出目标字数，wordShares 输出实值�
   assert.strictEqual(result.ok, true);
   assert.deepStrictEqual(
     result.plan.beats.map((b) => b.wordShare),
-    [9, 14, 30, 15.5, 25, 6.5]
+    [9, 25.2, 16.2, 24.6, 18.4, 6.7]
   );
   assert.deepStrictEqual(
     result.plan.beats.map((b) => b.targetChars),
-    [450, 700, 1500, 775, 1250, 325]
+    [450, 1260, 810, 1230, 920, 335]
   );
 
   // 按计划段数写等长段落，实际份额应落在目标 ±5pp 内。
@@ -568,12 +568,12 @@ test('篇幅配比：按 function 给出目标字数，wordShares 输出实值�
     assert.strictEqual(typeof row.hit, 'boolean');
   }
   const identity = shares.roleShares.find((row) => row.function === 'identity');
-  assert.deepStrictEqual(identity.range, [25, 35]);
-  assert.ok(identity.share >= 25, `identity 实际 ${identity.share}% 应 ≥25%`);
+  assert.deepStrictEqual(identity.range.map((v) => Math.round(v * 10) / 10), [11.2, 21.2]);
+  assert.ok(identity.share >= 11.2, `identity 实际 ${identity.share}% 应 ≥11.2%`);
   assert.strictEqual(identity.hit, true);
   const farewell = shares.roleShares.find((row) => row.function === 'farewell');
-  assert.deepStrictEqual(farewell.range, [20, 30]);
-  assert.ok(farewell.share >= 20, `farewell 实际 ${farewell.share}% 应 ≥20%`);
+  assert.deepStrictEqual(farewell.range.map((v) => Math.round(v * 10) / 10), [13.4, 23.4]);
+  assert.ok(farewell.share >= 13.4, `farewell 实际 ${farewell.share}% 应 ≥13.4%`);
 });
 
 test('R4：结构不合格时不返回 null，按最接近合法的版本交付', async () => {
@@ -626,14 +626,14 @@ test('篇幅配比：同类功能有多拍时按段数分摊该功能总份额',
   const result = validateBeatPlan(plan);
   assert.strictEqual(result.ok, true);
   const identity = result.plan.beats.filter((b) => b.shareRole === 'identity');
-  assert.deepStrictEqual(identity.map((b) => b.wordShare), [18, 12]);
+  assert.deepStrictEqual(identity.map((b) => b.wordShare), [9.7, 6.5]);
   assert.ok(
     result.plan.shareMissing.includes('father') || result.plan.shareMissing.includes('opening'),
     '未覆盖的功能要记在 shareMissing 里，不能静默'
   );
 });
 
-test('计划校验拒绝：回城/身世并进过渡拍且份额低于 20%', () => {
+test('计划校验拒绝：回城/身世并进过渡拍且份额低于 16%', () => {
   const plan = makePlan({
     beats: makePlan().beats.map((beat, index) => ({
       ...beat,
