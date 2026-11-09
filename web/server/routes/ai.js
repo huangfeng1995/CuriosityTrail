@@ -1706,10 +1706,17 @@ router.post('/chat', async (req, res) => {
     // 段落形态自检：段数 N±2、单段 20–79 / >140 字、连续 3 段不足 20 字、
     // 对白连续独立成段、引号用「」。违规只重写违规拍所在的组，不整章重写。
     let shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
-    const shapeIds = shapeCheck.beatIds;
+    // 长度优先于段数：段数超出计划 ±2、但每段都在 80–140（含标点）时，
+    // 只记录、不触发重写；超长段仍然必须拦。口径见 SHAPE_MEASURE。
+    const shapeDelivery = segmentWriter.evaluateShapeDelivery(shapeCheck);
+    const shapeIds = [
+      ...new Set(shapeDelivery.blocking.map((row) => row.beatId).filter(Boolean)),
+    ];
     if (beatCheck) {
       beatCheck.shapeViolations = shapeCheck.violations;
-      beatCheck.shapeBeatIds = shapeIds;
+      beatCheck.shapeBeatIds = shapeCheck.beatIds;
+      beatCheck.shapeDelivery = shapeDelivery;
+      beatCheck.shapeMeasure = segmentWriter.SHAPE_MEASURE;
       beatCheck.paragraphCount = shapeCheck.totalParagraphs;
       beatCheck.avgParagraphChars = shapeCheck.avgChars;
     }
@@ -2354,11 +2361,21 @@ router.post('/chat', async (req, res) => {
     }
 
     // 段落形态徽标：重写后仍不合规才挂，避免把「查过且合格」写成打扰。
-    if (beatCheck && shapeCheck) beatCheck.shapeSummary = shapeCheck.summary;
-    const shapeBadge = shapeCheck.applicable && shapeCheck.violations.length
-      ? `【段落自检：第${shapeCheck.beatIds
+    const finalShapeDelivery = segmentWriter.evaluateShapeDelivery(shapeCheck);
+    if (beatCheck && shapeCheck) {
+      beatCheck.shapeSummary = shapeCheck.summary;
+      beatCheck.shapeDelivery = finalShapeDelivery;
+      beatCheck.shapeMeasure = segmentWriter.SHAPE_MEASURE;
+    }
+    // 徽标只报仍然拦下的违规；段数因压缩而略超、长度全合规的，记在
+    // beatCheck.shapeDelivery.countTolerated 里，不打扰作者。
+    const shapeBeatIds = [
+      ...new Set(finalShapeDelivery.blocking.map((row) => row.beatId).filter(Boolean)),
+    ];
+    const shapeBadge = shapeCheck.applicable && finalShapeDelivery.blocking.length
+      ? `【段落自检：第${shapeBeatIds
           .map((id) => String(id).replace(/^B/i, ''))
-          .join('、')}拍段落形态不合规（${shapeCheck.violations.length} 条）】`
+          .join('、')}拍段落形态不合规（${finalShapeDelivery.blocking.length} 条；目标=纯汉字、段长=含标点）】`
       : '';
     if (shapeCheck.applicable) {
       console.log(
@@ -2369,6 +2386,11 @@ router.post('/chat', async (req, res) => {
           paragraphs: shapeCheck.totalParagraphs,
           avgChars: shapeCheck.avgChars,
           summary: shapeCheck.summary,
+          measure: segmentWriter.SHAPE_MEASURE,
+          lengthOk: finalShapeDelivery.lengthOk,
+          countWithinPlan: finalShapeDelivery.countWithinPlan,
+          countTolerated: finalShapeDelivery.countTolerated,
+          blocking: finalShapeDelivery.blocking.length,
           beatIds: shapeCheck.beatIds,
           violations: shapeCheck.violations.map((row) => ({
             beat: row.beatId,
@@ -2397,6 +2419,7 @@ router.post('/chat', async (req, res) => {
           event: 'ai_segment_budget',
           traceId,
           userId: req.userId,
+          measure: segmentWriter.SHAPE_MEASURE,
           ...callBudget,
         })
       );
@@ -2404,7 +2427,7 @@ router.post('/chat', async (req, res) => {
       const parts = Object.keys(labels)
         .filter((kind) => callBudget.byKind[kind])
         .map((kind) => `${labels[kind]} ${callBudget.byKind[kind]}`);
-      payload.reason = `分段起稿（${segmented.groups.length} 组 / ${callBudget.used} 次调用：${parts.join('、')}）`;
+      payload.reason = `分段起稿（${segmented.groups.length} 组 / ${callBudget.used} 次调用：${parts.join('、')}；目标=纯汉字、段长=含标点）`;
     }
 
     const badge = beatPlan

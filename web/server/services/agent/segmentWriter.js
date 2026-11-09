@@ -69,7 +69,8 @@ const PARAGRAPH_SHAPE_RULES = [
   '## 全章形态（硬约束）',
   '- 全章按长章体量写，总量大致在 4800–5600 字（含标点）；不要为凑数拉长段落，也不要写到 7000 字以上。',
   '- 每拍段数按节拍表给的段数为准，允许 ±2 段；不要把一拍压成提纲，也不要把一个动作拆成好几段。',
-  '- 每个自然段 80–140 字（含标点）：一段写一个小场景，段内 3–6 句，把动作、神态、对话、心理中的几样收在同一个节奏里；超过 140 字要拆，不足 80 字要与相邻同场景段合并。',
+  '- 每个自然段 80–140 字（含标点）：一段写一个小场景，段内 3–6 句，把动作、神态、对话、心理中的几样收在同一个节奏里。超过 140 字用压缩改写：删冗余修饰、拆句并在同段内安排节奏，不得整段拆成两段；不足 80 字补细节，或与相邻同场景段合并（合并只用于补短，不用于压长）。',
+  '- 长度优先于段数：为把超长段压进 140 字而多出一段，允许段数超出计划 ±2，只记数不判失败；反过来，不许为凑段数把段落拉长。',
   '- 禁止连续 3 段不足 20 字；短促反应、单句对白最多连续 2 段，且前后必须有动作或叙述句承接。',
   '- 对白必须与动作/叙述合并在同一段，不得连续独立成段；只有两句以内、且前后有动作句时才允许单独成段。',
   '- 引号统一用全角 “”，禁止使用「」；关键交流必须写成直接引语：用人物原话，带说话人的动作、神态或对方的反应，不要用「他说他问我是否……」这类转述代替关键对话。',
@@ -98,12 +99,26 @@ const MERGE_MAX_PARAGRAPH_CHARS = 120;
 /** 含直接引语的段落一律不参与合并。 */
 const DIRECT_QUOTE_RE = /[「」“”"]/;
 
-/** 段落形态硬约束。字数含标点，与 wordCount 口径一致。 */
+/**
+ * 段落形态硬约束。口径定死在这里，不要别处另立一套：
+ *   - 段长 = countWords，含标点；80–140 的上下限都按这个数判。
+ *   - 拍字数目标 = targetChars，纯汉字（cjkCount），不含标点。
+ *
+ * 依据是范文基线：45 段 / 5047 字 / 段均 112.16，段均就是含标点算出来的。
+ * 不能一边用含标点算段均、一边用纯汉字判上限，否则 142 字的段会被误放行。
+ */
 const SHAPE_PARAGRAPH_MIN = 80;
 const SHAPE_PARAGRAPH_MAX = 140;
 const SHAPE_FRAGMENT_MIN = 20;
 const SHAPE_BEAT_TOLERANCE = 2;
 const SHAPE_SHORT_RUN = 3;
+
+/** 交付与日志里显式写出的口径，避免「目标」和「段长」以后又被混用。 */
+const SHAPE_MEASURE = Object.freeze({
+  paragraphLength: 'countWords（含标点）',
+  shotTarget: '纯汉字（不含标点）',
+  summary: '目标=纯汉字、段长=含标点',
+});
 
 /** 只用于检出，不做替换：作者交稿后由写手改，不静默改作者文字。 */
 const CORNER_QUOTE_RE = /[「」]/;
@@ -513,9 +528,9 @@ function buildSelfCheck(group) {
   const softMax = Math.round(group.targetChars * 1.1);
   return [
     '## 交稿前自检（对照这几条，不合格就改）',
-    `- 本组总量大致在 ${softMin}–${softMax} 字（含标点）就够了，不要为凑字数拉长段落。`,
+    `- 本组总量大致在 ${softMin}–${softMax} 个汉字（纯汉字，不含标点）就够了，不要为凑字数拉长段落。`,
     '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它的代价。',
-    `- 段数按本组各拍计划（±2 段）；每段 80–140 字（含标点），不要连续 3 段不足 20 字。`,
+    `- 段数按本组各拍计划（±2 段）；长度优先于段数：为压掉超长段而多出的段只记数、不判失败，但不许为凑段数拉长段落。每段 80–140 字（含标点），不要连续 3 段不足 20 字。`,
     '- 对白与动作/叙述合并在同一段，不得连续独立成段；引号统一用全角 “”，禁止使用「」。',
     '- 关键交流用带引号的直接引语，有说话人的动作或神态承接；不要转述成「他说他问我是否」。',
     '- 每次对话都要推动一次变化，不写只为填充的寒暄。',
@@ -569,7 +584,7 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     completed.length ? buildHandoffRules({ from: '上一组' }) : '',
     '',
     '## 本组篇幅（硬约束）',
-    `本组大致写 ${group.targetChars} 字（含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。写到大致够用就停；全章大致 4800–5600 字即可，7000 字以上会被截断。`,
+    `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。写到大致够用就停；全章大致 4800–5600 字（含标点）即可，7000 字以上会被截断。`,
     '',
     groupQuotaBlock(group.beats),
     '',
@@ -642,7 +657,7 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `本组目标约 ${group.targetChars} 字（含标点），已经写了 ${written} 字，再补约 ${remainingChars} 字就够；按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
+    `本组目标约 ${group.targetChars} 个汉字（纯汉字，不含标点），已经写了 ${written} 字，再补约 ${remainingChars} 个汉字就够；按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
     '',
     groupQuotaBlock(group.beats),
     '',
@@ -760,10 +775,11 @@ function buildBeatRewriteInstruction({
       const planned = Number(b.paragraphs) || 3;
       clauses.push(
         `本拍段落形态不合规（${describeShapeViolations(shape.get(b.id))}）：` +
-          `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，每段 80–140 字（含标点），合并碎片段、拆开超长段，` +
-          '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
-          ` 重写后本拍段数必须落在 ${Math.max(1, planned - SHAPE_BEAT_TOLERANCE)}–${planned + SHAPE_BEAT_TOLERANCE} 段：` +
-          '拆超长段时不许把「太长」翻成「太少」，也不许为了凑段数把对白拆成独段。'
+          `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，每段 80–140 字（含标点）；` +
+          '碎片段补细节（必要时与相邻同场景段合并），超长段用压缩改写（删冗余修饰、同段内拆句安排节奏），' +
+          '不得整段拆成两段；对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
+          ` 重写后本拍段数优先落在 ${Math.max(1, planned - SHAPE_BEAT_TOLERANCE)}–${planned + SHAPE_BEAT_TOLERANCE} 段；` +
+          '若为压掉超长段而多出一段，段数超出计划 ±2 只记数、不判失败，但不许为凑段数把段落拉长。'
       );
     }
     const shot = expand.get(b.id);
@@ -817,9 +833,9 @@ function buildBeatRewriteInstruction({
     buildBoundaryBlock({ group, groups }),
     '',
     '## 篇幅（硬约束）',
-    `本组大致写 ${group.targetChars} 字（含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。` +
-      `本组段数必须落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段（双向约束：不能超，也不能为了拆段反而写少）。` +
-      '扩写也不许用加空段、拆句、加标点凑字数；扩写后必须仍满足每段 80–140 字、本拍段数在计划区间 ±2。',
+    `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点）：按各拍计划段数（±2 段）落段，每段 80–140 字（含标点），不要连续 3 段不足 20 字，也不要为凑字数拉长段落。` +
+      `段数优先落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段；若为压掉超长段而多出一段，允许超出计划 ±2，只记数、不判失败——长度优先于段数，但不许为凑段数把段落拉长。` +
+      '扩写也不许用加空段、拆句、加标点凑字数；扩写后仍须每段 80–140 字（含标点），段数优先落在计划 ±2，为压掉超长段多出的段只记数、不判失败。',
     '',
     '## 每拍硬约束',
     beats
@@ -1179,6 +1195,41 @@ function summarizeShapeViolations(violations) {
     summary.total += 1;
   }
   return summary;
+}
+
+/**
+ * 交付判定：长度优先于段数。
+ *
+ * 规则（与提示词、重写指令、测试名保持同一口径）：
+ *   - 段长按 countWords（含标点）判 80–140，超 140 一律算失败，必须压缩；
+ *   - 段数超出计划 ±2，只要没有超长段，只记数、不判失败——
+ *     这是「为把 166 字压进 140 而多出一段」的合法代价；
+ *   - 反过来，为凑段数把段落拉长，仍按超长段判失败。
+ *
+ * @param {Object} shape checkParagraphShape 的返回值
+ * @returns {{lengthOk:boolean,countWithinPlan:boolean,countTolerated:boolean,
+ *            passed:boolean,blocking:Array,summary:Object}}
+ */
+function evaluateShapeDelivery(shape) {
+  const summary = shape && shape.summary
+    ? shape.summary
+    : summarizeShapeViolations(shape && shape.violations);
+  const lengthOk = (summary.too_long || 0) === 0;
+  const countWithinPlan = (summary.count || 0) === 0;
+  const countTolerated = !countWithinPlan && lengthOk;
+  // 段数违规只有在「长度也没守住」时才算失败；其余类型（碎片段、连续短段、
+  // 对白堆叠、直角引号）照常拦。
+  const blocking = (shape && Array.isArray(shape.violations) ? shape.violations : []).filter(
+    (row) => row && row.kind && (row.kind !== 'count' || !lengthOk)
+  );
+  return {
+    lengthOk,
+    countWithinPlan,
+    countTolerated,
+    passed: lengthOk && blocking.length === 0,
+    blocking,
+    summary,
+  };
 }
 
 /**
@@ -1825,7 +1876,6 @@ async function expandMissingBeats({
 
   let passShots = shots;
   const acceptedBeatIds = new Set();
-  const attemptHistory = new Map();
   const feedbackHistory = new Map();
 
   for (let pass = 0; passShots.length && pass < 2; pass += 1) {
@@ -1878,14 +1928,6 @@ async function expandMissingBeats({
       if (out?.finishReason) finishReason = out.finishReason;
 
       const rows = expandedBeatsFrom(out, groupShots);
-      const lengths = {};
-      for (const beat of beats) {
-        const row = rows.find((item) => item.id === beat.id);
-        lengths[beat.id] = row ? row.paragraphs.map((paragraph) => countWords(paragraph)) : [];
-      }
-      const history = attemptHistory.get(group.index) || [];
-      history.push(lengths);
-      attemptHistory.set(group.index, history);
 
       const problems = [];
       for (const beat of beats) {
@@ -1945,17 +1987,22 @@ async function expandMissingBeats({
 
       if (!accepted) {
         group.content = snapshot;
-        // 两轮都被拒：逐拍记录两次实际段长，不再只留一句「未收敛」。
-        const records = attemptHistory.get(group.index) || [];
-        if (!degraded && records.length === 2) {
-          for (const beat of beats) {
-            expandRejected.push({
-              group: group.index,
-              beatId: beat.id,
-              attempts: records.map((record) => record[beat.id] || []),
-              problems: lastProblems.filter((problem) => problem.startsWith(`${beat.id}: `)),
-            });
-          }
+        // 每次被拒都记，不再等「两次都被拒」才留痕：
+        // 单次被拒也要能直接看出是模型写不到 80 字，还是写超 140 字。
+        for (const beat of beats) {
+          const row = rows.find((item) => item.id === beat.id);
+          const paragraphLengths = row
+            ? row.paragraphs.map((paragraph) => countWords(paragraph))
+            : [];
+          expandRejected.push({
+            group: group.index,
+            beatId: beat.id,
+            attempt: pass + 1,
+            call: count,
+            paragraphCount: paragraphLengths.length,
+            paragraphLengths,
+            problems: lastProblems.filter((problem) => problem.startsWith(`${beat.id}: `)),
+          });
         }
       }
       if (degraded) break;
@@ -2085,6 +2132,8 @@ module.exports = {
   SHAPE_PARAGRAPH_MAX,
   SHAPE_FRAGMENT_MIN,
   SHAPE_BEAT_TOLERANCE,
+  SHAPE_MEASURE,
+  SHAPE_KINDS,
   CLOSING_RE,
   splitParagraphs,
   tailParagraphs,
@@ -2094,6 +2143,8 @@ module.exports = {
   mergeSceneParagraphs,
   beatParagraphRanges,
   checkParagraphShape,
+  summarizeShapeViolations,
+  evaluateShapeDelivery,
   describeShapeViolations,
   composeChapterContent,
   beatMarkers,
