@@ -110,13 +110,25 @@ export default function Block({
     const el = e.target;
     const start = el.selectionStart;
     const end = el.selectionEnd;
-    if (start === end) return;
+    // 光标落回原处（点一下、按方向键）就没有选区了：报一次空选区，
+    // 章节头的动作栏才能及时回到不可用状态。
+    if (start === end) {
+      onSelect?.(null);
+      return;
+    }
     onSelect({
       blockId: block.id,
       start,
       end,
       text: el.value.slice(start, end),
     });
+  };
+
+  // 焦点移走即选区失效：把空选区报上去，免得动作栏挂旧字数还能点。
+  // 例外是焦点移到章节头的动作栏（键盘 Tab 过去），那一步选区仍然有效。
+  const handleBlur = (e) => {
+    if (e.relatedTarget?.closest?.('.ct-inline-toolbar')) return;
+    onSelect?.(null);
   };
 
   /**
@@ -171,6 +183,7 @@ export default function Block({
               onChange={(e) => onChange({ content: e.target.value })}
               onFocus={onFocus}
               onSelect={handleSelect}
+              onBlur={handleBlur}
               placeholder="台词…"
               className="ct-block-text ct-block-dialogue"
             />
@@ -186,6 +199,7 @@ export default function Block({
             onChange={(e) => onChange({ content: e.target.value })}
             onFocus={onFocus}
             onSelect={handleSelect}
+            onBlur={handleBlur}
             placeholder="心理描写…"
             className="ct-block-text ct-block-inner"
           />
@@ -281,6 +295,7 @@ export default function Block({
             onChange={(e) => onChange({ content: e.target.value })}
             onFocus={onFocus}
             onSelect={handleSelect}
+            onBlur={handleBlur}
             placeholder="正文…"
             className="ct-block-text ct-block-paragraph"
           />
