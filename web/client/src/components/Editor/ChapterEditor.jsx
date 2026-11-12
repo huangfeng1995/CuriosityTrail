@@ -20,6 +20,10 @@ import BlockToolbar from './BlockToolbar';
 import VersionHistoryPanel from './VersionHistoryPanel';
 import EmptyState from '../EmptyState';
 import { useIsNarrow } from '../../hooks/useMediaQuery';
+import {
+  CARD_HIGHLIGHT_EVENT,
+  emitCardHighlight,
+} from '../Sidebar/useCardOccurrences';
 
 // 保存状态对应的提示文案。状态来自 store，与真实落库进度一致。
 const SAVE_LABEL = {
@@ -65,6 +69,10 @@ export default function ChapterEditor() {
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [activeFindingKey, setActiveFindingKey] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
+  // 侧栏选了某张人物卡 / 设定卡时，正文里命中的块整块标黄。
+  // 纯视图状态：换章、关面板、换作品都靠事件清掉，不落库。
+  const [cardHighlight, setCardHighlight] = useState(null);
+  const pendingCardBlockRef = useRef(null);
   const editorRef = useRef(null);
   // 选区所在块的类型：工具条据此决定「标记」能不能用、当前类型那一项是否置灰。
   const selectedBlockType = selection
@@ -109,6 +117,42 @@ export default function ChapterEditor() {
       })
     );
   }, []);
+
+  // 侧栏选中/取消某张卡片：按命中的词给正文标黄。
+  // 事件里带 blockId 时说明作者是从「出现位置」里点了某一章，
+  // 要滚到那一块去——但切章是异步的，所以先记下来，等 blocks 到位再滚。
+  useEffect(() => {
+    const onCardHighlight = (e) => {
+      const detail = e.detail || {};
+      if (!detail.words || !detail.words.length) {
+        setCardHighlight(null);
+        pendingCardBlockRef.current = null;
+        return;
+      }
+      setCardHighlight({ words: detail.words, label: detail.label || '' });
+      if (detail.blockId) pendingCardBlockRef.current = detail.blockId;
+    };
+    window.addEventListener(CARD_HIGHLIGHT_EVENT, onCardHighlight);
+    return () => window.removeEventListener(CARD_HIGHLIGHT_EVENT, onCardHighlight);
+  }, []);
+
+  useEffect(() => {
+    const blockId = pendingCardBlockRef.current;
+    if (!blockId || !cardHighlight) return;
+    pendingCardBlockRef.current = null;
+    const el = editorRef.current?.querySelector(`[data-block-id="${blockId}"]`);
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [blocks, cardHighlight]);
+
+  // 当前章命中的块数。块级统计，与正文的标黄粒度保持一致。
+  const cardHitBlocks = useMemo(() => {
+    if (!cardHighlight?.words?.length) return 0;
+    return blocks.filter((block) => {
+      if (!block) return false;
+      const texts = [block.content, block.speaker].filter((t) => typeof t === 'string' && t);
+      return cardHighlight.words.some((w) => w && texts.some((t) => t.includes(w)));
+    }).length;
+  }, [blocks, cardHighlight]);
 
   // 选中的块被删掉（删除、撤销、换章）时，选区跟着作废，不留陈旧状态。
   useEffect(() => {
@@ -447,6 +491,24 @@ export default function ChapterEditor() {
         </div>
       </header>
 
+      {/* 卡片定位提示条。作者从左侧点了某张卡后，得知道"现在标的是谁、
+          本章有没有"，否则正文突然一片黄会让人莫名其妙。 */}
+      {cardHighlight && (
+        <div className="ct-card-highlight-bar">
+          <span>
+            正在标出「{cardHighlight.label || cardHighlight.words.join('、')}」
+            {cardHitBlocks > 0 ? `　本章 ${cardHitBlocks} 段` : '　本章没有出现'}
+          </span>
+          <button
+            type="button"
+            className="ct-card-highlight-close"
+            onClick={() => emitCardHighlight({ words: [] })}
+          >
+            取消标黄
+          </button>
+        </div>
+      )}
+
       {/* 正文区 */}
       <div ref={editorRef} className="ct-editor-scroll ct-ruled">
         <div className="ct-editor-body">
@@ -457,6 +519,7 @@ export default function ChapterEditor() {
               index={index}
               total={blocks.length}
               isActive={activeBlockId === block.id}
+              highlightWords={cardHighlight?.words || null}
               findings={findingsByBlock.get(block.id) || []}
               activeFindingKey={activeFindingKey}
               onFindingClick={focusFinding}

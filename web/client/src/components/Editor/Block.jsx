@@ -92,6 +92,7 @@ export default function Block({
   index,
   total,
   isActive,
+  highlightWords = null,
   findings = [],
   activeFindingKey = '',
   onFindingClick,
@@ -345,12 +346,20 @@ export default function Block({
   const hasFindings = findings.length > 0;
   const hasActiveFinding = findings.some((f) => f.key === activeFindingKey);
 
+  // 侧栏选中某张人物卡/设定卡时，命中词所在的块整块标黄。
+  // 只做到块级：正文是 textarea，字符级高亮没有稳定的渲染落点。
+  const isCardHit =
+    !!highlightWords?.length &&
+    [block.content, block.speaker].some(
+      (text) => typeof text === 'string' && highlightWords.some((w) => w && text.includes(w))
+    );
+
   return (
     <div
       data-block-id={block.id}
       className={`ct-block${isActive ? ' is-active' : ''}${hasFindings ? ' has-findings' : ''}${
         hasActiveFinding ? ' is-finding-active' : ''
-      }`}
+      }${isCardHit ? ' is-card-hit' : ''}`}
       style={hasFindings ? { '--ct-finding-count': findings.length } : undefined}
     >
       {renderBody()}

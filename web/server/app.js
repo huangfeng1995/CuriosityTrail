@@ -44,6 +44,7 @@ const feedbackRouter = require('./routes/feedback');
 const anchorRouter = require('./routes/anchor');
 const cardProposalsRouter = require('./routes/cardProposals');
 const pipelineRouter = require('./routes/pipeline');
+const occurrencesRouter = require('./routes/occurrences');
 
 const app = express();
 
@@ -131,6 +132,7 @@ app.use('/api/feedback', feedbackRouter);
 app.use('/api/anchor', anchorRouter);
 app.use('/api/card-proposals', cardProposalsRouter);
 app.use('/api/pipeline', pipelineRouter);
+app.use('/api/occurrences', occurrencesRouter);
 
 // 图片目录同样纳入鉴权
 app.use('/uploads', requireAuth, express.static(config.uploadsDir));

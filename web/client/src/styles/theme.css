@@ -916,6 +916,86 @@ body.ct-resizing * {
   background: var(--bamboo-dim);
 }
 
+/* ---------- 卡片出现位置 ---------- */
+/* 一条卡片 = 可点的标题行 + 展开后的章节列表；选中态整条换底色 */
+.ct-card-item {
+  border-radius: 7px;
+  transition: background-color 0.16s ease;
+}
+.ct-card-item.is-selected {
+  background: var(--bg-hover);
+}
+/* 外层已有底色，内层不要再叠一层 hover 背景 */
+.ct-card-item .ct-item:hover {
+  background: transparent;
+}
+.ct-hit-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--amber-dim);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 18px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ct-hit-badge.is-empty {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-quaternary);
+}
+.ct-hit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px 8px 12px;
+}
+.ct-hit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+.ct-hit-row:hover {
+  background: var(--bg-elevated);
+}
+.ct-hit-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ct-hit-chapter {
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+.ct-hit-count {
+  font-size: 11px;
+  color: var(--text-quaternary);
+  white-space: nowrap;
+}
+.ct-hit-snippet {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-hit-empty {
+  margin: 0 8px 8px 12px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-quaternary);
+}
+
 /* 分组小标题 */
 .ct-group-label {
   font-size: 11px;
@@ -1576,6 +1656,33 @@ body.ct-resizing * {
   margin: 0 2px;
 }
 
+/* ---------- 卡片定位提示条 ---------- */
+/* 侧栏选中某张卡后出现在章节头下方：告诉作者正在标谁、本章命中几段。 */
+.ct-card-highlight-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 32px;
+  background: var(--amber-dim);
+  border-bottom: 1px solid var(--border-faint);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.ct-card-highlight-close {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+}
+.ct-card-highlight-close:hover {
+  text-decoration: underline;
+}
+
 /* ---------- 正文区 ---------- */
 .ct-editor-scroll {
   flex: 1;
@@ -1625,6 +1732,13 @@ body.ct-resizing * {
 }
 .ct-block.is-finding-active {
   background: var(--mark-bg);
+}
+/* 侧栏选中人物卡 / 设定卡时的命中块。
+   比审稿意见的底色更实、左侧加一道竖线：这是临时查看的叠加态，
+   要能一眼从"这块有意见"里分出来。 */
+.ct-block.is-card-hit {
+  background: var(--mark-bg);
+  box-shadow: inset 3px 0 0 var(--amber);
 }
 
 .ct-block-text {
