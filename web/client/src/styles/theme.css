@@ -1384,7 +1384,7 @@ body.ct-resizing * {
   margin-top: 14px;
   padding: 9px;
   border: 1px dashed var(--border-strong);
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
@@ -1731,24 +1731,30 @@ body.ct-resizing * {
   background: var(--bg-container);
 }
 
-/* 分场 */
+/* 分场。
+   原来左右两条 1px 实线贯穿整行，配上一行颜色极淡的 ※，远看就是
+   正文里凭空多出一道横线；它跟着分场块出现，作者看不出规律。
+   现在收掉两条线，只留居中的 ※ 记号：既认得出是分场，也不会被当成
+   误画的横线。高度仍占一整格，34px 格线不受影响。 */
 .ct-scene-break {
   display: flex;
   align-items: center;
-  gap: 14px;
+  justify-content: center;
+  gap: 0;
   /* 正好占一格：分场是正文里的一个"行"，
      高度不是格子整数倍的话，下面的正文就整体错位。 */
   height: var(--ruled-size);
   padding: 0;
-  color: var(--text-quaternary);
+  color: var(--text-tertiary);
 }
+/* 保留这个节点以兼容旧数据，但不再画线 */
 .ct-scene-break-line {
-  flex: 1;
-  height: 1px;
-  background: var(--border);
+  display: none;
 }
 .ct-scene-break-mark {
-  letter-spacing: 0.4em;
+  letter-spacing: 0.5em;
+  /* letter-spacing 会在末尾多留一格，补回来才是视觉居中 */
+  padding-left: 0.5em;
   font-size: 12px;
   font-family: 'Noto Serif SC', serif;
 }
@@ -2163,12 +2169,18 @@ body.ct-resizing * {
 }
 
 /* ---------- 通知条 ---------- */
+/* 临时提示条（模型降级、调用失败等）。
+   原来是通栏贴边的一条色带，和面板内其他块不在同一条线上；
+   改成带圆角的内嵌提示条，左右留白与消息区一致。 */
 .ct-ai-notice {
-  padding: 7px 12px;
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border-radius: 7px;
   font-size: 12px;
+  line-height: 1.7;
   background: var(--amber-dim);
   color: var(--amber);
-  border-bottom: 1px solid var(--border-faint);
+  border: 1px solid var(--border-faint);
   flex-shrink: 0;
   animation: ct-suggest-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -2781,6 +2793,77 @@ body.ct-resizing * {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding-top: 2px;
+}
+/* 这一行里的 antd 按钮（发送 / 更多）跟自绘的「停止」同高同圆角，
+   切换状态时按钮不会忽大忽小。 */
+.ct-ai-actions .ant-btn {
+  height: 28px;
+  padding-inline: 12px;
+  border-radius: 7px;
+  font-size: 12.5px;
+}
+
+/* 生成中的「停止」。
+   原来是 antd 24px 小按钮 + 9px 图标 + 14px 文字，方块和字挤在一起、
+   贴着输入框右下角。现在改成胶囊：8px 实心方块 + 7px 间隙，
+   尺寸与站点按钮同一套，悬停/按下都有明确反馈。 */
+.ct-ai-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 13px;
+  border: 1px solid var(--cinnabar-glow);
+  border-radius: 999px;
+  background: var(--cinnabar-dim);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+.ct-ai-stop:hover:not(:disabled) {
+  background: var(--cinnabar-glow);
+  border-color: var(--accent);
+}
+.ct-ai-stop:active:not(:disabled) {
+  background: var(--cinnabar);
+  border-color: var(--cinnabar);
+  color: var(--paper-0);
+}
+.ct-ai-stop:disabled {
+  cursor: default;
+}
+.ct-ai-stop-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.ct-ai-stop-spin {
+  font-size: 11px;
+}
+
+/* 已停止：与「停止」同高的收尾提示，短暂显示后回到「发送」。
+   虚线边 = 一次性状态，不给它做成可点的按钮，免得又多一个入口。 */
+.ct-ai-stopped {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+  line-height: 1;
+  animation: ct-fade-in 0.2s ease both;
 }
 
 /* ============================================================

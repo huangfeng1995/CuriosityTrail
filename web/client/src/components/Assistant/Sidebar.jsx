@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Input, Button, Spin, Dropdown, App as AntApp } from 'antd';
-import { SendOutlined, ClearOutlined } from '@ant-design/icons';
-import { Square, History, MoreHorizontal } from 'lucide-react';
+import { SendOutlined, ClearOutlined, LoadingOutlined } from '@ant-design/icons';
+import { History, MoreHorizontal } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
@@ -44,6 +44,11 @@ export default function AssistantSidebar() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const abortRef = useRef(null);
   const listRef = useRef(null);
+  // 停止按钮的三态：idle（可停）→ stopping（正在中断）→ stopped（已停，短暂显示）。
+  // 中断是瞬间完成的，只在 sending 上做二元切换的话，作者点下去只会看到
+  // 按钮"啪"地变回发送，看不出到底停没停。
+  const [stopPhase, setStopPhase] = useState('idle');
+  const stopTimerRef = useRef(null);
   // 流式累加器：token 回调闭包里的 streaming 永远是旧值，必须用 ref 累
   const streamBufRef = useRef('');
   // 工具过程累积器。事件回调闭包里的 msg 永远是旧快照，
@@ -140,6 +145,10 @@ export default function AssistantSidebar() {
 
       const content = (text ?? input).trim();
       if (!content || sending) return;
+
+      // 新的一轮开始：把上一轮的「已停止」收尾提示收掉。
+      if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+      setStopPhase('idle');
 
       // 重新生成：沿用原来的用户气泡与助手气泡，只换内容。
       // 新建一对气泡会让对话流里出现"同一个问题问了两遍"。
@@ -428,6 +437,17 @@ export default function AssistantSidebar() {
         dispatch({ type: 'streaming/set', streaming: '' });
         streamBufRef.current = '';
         abortRef.current = null;
+        // 停下来的这一下要留痕：先让「停止中」站住 0.4 秒（中断本身是瞬间的，
+        // 不留这一下的话按钮会直接跳回发送，作者看不出点没点到），
+        // 再显示「已停止生成」，2.2 秒后自动回到「发送」。
+        if (aborted) {
+          stopTimerRef.current = setTimeout(() => {
+            setStopPhase('stopped');
+            stopTimerRef.current = setTimeout(() => setStopPhase('idle'), 2200);
+          }, 420);
+        } else {
+          setStopPhase('idle');
+        }
       }
 
       return !failed && !aborted && gotReply;
@@ -813,8 +833,14 @@ export default function AssistantSidebar() {
   }, [sending, dispatch, toast]);
 
   const stop = () => {
-    abortRef.current?.abort();
+    // 连点两下没有意义：第一下已经中断了，第二下只会让状态闪一下。
+    if (!abortRef.current || stopPhase === 'stopping') return;
+    setStopPhase('stopping');
+    abortRef.current.abort();
   };
+
+  // 组件卸载时把收尾定时器清掉，避免卸载后 setState。
+  useEffect(() => () => clearTimeout(stopTimerRef.current), []);
 
   if (!chapter) {
     return (
@@ -921,14 +947,26 @@ export default function AssistantSidebar() {
             />
           </Dropdown>
           <span style={{ flex: 1 }} />
-          {sending ? (
-            <Button
-              size="small"
-              icon={<Square style={{ fontSize: 9 }} />}
+          {sending || stopPhase === 'stopping' ? (
+            <button
+              type="button"
+              className="ct-ai-stop"
               onClick={stop}
+              disabled={stopPhase === 'stopping'}
+              title="停止生成"
+              aria-label="停止生成"
             >
-              停止
-            </Button>
+              {stopPhase === 'stopping' ? (
+                <LoadingOutlined spin className="ct-ai-stop-spin" />
+              ) : (
+                <span className="ct-ai-stop-glyph" aria-hidden />
+              )}
+              {stopPhase === 'stopping' ? '停止中' : '停止'}
+            </button>
+          ) : stopPhase === 'stopped' ? (
+            <span className="ct-ai-stopped" role="status">
+              已停止生成
+            </span>
           ) : (
             <Button
               type="primary"
