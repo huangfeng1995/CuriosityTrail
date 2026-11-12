@@ -64,6 +64,7 @@ export default function ChapterEditor() {
     future,
     saveStatus,
     dispatch,
+    renameChapter,
   } = useWorkspace();
 
   const [activeBlockId, setActiveBlockId] = useState(null);
@@ -381,16 +382,15 @@ export default function ChapterEditor() {
             variant="borderless"
             className="ct-chapter-title"
             defaultValue={chapter.title}
-            key={chapter.id}
+            // 标题是非受控输入（打字时不回写 state，避免每次按键重渲染）。
+            // key 里带上标题：从章节树改名后 store 里的标题变了，
+            // 这里若不重挂载，屏幕上还是旧字，直到切章才刷新。
+            key={`${chapter.id}:${chapter.title}`}
             onBlur={(e) => {
               const title = e.target.value.trim();
               if (!title || title === chapter.title) return;
-              fetch(`/api/chapters/${chapter.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify({ title }),
-              });
+              // 走 store：章节树与标题栏读同一份状态，改完两边一起变
+              renameChapter(chapter.id, title);
             }}
           />
 
