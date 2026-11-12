@@ -133,14 +133,13 @@ export default function PlotCardPanel({ workId, chapters = [] }) {
     <div className="ct-panel">
       <Segmented
         size="small"
-        block
+        className="ct-scope-seg"
         value={scope}
         onChange={setScope}
         options={[
           { value: 'chapter', label: '按章节' },
           { value: 'all', label: '全部' },
         ]}
-        style={{ marginBottom: 10 }}
       />
 
       <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
@@ -207,7 +206,7 @@ export default function PlotCardPanel({ workId, chapters = [] }) {
 
       {cards.length === 0 && (
         <p className="ct-hint">
-          还没有情节卡。动笔前先把关键节点列出来，写着写着就不会忘了自己埋过什么。
+          还没有情节卡。每章要发生的事先记成卡，写到后面就不会忘掉。
         </p>
       )}
 

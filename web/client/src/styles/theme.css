@@ -623,24 +623,28 @@ body.ct-resizing * {
   flex-shrink: 0;
 }
 
-/* ---------- 面板导航（纵向分段，7 个全露出） ---------- */
+/* ---------- 面板导航（横向等分，5 个全露出） ----------
+   左栏约 303px。原来写死 7 列网格，可面板只剩 5 个：
+   5 个 tab 挤在左侧 5/7 里，右边空出一截，相邻两项只隔 1px，
+   看着就是一排贴着边的方块。改成等分 flex，有几项均分几份。
+   选中态不再用描边方块：浅朱砂底 + 朱砂字，和条目选中态同一套语言。 */
 .ct-panel-nav {
-  /* 7 个面板排成一行：每个 38px，图标在上文字在下。
-     两行排会留下半格空位，看着像少了一个功能。 */
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 1px;
-  padding: 8px 6px;
+  display: flex;
+  gap: 2px;
+  /* 左右留白与 .ct-panel-body 对齐，tab / 分段控件 / 新建按钮同一条左缘 */
+  padding: 10px 12px 6px;
   flex-shrink: 0;
 }
 .ct-panel-tab {
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 7px 1px 6px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  gap: 4px;
+  padding: 7px 2px 6px;
+  border: 0;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
@@ -649,8 +653,7 @@ body.ct-resizing * {
   cursor: pointer;
   transition:
     background-color 0.18s ease,
-    color 0.18s ease,
-    border-color 0.18s ease;
+    color 0.18s ease;
 }
 .ct-panel-tab:hover {
   background: var(--bg-hover);
@@ -658,12 +661,11 @@ body.ct-resizing * {
 }
 .ct-panel-tab.is-active {
   background: var(--accent-dim);
-  border-color: var(--cinnabar-glow);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 500;
 }
 .ct-panel-tab-icon {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1;
   display: inline-flex;
 }
@@ -766,31 +768,50 @@ body.ct-resizing * {
   gap: 8px;
 }
 
-/* 新建按钮：虚线幽灵按钮，明确是"入口"而不是普通按钮 */
+/* 新建按钮：虚线幽灵按钮，明确是"入口"而不是普通按钮。
+   圆角、内边距与分段控件、卡片统一成 7px / 8px 10px；
+   hover 只提亮边框和文字，不整块填色。 */
 .ct-add-btn {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 7px 10px;
-  margin-bottom: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
   border: 1px dashed var(--border-strong);
   border-radius: 7px;
   background: transparent;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-family: inherit;
   font-size: 12.5px;
-  line-height: 1.4;
+  line-height: 1.45;
   cursor: pointer;
   transition:
     border-color 0.18s ease,
     color 0.18s ease,
     background-color 0.18s ease;
 }
+.ct-add-btn .anticon {
+  font-size: 12px;
+  color: var(--text-quaternary);
+  transition: color 0.18s ease;
+}
 .ct-add-btn:hover {
   border-color: var(--cinnabar-glow);
   background: var(--accent-dim);
   color: var(--accent);
+}
+.ct-add-btn:hover .anticon {
+  color: var(--accent);
+}
+
+/* 分段控件（按章节 / 全部）：跟内容宽度走，不再拉满整栏。
+   antd 默认的 block 模式会把 303px 全撑成一条实心长条。 */
+.ct-scope-seg {
+  margin-bottom: 10px;
+}
+.ct-scope-seg .ant-segmented {
+  border-radius: 7px;
 }
 
 /* 条目行：hover 才显出操作按钮，避免视觉噪音 */
@@ -943,6 +964,17 @@ body.ct-resizing * {
   line-height: 1.8;
   color: var(--text-tertiary);
   padding: 8px;
+}
+/* 资料面板的空态：左缘与列表、新建按钮对齐；
+   断行按语义收尾（避免标点落在行首），不留孤字。 */
+.ct-panel > .ct-hint {
+  margin: 2px 0 0;
+  padding: 10px 2px;
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: var(--text-tertiary);
+  line-break: strict;
+  text-wrap: pretty;
 }
 
 /* 检查结果条目：左侧色条区分严重程度 */
