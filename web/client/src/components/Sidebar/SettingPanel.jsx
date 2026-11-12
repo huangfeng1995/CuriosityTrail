@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Input, Modal, Form, message, Select, Empty } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import api from '../../api/client';
+import Markdown from '../Markdown';
 
 const CATEGORIES = ['地理', '历史', '组织', '规则', '物品', '种族', '其他'];
 
@@ -15,6 +16,9 @@ export default function SettingPanel({ workId }) {
   const [settings, setSettings] = useState([]);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
+  // 预览跟着输入框实时走：作者一边写表一边就能看到表格长什么样，
+  // 不用先保存再回头翻。
+  const contentValue = Form.useWatch('content', form) || '';
 
   const load = async () => {
     if (!workId) return;
@@ -121,7 +125,7 @@ export default function SettingPanel({ workId }) {
         title={editing?.id ? '编辑设定' : '新建设定'}
         okText="保存"
         cancelText="取消"
-        width={520}
+        width={720}
         onOk={save}
         onCancel={() => setEditing(null)}
       >
@@ -148,8 +152,27 @@ export default function SettingPanel({ workId }) {
             />
           </Form.Item>
           <Form.Item name="content" label="内容">
-            <Input.TextArea rows={6} placeholder="设定正文。写给 AI 看，不用太文学化，说清楚规则和边界即可。" />
+            <Input.TextArea
+              rows={7}
+              placeholder={
+                '设定正文。写给 AI 看，不用太文学化，说清楚规则和边界即可。\n' +
+                '要表格就用 Markdown：| 名称 | 材等 | 木料 |，下一行写 | --- | --- | --- |。'
+              }
+            />
           </Form.Item>
+          <div className="ct-md-preview">
+            <div className="ct-md-preview-head">
+              <span>预览</span>
+              <span className="ct-md-preview-hint">支持 Markdown 表格，七列也能左右滑</span>
+            </div>
+            <div className="ct-md-preview-body">
+              {contentValue.trim() ? (
+                <Markdown>{contentValue}</Markdown>
+              ) : (
+                <p className="ct-hint">内容里写的表格会在这里按表格显示。</p>
+              )}
+            </div>
+          </div>
         </Form>
       </Modal>
     </div>
