@@ -195,19 +195,51 @@ export default function ActionCard({
 
       {findings.length > 0 && (
         <div className="ct-finding-list">
+          {/* 两侧对账：列表有几条、真正进了正文沟槽几处。
+              不相等时把差数写在明面上，作者不用靠数数去猜。 */}
+          {(() => {
+            const locatedCount = findings.filter((f) => f.status === 'located').length;
+            const diff = findings.length - locatedCount;
+            return (
+              <div className={`ct-finding-audit${diff ? ' is-mismatch' : ''}`}>
+                <span>
+                  意见 {findings.length} 条 · 正文沟槽 {locatedCount} 个
+                </span>
+                {diff > 0 ? (
+                  <span className="ct-finding-audit-warn">
+                    正文少 {diff} 条（未定位，只在面板）
+                  </span>
+                ) : diff < 0 ? (
+                  <span className="ct-finding-audit-warn">正文多 {-diff} 条</span>
+                ) : (
+                  <span className="ct-finding-audit-ok">两侧编号一一对应</span>
+                )}
+              </div>
+            );
+          })()}
+
           {findings.map((finding) => {
             const located = finding.status === 'located';
             const isAdopted = adopted.has(finding.key);
             const isSelected = selectedKeys.includes(finding.key);
+            const isBlockLevel = located && finding.precision === 'block';
             return (
               <div
                 key={finding.key}
                 data-finding-key={finding.key}
                 className={`ct-finding${located ? '' : ' is-unlocated'}${
-                  finding.key === activeFindingKey ? ' is-active' : ''
-                }${isAdopted ? ' is-adopted' : ''}${isSelected ? ' is-selected' : ''}`}
+                  isBlockLevel ? ' is-block-level' : ''
+                }${finding.key === activeFindingKey ? ' is-active' : ''}${
+                  isAdopted ? ' is-adopted' : ''
+                }${isSelected ? ' is-selected' : ''}`}
                 onClick={located ? () => onJumpToFinding?.(finding) : undefined}
-                title={located ? '跳到正文对应位置' : undefined}
+                title={
+                  located
+                    ? isBlockLevel
+                      ? '跳到正文对应段落（整段级意见）'
+                      : '跳到正文对应原句'
+                    : undefined
+                }
               >
                 <span className="ct-finding-no">{finding.marker}</span>
                 <div className="ct-finding-main">
@@ -218,6 +250,11 @@ export default function ActionCard({
                   {!located && (
                     <span className="ct-finding-tag">
                       全章建议 · {REASON_LABEL[finding.reason] || '未定位'}
+                    </span>
+                  )}
+                  {isBlockLevel && (
+                    <span className="ct-finding-tag is-block-level">
+                      整段级意见 · {REASON_LABEL[finding.reason] || '原文未命中'}
                     </span>
                   )}
                 </div>

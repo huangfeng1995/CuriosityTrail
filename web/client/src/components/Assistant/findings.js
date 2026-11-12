@@ -1,11 +1,12 @@
 /**
  * 审稿意见的锚点匹配（纯函数）。
  *
- * 规则（2026-11-03 与产品确认）：
- * ① blockId 命中且该块确实包含 quote → 用这个块；
- * ② 否则按 quote 归一化后在全文找，唯一命中才用；
+ * 规则（2026-11-03 与产品确认，2026-11-12 补句级区间）：
+ * ① blockId 命中且该块确实包含 quote → 用这个块，并算出段内字符区间；
+ * ② 否则按 quote 归一化后在全文找，唯一命中才用，同样算字符区间；
  * ③ 命中多个块 → 视为未定位（宁可标成全章建议，不许乱挂）；
- * ④ 零命中 → 未定位。
+ * ④ 零命中但模型指过具体块 → 退化为整段级意见（块内整段高亮）；
+ *    连块都没指过 → 未定位。
  *
  * 归一化：去掉全部空白、全角标点转半角、省略号统一为「…」。
  * 以省略号结尾的截断片段按「…」之前的唯一前缀匹配。
@@ -62,6 +63,105 @@ function toNeedle(quote) {
   return normalized.endsWith('…') ? normalized.slice(0, -1) : normalized;
 }
 
+/**
+ * 归一化的同时保留「归一化字符 → 原文下标」的映射。
+ *
+ * 只在归一化后的文本里能判断「有没有」，但正文高亮要的是原文里的
+ * 字符区间。没有这张映射就只能整段标黄——这正是作者反馈「看不出
+ * 对应哪一句」的根因。
+ */
+function normalizeWithMap(text) {
+  const src = String(text || '');
+  let normalized = '';
+  const starts = [];
+  const ends = [];
+
+  const push = (ch, start, end) => {
+    normalized += ch;
+    starts.push(start);
+    ends.push(end);
+  };
+
+  // 归一化时空白会先被整体删掉，所以「… …」「. . .」这类被空格隔开的
+  // 连写，在正则眼里是连在一起的。这里扫描时也要跨过空白，否则
+  // 映射出来的文本和 normalizeQuote 不一致，区间就会漏算。
+  const scanRun = (from, isMember) => {
+    let j = from;
+    let count = 0;
+    let end = from;
+    const indices = [];
+    while (j < src.length) {
+      const c = src[j];
+      if (isMember(c)) {
+        count += 1;
+        end = j + 1;
+        indices.push(j);
+        j += 1;
+        continue;
+      }
+      if (/\s/.test(c)) {
+        j += 1;
+        continue;
+      }
+      break;
+    }
+    return { count, end, next: j, indices };
+  };
+
+  for (let i = 0; i < src.length; ) {
+    const ch = src[i];
+
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
+
+    // 省略号：两个及以上的 …/⋯ 归一成一个「…」，区间映射到整段原字符。
+    if (ch === '…' || ch === '⋯') {
+      const run = scanRun(i, (c) => c === '…' || c === '⋯');
+      if (run.count >= 2) {
+        push('…', i, run.end);
+      } else {
+        push(ch, i, i + 1);
+      }
+      i = run.next;
+      continue;
+    }
+
+    // 三个及以上英文句点同样归一成「…」。
+    if (ch === '.') {
+      const run = scanRun(i, (c) => c === '.');
+      if (run.count >= 3) {
+        push('…', i, run.end);
+      } else {
+        run.indices.forEach((index) => push('.', index, index + 1));
+      }
+      i = run.next;
+      continue;
+    }
+
+    push(PUNCTUATION[ch] || ch, i, i + 1);
+    i += 1;
+  }
+
+  return { text: normalized, starts, ends };
+}
+
+/** 在块内定位 quote 的原始字符区间；定位不到返回 null。 */
+export function findQuoteRange(content, quote) {
+  const needle = toNeedle(quote);
+  if (!needle) return null;
+
+  const hay = normalizeWithMap(content);
+  const at = hay.text.indexOf(needle);
+  if (at < 0) return null;
+
+  return {
+    start: hay.starts[at],
+    end: hay.ends[at + needle.length - 1],
+  };
+}
+
 function hitsOf(blocks, needle) {
   const hits = [];
   blocks.forEach((block, index) => {
@@ -75,7 +175,12 @@ function hitsOf(blocks, needle) {
  * 把一条消息里的 findings 落到当前正文的块上。
  *
  * blocks 是当前编辑中的块；每次渲染实时算，不落库、不持久化锚点。
- * 找不到的条目保留原始 quote，前端标「全章建议」。
+ *
+ * 定位精度分三级：
+ *   quote —— 块内找到原文，range 给出段内字符区间，正文只标这一句；
+ *   block —— 模型指过具体块，但原文对不上（被改过/片段过短），
+ *            退化为整段标黄，前端明确标「整段级意见」；
+ *   unlocated —— 连块都指不出来，只能作为全章建议留在面板。
  */
 export function locateFindings(blocks, findings) {
   const list = Array.isArray(blocks) ? blocks : [];
@@ -89,74 +194,113 @@ export function locateFindings(blocks, findings) {
     const needle = toNeedle(quote);
 
     const base = { id, quote, text };
-    if (!text || !quote || needle.length < MIN_QUOTE_LENGTH) {
-      return { ...base, status: 'unlocated', reason: 'invalid' };
-    }
-
-    // ① 模型自报的 blockId：块必须存在，且块内确实能匹配到 quote
     const claimedId = String(item.blockId || '').trim();
     const claimedIndex = claimedId ? list.findIndex((b) => b && b.id === claimedId) : -1;
-    if (claimedIndex >= 0 && normalizeQuote(list[claimedIndex].content).includes(needle)) {
+    const degradeToBlock = (reason) => {
+      if (!text || claimedIndex < 0) {
+        return { ...base, status: 'unlocated', reason };
+      }
       return {
         ...base,
         status: 'located',
+        precision: 'block',
         blockId: list[claimedIndex].id,
         index: claimedIndex,
+        reason,
       };
+    };
+
+    // 没有意见正文，或原文片段太短/缺失：定位不了句子。
+    if (!text) return degradeToBlock('invalid');
+    if (!quote || needle.length < MIN_QUOTE_LENGTH) return degradeToBlock('invalid');
+
+    // ① 模型自报的 blockId 优先，但块内必须真的能对上原文。
+    if (claimedIndex >= 0) {
+      const range = findQuoteRange(list[claimedIndex].content, quote);
+      if (range) {
+        return {
+          ...base,
+          status: 'located',
+          precision: 'quote',
+          blockId: list[claimedIndex].id,
+          index: claimedIndex,
+          range,
+        };
+      }
     }
 
-    // ② 全文唯一命中
+    // ② 全文唯一命中：模型报错块号时以原文为准。
     const hits = hitsOf(list, needle);
     if (hits.length === 1) {
-      return {
-        ...base,
-        status: 'located',
-        blockId: list[hits[0]].id,
-        index: hits[0],
-      };
+      const range = findQuoteRange(list[hits[0]].content, quote);
+      if (range) {
+        return {
+          ...base,
+          status: 'located',
+          precision: 'quote',
+          blockId: list[hits[0]].id,
+          index: hits[0],
+          range,
+        };
+      }
     }
 
-    // ③ 多处命中 → 宁可不挂
-    if (hits.length > 1) {
-      return { ...base, status: 'unlocated', reason: 'ambiguous' };
-    }
+    // ③ 多处命中 → 指不出是哪一段，宁可不挂。
+    // 注意：这里不能用模型报的块兜底——原文并不在那一块里，挂上去就是乱挂。
+    if (hits.length > 1) return { ...base, status: 'unlocated', reason: 'ambiguous' };
 
-    // ④ 零命中：模型指过某个块，说明原文大概率被改过
-    return {
-      ...base,
-      status: 'unlocated',
-      reason: claimedIndex >= 0 ? 'changed' : 'not_found',
-    };
+    // ④ 零命中：模型指过某个块时，退化整段；没指过则只能算全章建议。
+    return degradeToBlock(claimedIndex >= 0 ? 'changed' : 'not_found');
   });
 }
 
 /**
- * 收集当前对话里所有可处理的审稿意见，并编号。
+ * 收集当前对话里所有可处理的审稿意见，并按**正文出现顺序**编号。
  *
  * 只收 roleKey='critic' 且 action='comment' 的消息；其他角色照旧走纯文本。
- * 编号跨消息连续，侧栏与正文沟槽用同一个数字。
+ *
+ * 编号规则（2026-11-12 按作者反馈调整）：
+ *   - 先按块在正文里的先后排序，同块内再按原文起始字符排序；
+ *     同一段上的多条意见因此拿到相邻号码，沟槽可以并列显示成「1·2」。
+ *   - 定位不到的条目排在有位条目之后，但仍占一个号——
+ *     列表是 1..N 的完整序列，不跳号、不重号。
+ *   - 侧栏列表与正文沟槽读的是同一份 marker，不再各编各的。
  */
 export function collectCriticFindings(messages, blocks) {
-  const out = [];
-  let marker = 0;
+  const raw = [];
 
-  (Array.isArray(messages) ? messages : []).forEach((msg) => {
+  (Array.isArray(messages) ? messages : []).forEach((msg, msgOrder) => {
     if (!msg || msg.role !== 'assistant' || msg.roleKey !== 'critic') return;
     if (msg.action !== 'comment') return;
     if (!Array.isArray(msg.findings) || !msg.findings.length) return;
 
     locateFindings(blocks, msg.findings).forEach((finding, i) => {
-      marker += 1;
-      out.push({
+      raw.push({
         ...finding,
         key: `${msg.id}:${finding.id}:${i}`,
         messageId: msg.id,
-        marker,
+        msgOrder,
+        findingOrder: i,
       });
     });
   });
 
-  return out;
+  const position = (finding) => (finding.range ? finding.range.start : Number.MAX_SAFE_INTEGER);
+  const located = raw
+    .filter((finding) => finding.status === 'located')
+    .sort(
+      (a, b) =>
+        a.index - b.index ||
+        position(a) - position(b) ||
+        a.msgOrder - b.msgOrder ||
+        a.findingOrder - b.findingOrder
+    );
+  const unlocated = raw.filter((finding) => finding.status !== 'located');
+
+  return [...located, ...unlocated].map((finding, i) => ({
+    ...finding,
+    marker: i + 1,
+  }));
 }
 
 /**

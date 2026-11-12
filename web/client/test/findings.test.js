@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   MIN_QUOTE_LENGTH,
   normalizeQuote,
+  findQuoteRange,
   locateFindings,
   collectCriticFindings,
   buildAdoptPrompt,
@@ -35,6 +36,34 @@ const blocks = [
 test('normalizeQuote: 去空白 + 全角标点转半角 + 省略号统一', () => {
   assert.equal(normalizeQuote('十点整，\n雨落下来。'), '十点整,雨落下来.');
   assert.equal(normalizeQuote('“别动……”'), '"别动…"');
+});
+
+// ---------------------------------------------------------------------------
+// 句级区间
+// ---------------------------------------------------------------------------
+
+test('findQuoteRange: 返回原文区间；空白不参与匹配，但会影响下标', () => {
+  const content = '十点整，\n雨落下来。 林叙把灯芯挑亮。';
+  assert.deepEqual(findQuoteRange(content, '雨落下来。林叙'), { start: 5, end: 13 });
+});
+
+test('findQuoteRange: 找不到时返回 null', () => {
+  assert.equal(findQuoteRange('完全不相干的一段话', '雨落下来'), null);
+});
+
+test('findQuoteRange: 被空格隔开的省略号也能正确映射回原文区间', () => {
+  assert.deepEqual(findQuoteRange('他说…… 然后走了。', '他说……然后'), {
+    start: 0,
+    end: 7,
+  });
+});
+
+test('locateFindings: 句级定位同时给出段内字符区间', () => {
+  const [found] = locateFindings(blocks, [
+    { id: 'f1', blockId: 'b1', quote: '林叙把灯芯挑亮', text: '细节多余。' },
+  ]);
+  assert.equal(found.precision, 'quote');
+  assert.deepEqual(found.range, { start: 9, end: 16 });
 });
 
 // ---------------------------------------------------------------------------
@@ -127,13 +156,16 @@ test('locateFindings: 全文找不到 → 未定位（未找到）', () => {
   assert.equal(found.reason, 'not_found');
 });
 
-test('locateFindings: 指定的块还在但原文已改、别处也没有 → 原文已改动', () => {
+test('locateFindings: 指定的块还在但原文已改 → 退化为整段级意见', () => {
   const edited = [{ id: 'b2', content: '陈默把伞收进包里，雨水顺着包带往下淌。' }];
   const [found] = locateFindings(edited, [
     { id: 'f1', blockId: 'b2', quote: '陈默把伞收了', text: '动作交代太急。' },
   ]);
-  assert.equal(found.status, 'unlocated');
+  assert.equal(found.status, 'located');
+  assert.equal(found.precision, 'block');
   assert.equal(found.reason, 'changed');
+  assert.equal(found.blockId, 'b2');
+  assert.equal(found.range, undefined);
 });
 
 test(`locateFindings: 少于 ${MIN_QUOTE_LENGTH} 字的片段不参与匹配`, () => {
@@ -187,7 +219,7 @@ test('locateFindings: 空 findings / 空 blocks 不报错', () => {
 // 消息收集
 // ---------------------------------------------------------------------------
 
-test('collectCriticFindings: 只收 critic 的 comment，编号跨消息连续', () => {
+test('collectCriticFindings: 只收 critic 的 comment，按正文出现顺序编号', () => {
   const messages = [
     {
       id: 'a1',
@@ -225,10 +257,39 @@ test('collectCriticFindings: 只收 critic 的 comment，编号跨消息连续',
   const list = collectCriticFindings(messages, blocks);
   assert.equal(list.length, 3);
   assert.deepEqual(list.map((f) => f.marker), [1, 2, 3]);
+  // 按块序：b1（a1 的第一条）→ b2（a2 的第一条）→ 未定位（a1 的第二条）
   assert.equal(list[0].messageId, 'a1');
   assert.equal(list[0].status, 'located');
-  assert.equal(list[1].status, 'unlocated');
-  assert.equal(list[2].messageId, 'a2');
+  assert.equal(list[0].blockId, 'b1');
+  assert.equal(list[1].messageId, 'a2');
+  assert.equal(list[1].status, 'located');
+  assert.equal(list[1].blockId, 'b2');
+  assert.equal(list[2].messageId, 'a1');
+  assert.equal(list[2].status, 'unlocated');
+});
+
+test('collectCriticFindings: 同一段多条意见拿到相邻号码，不重号不跳号', () => {
+  const messages = [
+    {
+      id: 'a1',
+      role: 'assistant',
+      roleKey: 'critic',
+      action: 'comment',
+      findings: [
+        { id: 'f1', blockId: 'b2', quote: '雨水顺着伞骨往下淌', text: '后半句太满。' },
+        { id: 'f2', blockId: 'b1', quote: '林叙把灯芯挑亮', text: '细节多余。' },
+        { id: 'f3', blockId: 'b1', quote: '十点整，雨落下来', text: '开场太慢。' },
+      ],
+    },
+  ];
+
+  const list = collectCriticFindings(messages, blocks);
+  assert.deepEqual(list.map((f) => f.marker), [1, 2, 3]);
+  // b1 上的两条按原文起点排序，且号码相邻
+  assert.deepEqual(
+    list.filter((f) => f.blockId === 'b1').map((f) => f.marker),
+    [1, 2]
+  );
   assert.equal(list[2].blockId, 'b2');
 });
 

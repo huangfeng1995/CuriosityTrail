@@ -59,6 +59,12 @@ export default function AssistantSidebar() {
   const [useMemory] = useMemoryPref();
   // 卡片提案刷新信号：正文应用后异步识别完成时递增，通知侧栏重拉列表
   const [proposalRefresh, setProposalRefresh] = useState(0);
+  const [activeFindingKey, setActiveFindingKey] = useState('');
+  // 已采纳的意见：批量/单条成功后都记在这里，避免重复发给写手
+  const [adoptedFindingKeys, setAdoptedFindingKeys] = useState(() => new Set());
+  // 消息自动滚底时读这份镜像：只在「新消息到达」时判断要不要让位，
+  // 不把 activeFindingKey 放进依赖，否则关掉定位条也会把列表拽回底部。
+  const activeFindingRef = useRef('');
   const { message: toast } = AntApp.useApp();
 
   // 角色列表
@@ -73,8 +79,15 @@ export default function AssistantSidebar() {
     };
   }, []);
 
-  // 消息滚动到底
   useEffect(() => {
+    activeFindingRef.current = activeFindingKey;
+  }, [activeFindingKey]);
+
+  // 消息滚动到底。
+  // 正在核对某条审稿意见时不抢滚动位置：否则新消息一到，
+  // 列表会被拽回底部，作者刚点中的那条又看不见了。
+  useEffect(() => {
+    if (activeFindingRef.current) return;
     if (listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
@@ -105,10 +118,6 @@ export default function AssistantSidebar() {
   }, [scrollToPending]);
 
   const activeRole = roles.find((r) => r.key === roleKey);
-
-  const [activeFindingKey, setActiveFindingKey] = useState('');
-  // 已采纳的意见：批量/单条成功后都记在这里，避免重复发给写手
-  const [adoptedFindingKeys, setAdoptedFindingKeys] = useState(() => new Set());
 
   // 审稿意见的锚点按当前正文实时算：作者改稿后位置会变，不落库快照。
   const criticFindings = useMemo(
@@ -562,7 +571,6 @@ export default function AssistantSidebar() {
   const revertAction = useCallback(
     (msg) => {
       if (!msg.snapshot) return;
-
       if (msg.snapshot.inserted) {
         removeBlock(msg.snapshot.id);
       } else {
@@ -673,14 +681,34 @@ export default function AssistantSidebar() {
   }, []);
 
   // 正文沟槽 → 侧栏：滚到那条意见并选中。
+  //
+  // 不调用 scrollIntoView：它会把外层页面一起滚，而且消息卡片很高时
+  // 「先滚卡片、再滚行」两次平滑滚动会互相打架，行最后还是可能停在
+  // 视口外。这里只算行相对列表面板的偏移，把它放到面板中间。
   useEffect(() => {
     const onFocusFinding = (e) => {
       const detail = e.detail || {};
       setActiveFindingKey(detail.findingKey || '');
-      const msgEl = listRef.current?.querySelector(`[data-msg-id="${detail.messageId}"]`);
-      msgEl?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      const row = listRef.current?.querySelector(`[data-finding-key="${detail.findingKey}"]`);
-      row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+      const listEl = listRef.current;
+      if (!listEl) return;
+      const row = Array.from(listEl.querySelectorAll('[data-finding-key]')).find(
+        (el) => el.dataset.findingKey === detail.findingKey
+      );
+      if (!row) return;
+
+      const listRect = listEl.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const pad = 10;
+      const outside =
+        rowRect.top < listRect.top + pad || rowRect.bottom > listRect.bottom - pad;
+      if (!outside) return;
+
+      const centered =
+        listEl.scrollTop +
+        (rowRect.top - listRect.top) -
+        (listRect.height - rowRect.height) / 2;
+      listEl.scrollTo({ top: Math.max(0, centered), behavior: 'smooth' });
     };
     window.addEventListener('ct:focus-finding', onFocusFinding);
     return () => window.removeEventListener('ct:focus-finding', onFocusFinding);

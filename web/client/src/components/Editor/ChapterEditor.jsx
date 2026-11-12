@@ -12,7 +12,7 @@ import { Maximize2, Minimize2 } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { useFocus } from '../../store/focus';
 import { createBlock, countChars } from './blocks';
-import { collectCriticFindings } from '../Assistant/findings';
+import { collectCriticFindings, REASON_LABEL } from '../Assistant/findings';
 import { countBlockWords, formatWords } from '../../utils/wordCount';
 import Block from './Block';
 import BlockPalette from './BlockPalette';
@@ -64,6 +64,9 @@ export default function ChapterEditor() {
 
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [activeFindingKey, setActiveFindingKey] = useState('');
+  // 同一块意见被反复点击时，key 不变但作者仍然期望「再滚一次」。
+  // 用递增序号触发块内的定位副作用，不把滚动逻辑塞进事件回调里。
+  const [findingFocusSeq, setFindingFocusSeq] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
   const editorRef = useRef(null);
   // 选区所在块的类型：工具条据此决定「标记」能不能用、当前类型那一项是否置灰。
@@ -78,23 +81,35 @@ export default function ChapterEditor() {
 
   // 审稿意见的锚点每次渲染按当前正文实时算，不落库。
   // 只把可定位的挂到块上；未定位的留在侧栏标「全章建议」。
+  const criticFindings = useMemo(
+    () => collectCriticFindings(messages, blocks),
+    [messages, blocks]
+  );
+
   const findingsByBlock = useMemo(() => {
     const map = new Map();
-    collectCriticFindings(messages, blocks).forEach((finding) => {
+    criticFindings.forEach((finding) => {
       if (finding.status !== 'located') return;
       if (!map.has(finding.blockId)) map.set(finding.blockId, []);
       map.get(finding.blockId).push(finding);
     });
     return map;
-  }, [messages, blocks]);
+  }, [criticFindings]);
 
-  // 侧栏点一条意见 → 滚到正文对应块并高亮。
+  // 当前正在核对的那条意见。章节头的定位条靠它常驻显示，
+  // 这样正文滚走以后，作者仍然知道刚才看的是哪一句。
+  const activeFinding = useMemo(
+    () => criticFindings.find((finding) => finding.key === activeFindingKey) || null,
+    [criticFindings, activeFindingKey]
+  );
+
+  // 侧栏点一条意见 → 滚到正文对应句并高亮。
+  // 滚动交给 Block 里的镜像层：那里才知道句子落在块内第几行。
   useEffect(() => {
     const onFocusBlock = (e) => {
       const detail = e.detail || {};
       setActiveFindingKey(detail.findingKey || '');
-      const el = editorRef.current?.querySelector(`[data-block-id="${detail.blockId}"]`);
-      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setFindingFocusSeq((n) => n + 1);
     };
     window.addEventListener('ct:focus-block', onFocusBlock);
     return () => window.removeEventListener('ct:focus-block', onFocusBlock);
@@ -103,11 +118,16 @@ export default function ChapterEditor() {
   /** 正文沟槽点序号 → 选中该条意见并让侧栏滚过去。 */
   const focusFinding = useCallback((finding) => {
     setActiveFindingKey(finding.key);
+    setFindingFocusSeq((n) => n + 1);
     window.dispatchEvent(
       new CustomEvent('ct:focus-finding', {
         detail: { messageId: finding.messageId, findingKey: finding.key },
       })
     );
+  }, []);
+
+  const refocusFinding = useCallback(() => {
+    setFindingFocusSeq((n) => n + 1);
   }, []);
 
   // 选中的块被删掉（删除、撤销、换章）时，选区跟着作废，不留陈旧状态。
@@ -447,6 +467,48 @@ export default function ChapterEditor() {
         </div>
       </header>
 
+      {/* 审稿定位条：正文滚走以后，这条仍然告诉作者
+          「现在核对的是第几条、落在哪一句」，点一下能再滚回去。
+          整段级意见（原文对不上、退化成整段）在这里明确标注。 */}
+      {activeFinding && (
+        <div
+          className={`ct-finding-focus-bar${
+            activeFinding.precision === 'block' ? ' is-block-level' : ''
+          }`}
+        >
+          <span className="ct-finding-focus-no">{activeFinding.marker}</span>
+          <span className="ct-finding-focus-text">
+            {activeFinding.precision === 'block' ? (
+              <>
+                整段级意见
+                {activeFinding.reason
+                  ? ` · ${REASON_LABEL[activeFinding.reason] || activeFinding.reason}`
+                  : ''}
+                {activeFinding.quote ? `：${activeFinding.quote}` : ''}
+              </>
+            ) : (
+              <>原文：{activeFinding.quote}</>
+            )}
+          </span>
+          <button
+            type="button"
+            className="ct-finding-focus-action"
+            onClick={refocusFinding}
+          >
+            回到该句
+          </button>
+          <button
+            type="button"
+            className="ct-finding-focus-close"
+            onClick={() => setActiveFindingKey('')}
+            aria-label="关闭审稿定位"
+            title="关闭定位"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* 正文区 */}
       <div ref={editorRef} className="ct-editor-scroll ct-ruled">
         <div className="ct-editor-body">
@@ -459,6 +521,7 @@ export default function ChapterEditor() {
               isActive={activeBlockId === block.id}
               findings={findingsByBlock.get(block.id) || []}
               activeFindingKey={activeFindingKey}
+              focusSeq={findingFocusSeq}
               onFindingClick={focusFinding}
               onFocus={() => setActiveBlockId(block.id)}
               onChange={(patch) => handleBlockChange(block.id, patch)}

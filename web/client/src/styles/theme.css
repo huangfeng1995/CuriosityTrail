@@ -1608,6 +1608,67 @@ body.ct-resizing * {
   margin: 0 2px;
 }
 
+/* ---------- 审稿定位条 ---------- */
+/* 正文滚走以后，章节头下方的这条仍显示当前核对第几条、哪一句。
+   整段级意见（原文对不上、退化为整段）用另一档底色明确区分。 */
+.ct-finding-focus-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 32px;
+  background: var(--gold-dim);
+  border-bottom: 1px solid var(--border-faint);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.ct-finding-focus-bar.is-block-level {
+  background: var(--amber-dim);
+}
+.ct-finding-focus-no {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--gold);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ct-finding-focus-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-finding-focus-action,
+.ct-finding-focus-close {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ct-finding-focus-action:hover {
+  text-decoration: underline;
+}
+.ct-finding-focus-close {
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-quaternary);
+}
+.ct-finding-focus-close:hover {
+  color: var(--text-secondary);
+}
+
 /* ---------- 正文区 ---------- */
 .ct-editor-scroll {
   flex: 1;
@@ -1677,6 +1738,39 @@ body.ct-resizing * {
   line-height: var(--ruled-size);
   letter-spacing: 0.01em;
   display: block;
+}
+/* 句级高亮：镜像层绝对定位在 textarea 下层，文字透明，只露命中区间底色。
+   不参与文档流，rows={1}、块高自适应与 34px 格线都不受影响。 */
+.ct-block-text-wrap {
+  position: relative;
+  width: 100%;
+}
+.ct-dialogue .ct-block-text-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.ct-block-highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  color: transparent;
+}
+/* 文本域压在镜像层上方：底色在字下面，不会把正文染黄。 */
+.ct-block-text-wrap > textarea {
+  position: relative;
+  z-index: 1;
+}
+.ct-block-highlight mark {
+  border-radius: 2px;
+  background: var(--mark-bg);
+  box-shadow: inset 0 -2px 0 var(--gold);
+  color: transparent;
 }
 .ct-block-paragraph {
   text-indent: 2em;
@@ -1844,44 +1938,54 @@ body.ct-resizing * {
   pointer-events: auto;
 }
 
-/* 审稿意见序号：桌面端左侧预留沟槽里的圆点，绝对定位、不参与流。
-   20px 的高度不会撑高块，34px 格线保持原样；窄屏隐藏，意见只在侧栏。 */
-.ct-block-findings {
+/* 审稿意见序号：桌面端左侧预留沟槽里的并列号码，绝对定位、不参与流。
+   同一段有多条意见时显示成「1·2」，每个号码都能单独点；
+   不撑高块，34px 格线保持原样；窄屏隐藏，意见只在侧栏。 */
+.ct-block-finding {
   position: absolute;
   top: 2px;
   left: -44px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   z-index: 2;
-}
-.ct-block-finding {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border-radius: 50%;
-  border: 1px solid var(--gold);
-  background: var(--bg-container);
-  color: var(--gold);
-  font-size: 11px;
-  line-height: 1;
-  font-family: inherit;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  max-width: 44px;
+  padding: 1px 4px;
+  border: 1px solid var(--gold);
+  border-radius: 999px;
+  background: var(--bg-container);
+  color: var(--gold);
+  font-size: 10.5px;
+  line-height: 16px;
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ct-block-finding-no {
+  margin: 0;
+  padding: 0 1px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 16px;
   cursor: pointer;
 }
-.ct-block-finding:hover,
-.ct-block-finding.is-active {
+.ct-block-finding-no:hover,
+.ct-block-finding-no.is-active {
   background: var(--gold);
   color: #fff;
 }
+.ct-block-finding-sep {
+  padding: 0 1px;
+  opacity: 0.65;
+}
 /* 有意见时块操作按钮整体下移，避免与序号叠在一起 */
 .ct-block.has-findings .ct-block-actions {
-  top: calc(4px + var(--ct-finding-count, 1) * 22px);
+  top: 26px;
 }
 @media (max-width: 768px) {
-  .ct-block-findings {
+  .ct-block-finding {
     display: none;
   }
 }
@@ -2508,6 +2612,28 @@ body.ct-resizing * {
   flex-direction: column;
   gap: 6px;
 }
+/* 两侧对账：列表条数与正文沟槽号数并排给出，不等时直接写差数 */
+.ct-finding-audit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 3px 10px;
+  padding: 0 8px 2px;
+  font-size: 11.5px;
+  color: var(--text-quaternary);
+  font-variant-numeric: tabular-nums;
+}
+.ct-finding-audit.is-mismatch {
+  color: var(--cinnabar);
+}
+.ct-finding-audit-warn {
+  color: var(--cinnabar);
+  font-weight: 600;
+}
+.ct-finding-audit-ok {
+  color: var(--bamboo);
+}
 .ct-finding {
   display: flex;
   gap: 8px;
@@ -2567,6 +2693,14 @@ body.ct-resizing * {
 .ct-finding-tag {
   font-size: 12px;
   color: var(--ink-3);
+}
+.ct-finding-tag.is-block-level {
+  color: var(--gold);
+}
+/* 整段级意见：原文对不上、只能挂到整段，号码圈改用金色描边提醒 */
+.ct-finding.is-block-level .ct-finding-no {
+  border-color: var(--gold);
+  color: var(--gold);
 }
 
 /* 多选：每条意见右侧一个勾选框，未定位的全章建议同样可选 */

@@ -87,6 +87,33 @@ function useAutoHeight(value) {
   return ref;
 }
 
+/**
+ * 带句级高亮的文本域。
+ *
+ * textarea 本身没法只给一段字符上色，所以在它下面垫一层完全同版式的
+ * 镜像文本：镜像里的文字透明，只有命中的那一句有底色。镜像绝对定位，
+ * 不占文档流，块高、34px 格线与 rows={1} 都不受影响。
+ */
+function HighlightTextarea({ textRef, className, value, highlightRange, ...props }) {
+  const start = highlightRange?.start;
+  const end = highlightRange?.end;
+  const hasRange =
+    Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start;
+
+  return (
+    <div className="ct-block-text-wrap">
+      {hasRange && (
+        <div className={`ct-block-highlight ${className}`} aria-hidden="true">
+          {value.slice(0, start)}
+          <mark>{value.slice(start, end)}</mark>
+          {value.slice(end)}
+        </div>
+      )}
+      <textarea ref={textRef} value={value} className={className} {...props} />
+    </div>
+  );
+}
+
 export default function Block({
   block,
   index,
@@ -94,6 +121,7 @@ export default function Block({
   isActive,
   findings = [],
   activeFindingKey = '',
+  focusSeq = 0,
   onFindingClick,
   onChange,
   onFocus,
@@ -103,8 +131,32 @@ export default function Block({
   onConvert,
 }) {
   const textRef = useAutoHeight(block.content);
+  const blockRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const isMobile = useIsMobile();
+
+  // 当前激活的意见：只有「句级定位」才画段内高亮；
+  // 原文对不上、退化成整段的，才整块标黄并在 UI 上写明。
+  const activeFinding = findings.find((finding) => finding.key === activeFindingKey);
+  const activeRange =
+    activeFinding && activeFinding.precision === 'quote' ? activeFinding.range : null;
+  const ownsActiveFinding = Boolean(activeFinding);
+  const activeIsBlockLevel = ownsActiveFinding && !activeRange;
+
+  // 侧栏点意见后滚到那一句，而不是滚到块的中间。
+  // 同一块很长时，滚块中心会让被引用的句子停在视口外。
+  //
+  // 依赖只放稳定值：正文每敲一个字都会重算 findings，若把对象放进
+  // 依赖里，光标所在块会被反复滚回句中。
+  useEffect(() => {
+    // 只有承载当前意见的那一块才滚动；否则每个块都会抢着
+    // scrollIntoView，最后滚到哪一块全看渲染顺序。
+    if (!ownsActiveFinding || !activeFindingKey) return;
+    const root = blockRef.current;
+    if (!root) return;
+    const target = root.querySelector('.ct-block-highlight mark') || root;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [ownsActiveFinding, activeFindingKey, focusSeq]);
 
   const handleSelect = (e) => {
     const el = e.target;
@@ -176,10 +228,11 @@ export default function Block({
               onFocus={onFocus}
               className="ct-speaker"
             />
-            <textarea
-              ref={textRef}
+            <HighlightTextarea
+              textRef={textRef}
               rows={1}
               value={block.content}
+              highlightRange={activeRange}
               onChange={(e) => onChange({ content: e.target.value })}
               onFocus={onFocus}
               onSelect={handleSelect}
@@ -192,10 +245,11 @@ export default function Block({
 
       case 'inner':
         return (
-          <textarea
-            ref={textRef}
+          <HighlightTextarea
+            textRef={textRef}
             rows={1}
             value={block.content}
+            highlightRange={activeRange}
             onChange={(e) => onChange({ content: e.target.value })}
             onFocus={onFocus}
             onSelect={handleSelect}
@@ -260,10 +314,11 @@ export default function Block({
                 </div>
               </Upload.Dragger>
             )}
-            <textarea
-              ref={textRef}
+            <HighlightTextarea
+              textRef={textRef}
               rows={1}
               value={block.content}
+              highlightRange={activeRange}
               onChange={(e) => onChange({ content: e.target.value })}
               onFocus={onFocus}
               placeholder="图注…"
@@ -288,10 +343,11 @@ export default function Block({
 
       default:
         return (
-          <textarea
-            ref={textRef}
+          <HighlightTextarea
+            textRef={textRef}
             rows={1}
             value={block.content}
+            highlightRange={activeRange}
             onChange={(e) => onChange({ content: e.target.value })}
             onFocus={onFocus}
             onSelect={handleSelect}
@@ -343,37 +399,51 @@ export default function Block({
   );
 
   const hasFindings = findings.length > 0;
-  const hasActiveFinding = findings.some((f) => f.key === activeFindingKey);
 
   return (
     <div
+      ref={blockRef}
       data-block-id={block.id}
       className={`ct-block${isActive ? ' is-active' : ''}${hasFindings ? ' has-findings' : ''}${
-        hasActiveFinding ? ' is-finding-active' : ''
+        activeIsBlockLevel ? ' is-finding-active' : ''
       }`}
-      style={hasFindings ? { '--ct-finding-count': findings.length } : undefined}
     >
       {renderBody()}
 
       {/* 审稿意见序号。绝对定位在左侧预留的 44px 沟槽里，
-          不参与文档流，块高与 34px 格线不受影响；窄屏交给侧栏。 */}
+          不参与文档流，块高与 34px 格线不受影响；窄屏交给侧栏。
+          同一段有多条意见时并列显示成「1·2」，与侧栏用同一套号码。 */}
       {hasFindings && (
-        <div className="ct-block-findings">
-          {findings.map((finding) => (
-            <button
-              key={finding.key}
-              type="button"
-              title={finding.text}
-              className={`ct-block-finding${
-                finding.key === activeFindingKey ? ' is-active' : ''
-              }`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onFindingClick?.(finding);
-              }}
-            >
-              {finding.marker}
-            </button>
+        <div
+          className="ct-block-finding"
+          role="group"
+          aria-label={`本段审稿意见 ${findings.map((f) => f.marker).join('、')}`}
+        >
+          {findings.map((finding, i) => (
+            <React.Fragment key={finding.key}>
+              {i > 0 && (
+                <span className="ct-block-finding-sep" aria-hidden="true">
+                  ·
+                </span>
+              )}
+              <button
+                type="button"
+                title={
+                  finding.precision === 'block'
+                    ? `第 ${finding.marker} 条（整段级意见）：${finding.text}`
+                    : `第 ${finding.marker} 条：${finding.text}`
+                }
+                className={`ct-block-finding-no${
+                  finding.key === activeFindingKey ? ' is-active' : ''
+                }`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFindingClick?.(finding);
+                }}
+              >
+                {finding.marker}
+              </button>
+            </React.Fragment>
           ))}
         </div>
       )}
