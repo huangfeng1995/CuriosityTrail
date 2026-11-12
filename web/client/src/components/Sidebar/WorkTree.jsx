@@ -168,7 +168,7 @@ export default function WorkTree({ currentWorkId, currentChapterId }) {
 }
 
 function ChapterList({ workId, currentChapterId }) {
-  const { chapters, loadChapter, loadWork } = useWorkspace();
+  const { chapters, loadChapter, loadWork, renameChapter } = useWorkspace();
 
   const list = chapters.filter((c) => c.work_id === workId);
 
@@ -209,8 +209,8 @@ function ChapterList({ workId, currentChapterId }) {
                       cancelText: '取消',
                       onOk: async () => {
                         if (!title.trim()) return;
-                        await api.put(`/chapters/${chapter.id}`, { title: title.trim() });
-                        await loadWork(workId);
+                        // 走 store：章节树与正在编辑的标题栏一起更新
+                        await renameChapter(chapter.id, title);
                       },
                     });
                   },

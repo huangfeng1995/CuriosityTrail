@@ -70,6 +70,19 @@ function reducer(state, action) {
       };
     }
 
+    // 改章节标题：章节树和编辑器标题栏读的是同一份状态，必须一起改。
+    // 只刷其中一边，就会出现「树里叫第 2 章、正文头上叫第 2 章-第一天」。
+    case 'chapter/title': {
+      const chapters = state.chapters.map((c) =>
+        c.id === action.chapterId ? { ...c, title: action.title } : c
+      );
+      const chapter =
+        state.chapter && state.chapter.id === action.chapterId
+          ? { ...state.chapter, title: action.title }
+          : state.chapter;
+      return { ...state, chapters, chapter };
+    }
+
     case 'blocks/set':
       return { ...state, blocks: action.blocks };
 
@@ -443,6 +456,29 @@ export function WorkspaceProvider({ children }) {
     }
   }, []);
 
+  /**
+   * 改章节标题，并把结果同步回 state。
+   *
+   * 落库与回写放在一处：调用方（编辑器标题栏、章节树重命名）只管给新标题，
+   * 不用再各自重新拉列表——各自拉容易漏掉另一半，标题就不同步了。
+   */
+  const renameChapter = useCallback(async (chapterId, title) => {
+    const next = String(title).trim();
+    if (!next) return null;
+    try {
+      const res = await api.put(`/chapters/${chapterId}`, { title: next });
+      const saved = String(res.data?.title ?? next).trim();
+      dispatch({ type: 'chapter/title', chapterId, title: saved });
+      return saved;
+    } catch (e) {
+      dispatch({
+        type: 'notice/set',
+        error: '标题保存失败：' + (e.response?.data?.error || e.message),
+      });
+      return null;
+    }
+  }, []);
+
   const loadChapter = useCallback(
     async (chapterId) => {
       const seq = ++loadSeqRef.current;
@@ -495,6 +531,7 @@ export function WorkspaceProvider({ children }) {
       replaceAllBlocks,
       loadWork,
       loadChapter,
+      renameChapter,
     }),
     [
       state,
@@ -510,6 +547,7 @@ export function WorkspaceProvider({ children }) {
       replaceAllBlocks,
       loadWork,
       loadChapter,
+      renameChapter,
     ]
   );
 
