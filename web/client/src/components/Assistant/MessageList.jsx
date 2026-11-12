@@ -57,6 +57,7 @@ export default function MessageList({
   onRemember,
   findingsByMessage,
   chapterSeq,
+  currentChapterId,
   activeFindingKey,
   adoptedFindingKeys,
   onAdoptFindings,
@@ -94,7 +95,23 @@ export default function MessageList({
           className={`ct-msg is-${msg.role}`}
           data-msg-id={msg.id}
         >
-          {msg.role === 'user' ? (
+          {msg.role === 'system' ? (
+            // 系统记录：设定改名后「哪些章被改了几处」留在这里，
+            // 不随弹窗关掉而消失，也不跟章节切换走。
+            <div className="ct-msg-changelog">
+              <div className="ct-msg-changelog-title">{msg.content}</div>
+              {msg.items?.length > 0 && (
+                <ul className="ct-msg-changelog-list">
+                  {msg.items.map((it) => (
+                    <li key={it.chapterId || it.chapterTitle}>
+                      <span>{it.chapterTitle || '未命名章节'}</span>
+                      <em>{it.count} 处</em>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : msg.role === 'user' ? (
             <div className="ct-msg-user">
               <div className="ct-msg-bubble is-user">{msg.content}</div>
               <RememberButton msg={msg} onRemember={onRemember} />
@@ -122,23 +139,32 @@ export default function MessageList({
               )}
 
               {msg.action && msg.action !== 'none' ? (
-                <ActionCard
-                  action={msg.action}
-                  content={msg.content}
-                  reason={msg.reason}
-                  applied={msg.applied}
-                  onApply={() => onApply?.(msg)}
-                  onRevert={() => onRevert?.(msg)}
-                  findings={findingsByMessage?.get(msg.id) || []}
-                  beatCheck={msg.beatCheck}
-                  planDegraded={msg.planDegraded}
-                  anchorViolations={msg.anchorViolations || []}
-                  chapterSeq={chapterSeq}
-                  activeFindingKey={activeFindingKey}
-                  adoptedFindingKeys={adoptedFindingKeys}
-                  onAdoptFindings={onAdoptFindings}
-                  onJumpToFinding={onJumpToFinding}
-                />
+                <>
+                  {/* 会话跨章保留：旧章的卡片还在，但不能落进当前章。
+                      不给这句提示的话，按钮点了只会弹一句警告，作者不知道原因。 */}
+                  {msg.chapterId && currentChapterId && msg.chapterId !== currentChapterId && (
+                    <div className="ct-msg-cross-chapter">
+                      这条回复出自另一章，切回那一章才能采纳。
+                    </div>
+                  )}
+                  <ActionCard
+                    action={msg.action}
+                    content={msg.content}
+                    reason={msg.reason}
+                    applied={msg.applied}
+                    onApply={() => onApply?.(msg)}
+                    onRevert={() => onRevert?.(msg)}
+                    findings={findingsByMessage?.get(msg.id) || []}
+                    beatCheck={msg.beatCheck}
+                    planDegraded={msg.planDegraded}
+                    anchorViolations={msg.anchorViolations || []}
+                    chapterSeq={chapterSeq}
+                    activeFindingKey={activeFindingKey}
+                    adoptedFindingKeys={adoptedFindingKeys}
+                    onAdoptFindings={onAdoptFindings}
+                    onJumpToFinding={onJumpToFinding}
+                  />
+                </>
               ) : (
                 // 只有空白字符的回复也要当成空：空回复不画气泡，
                 // 「本次没有返回内容」这类占位文案不给作者看。

@@ -2400,6 +2400,48 @@ body.ct-resizing * {
   flex-direction: column;
   animation: ct-msg-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+/* ---------- 改动记录（系统消息） ---------- */
+/* 设定/人物改名后的全文替换结果。弹窗关掉就找不回来了，
+   所以留一条常驻记录在对话流里：改了谁、改了几处、分布在哪些章。 */
+.ct-msg-changelog {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--amber);
+  border-radius: 6px;
+  background: var(--amber-dim);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.ct-msg-changelog-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ct-msg-changelog-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text-tertiary);
+}
+.ct-msg-changelog-list li {
+  margin: 1px 0;
+}
+.ct-msg-changelog-list em {
+  margin-left: 6px;
+  font-style: normal;
+  color: var(--text-quaternary);
+}
+
+/* 跨章提示：这条卡片属于别的章，采纳按钮点了也不会生效 */
+.ct-msg-cross-chapter {
+  margin-bottom: 6px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  background: var(--bg-sunken);
+  border: 1px dashed var(--border-strong);
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
 @keyframes ct-msg-in {
   from {
     opacity: 0;

@@ -48,8 +48,22 @@ const initialState = {
 
 function reducer(state, action) {
   switch (action.type) {
-    case 'work/loaded':
-      return { ...state, work: action.work, chapters: action.chapters };
+    // 换作品才清会话：同一部作品里换章，右侧的对话要留在原地。
+    // 作者常常一边写一边问，切去看看前一章就发现刚才那条回复没了
+    // （甚至生成到一半的正文也一起消失），只能重问一遍。
+    // 跨章消息的采纳由 applyAction/revertAction 拦：每条消息记着
+    // 自己出自哪一章，对不上时不给写进当前章。
+    case 'work/loaded': {
+      const changedWork = (state.work?.id || '') !== (action.work?.id || '');
+      return {
+        ...state,
+        work: action.work,
+        chapters: action.chapters,
+        ...(changedWork
+          ? { conversationId: null, messages: [], streaming: '' }
+          : null),
+      };
+    }
 
     case 'chapter/loaded': {
       const blocks = Array.isArray(action.blocks) ? action.blocks : [];
@@ -58,10 +72,9 @@ function reducer(state, action) {
         chapter: action.chapter,
         blocks,
         selection: null,
-        // 换章即换会话上下文，避免上一章的对话串味
-        conversationId: null,
-        messages: [],
-        streaming: '',
+        // 换章不清空对话：会话固定在右栏，跨章继续读。
+        // 上一章的消息留着，但它的 action 卡片不能落进这一章
+        // （msg.chapterId 与当前章不符时禁用采纳）。
         error: '',
         // 撤销栈按章隔离：上一章的快照对这一章没有意义
         past: [],

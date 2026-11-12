@@ -19,7 +19,7 @@ const CATEGORIES = ['地理', '历史', '组织', '规则', '物品', '种族', 
  * 作者需要知道这个名字到底在稿子里扎了多深，后续改动影响面有多大。
  */
 export default function SettingPanel({ workId }) {
-  const { chapter, loadChapter } = useWorkspace();
+  const { chapter, loadChapter, dispatch } = useWorkspace();
   const [settings, setSettings] = useState([]);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
@@ -85,8 +85,20 @@ export default function SettingPanel({ workId }) {
             replacement: to,
           });
           message.success(`已替换 ${res.data.replaced} 处`);
-          // 当前正在看的那章被改过就重新拉一次，否则屏幕上还是旧字
-          if (res.data.chapters?.some((c) => c.id === chapter?.id)) {
+          // 改动明细留在 AI 侧栏：弹窗一关、章节一切，只看 toast 就找不回来了。
+          dispatch({
+            type: 'message/add',
+            message: {
+              id: `chg-${Date.now()}`,
+              role: 'system',
+              content: `已把正文里的「${from}」改成「${to}」，共 ${res.data.replaced} 处`,
+              items: res.data.chapters || [],
+            },
+          });
+          // 当前正在看的那章被改过就重新拉一次，否则屏幕上还是旧字。
+          // 接口返回的字段名是 chapterId，不是 id——写成 c.id 永远匹配不上，
+          // 表现就是「替换成功了，但屏幕上的字没变」。
+          if (res.data.chapters?.some((c) => c.chapterId === chapter?.id)) {
             await loadChapter(chapter.id);
           }
           await load();
