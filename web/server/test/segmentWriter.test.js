@@ -352,17 +352,23 @@ test('U2 记录口径：扩写过的拍 1450/1500（96.7%）不再记，1400（9
 });
 
 test('U1 扩写指令只点名不足的拍，写死计划段数与 80–140，禁止合并凑字数', () => {
-  const instruction = segmentWriter.buildExpandInstruction({
-    group: { index: 0 },
-    groups: [{}, {}],
+  const group = {
+    index: 0,
+    beatIds: ['B3'],
     beats: [{ id: 'B3', paragraphs: 12 }],
+    content: Array.from({ length: 10 }, () => '原'.repeat(70)).join('\n\n'),
+  };
+  const instruction = segmentWriter.buildExpandInstruction({
+    group,
+    groups: [{}, {}],
+    beats: group.beats,
     shots: [{ id: 'B3', chars: 709, target: 1500 }],
   });
 
-  assert.match(instruction, /只扩写第 1\/2 组中的 B3/);
-  assert.match(instruction, /B3：本拍必须 12 段（容差 ±2），每段 80–140 字/);
-  assert.match(instruction, /当前 709 个汉字，目标 1500 个汉字/);
-  assert.match(instruction, /禁止把两段合并成一段来凑字数/);
+  assert.match(instruction, /只给第 1\/2 组的 B3 追加正文/);
+  assert.match(instruction, /B3：目标 1500 字，现在 709 字，还差 791 字/);
+  assert.match(instruction, /本拍现有 10 段、计划 12 段，本次最多再加 4 段/);
+  assert.match(instruction, /只追加，不重写/);
   assert.ok(!/B4/.test(instruction), '不得点名其他拍');
 });
 
@@ -417,7 +423,7 @@ test('U1 扩写不收敛时内部再扩一次，段数补齐后接受', async ()
     attempts += 1;
     const paragraphs = attempts === 1
       ? ['短'.repeat(30)]
-      : Array.from({ length: 5 }, () => '补'.repeat(100));
+      : Array.from({ length: 5 }, () => '补'.repeat(120));
     return { content: '', parsed: { beats: [{ id: 'B2', paragraphs }] }, finishReason: 'stop' };
   };
 
@@ -428,7 +434,8 @@ test('U1 扩写不收敛时内部再扩一次，段数补齐后接受', async ()
     runSegment,
   });
 
-  assert.strictEqual(out.callCount, 2, '第一次不合规，必须再扩一次');
+  assert.strictEqual(out.callCount, 1, '第一次写得太少退了名额，只剩一次真正计数的调用');
+  assert.strictEqual(out.refundedCalls, 1);
   assert.deepStrictEqual(out.unconverged, []);
   assert.strictEqual(out.expanded.length, 1);
   assert.strictEqual(out.expanded[0].attempt, 2);
@@ -483,6 +490,112 @@ function parsedRunner(replies) {
 function beatReply(id, paragraphs) {
   return { action: 'rewrite', beats: [{ id, paragraphs }] };
 }
+
+test('D1 扩写只补 100 字（缺口 700）判无效：不写回、记录净增、退回调用名额', async () => {
+  const plan = { beats: [{ id: 'B2', paragraphs: 5, targetChars: 1000 }] };
+  const groups = [{
+    index: 0,
+    beatIds: ['B2'],
+    beats: [{ id: 'B2', paragraphs: 5 }],
+    content: Array.from({ length: 5 }, () => '原'.repeat(60)).join('\n\n'),
+  }];
+  const before = groups[0].content;
+  let attempts = 0;
+  const runSegment = async () => {
+    attempts += 1;
+    // 第一次只追加 100 字（缺口 700）；第二次故意超 140 字被逐段丢掉，
+    // 让本轮只留下一条「写得太少」的无效记录。
+    const paragraphs = attempts === 1
+      ? ['补'.repeat(50), '补'.repeat(50)]
+      : ['长'.repeat(150)];
+    return { content: '', parsed: { beats: [{ id: 'B2', paragraphs }] }, finishReason: 'stop' };
+  };
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [{ id: 'B2', chars: 300, target: 1000 }],
+    runSegment,
+  });
+
+  assert.strictEqual(out.expandIneffective.length, 1, '净增不足缺口一半必须记无效');
+  const record = out.expandIneffective[0];
+  assert.strictEqual(record.beats[0].beatId, 'B2');
+  assert.strictEqual(record.beats[0].net, 100);
+  assert.strictEqual(record.beats[0].gap, 700);
+  assert.strictEqual(groups[0].content, before, '无效扩写不能写回');
+  assert.strictEqual(out.expanded.length, 0, '无效扩写不计入已扩写');
+  assert.strictEqual(out.refundedCalls, 1, '无效那次必须退回名额');
+  assert.strictEqual(out.callCount, 1, '退回后只剩一次重试调用');
+});
+
+test('D2 扩写按交付口径验收：40–79 字段不被拒，超出段数上限只丢新增段', async () => {
+  // 每拍计划 8 段，B2 现有 8 段 ×75 字 = 600 字，目标 900（缺口 300，至少补 150）。
+  const plan = { beats: [{ id: 'B1', paragraphs: 5, targetChars: 900 }, { id: 'B2', paragraphs: 8, targetChars: 900 }] };
+  const groups = [{
+    index: 0,
+    beatIds: ['B1', 'B2'],
+    beats: [
+      { id: 'B1', paragraphs: 5 },
+      { id: 'B2', paragraphs: 8 },
+    ],
+    content: [
+      ...Array.from({ length: 5 }, () => '甲'.repeat(120)),
+      ...Array.from({ length: 8 }, () => '乙'.repeat(75)),
+    ].join('\n\n'),
+  }];
+  const runSegment = async () => ({
+    content: '',
+    // 3 段 × 75 字：全在 40–79 区间，按旧的「每段 80–140」会被整组拒绝。
+    parsed: { beats: [{ id: 'B2', paragraphs: Array.from({ length: 3 }, () => '补'.repeat(75)) }] },
+    finishReason: 'stop',
+  });
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [{ id: 'B2', chars: 600, target: 900 }],
+    runSegment,
+  });
+
+  assert.strictEqual(out.expanded.length, 1, '40–79 的新增段应被接受，净增 150 达到缺口一半');
+  assert.strictEqual(out.expandIneffective.length, 0);
+  assert.ok(groups[0].content.includes('补'.repeat(75)), '有效的扩写正文要写回');
+
+  // 段数上限 = 计划 8 + 容差 2 = 10，现有 8 段 → 只能加 2 段，第 3 段丢新增。
+  assert.strictEqual(out.expandRejected.length, 1);
+  assert.strictEqual(out.expandRejected[0].dropped.length, 1);
+  assert.match(out.expandRejected[0].dropped[0].reason, /段数上限/);
+  const kept = groups[0].content.split('\n\n').filter((p) => p.startsWith('补'));
+  assert.strictEqual(kept.length, 2, '超出上限时丢新增段，原稿一段不动');
+});
+
+test('D1 扩写补足 395 字（缺口 700）通过：写回并计入已扩写', async () => {
+  const plan = { beats: [{ id: 'B2', paragraphs: 10, targetChars: 1000 }] };
+  const groups = [{
+    index: 0,
+    beatIds: ['B2'],
+    beats: [{ id: 'B2', paragraphs: 10 }],
+    content: Array.from({ length: 5 }, () => '原'.repeat(60)).join('\n\n'),
+  }];
+  const runSegment = async () => ({
+    content: '',
+    parsed: { beats: [{ id: 'B2', paragraphs: Array.from({ length: 5 }, () => '补'.repeat(139)) }] },
+    finishReason: 'stop',
+  });
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [{ id: 'B2', chars: 300, target: 1000 }],
+    runSegment,
+  });
+
+  assert.deepStrictEqual(out.expandIneffective, []);
+  assert.strictEqual(out.expanded.length, 1);
+  assert.ok(groups[0].content.includes('补'.repeat(139)), '有效扩写必须写回');
+  assert.strictEqual(out.callCount, 1);
+});
 
 test('V1 单拍违规只替换该拍，同组其他拍字节级不变', async () => {
   const { plan, groups } = rewriteFixture();
@@ -558,6 +671,67 @@ test('V1 重写后总字数少 15% 以上：记录缩水拍与差值', async () 
   assert.ok(out.shrink.beats[0].delta < 0, '要给出差值');
 });
 
+test('Y3.5 expandRejected 区分「本拍没名额」与「新增段不合格」', async () => {
+  const plan = {
+    beats: [
+      { id: 'B1', paragraphs: 5, targetChars: 900 },
+      { id: 'B3', paragraphs: 5, targetChars: 900 },
+    ],
+  };
+  const groups = [
+    {
+      // B1 已有 7 段 = 计划 5 + 2，名额正好为 0。
+      index: 0,
+      beatIds: ['B1'],
+      beats: [{ id: 'B1', paragraphs: 5 }],
+      content: Array.from({ length: 7 }, () => '甲'.repeat(90)).join('\n\n'),
+    },
+    {
+      // B3 只有 5 段，还有 2 段名额，但模型给的段超了 140 字。
+      index: 1,
+      beatIds: ['B3'],
+      beats: [{ id: 'B3', paragraphs: 5 }],
+      content: Array.from({ length: 5 }, () => '乙'.repeat(90)).join('\n\n'),
+    },
+  ];
+  const calledBeats = [];
+  const runSegment = async (meta) => {
+    calledBeats.push(meta.group.beats.map((beat) => beat.id).join(','));
+    return {
+      content: '',
+      parsed: {
+        beats: meta.group.beats.map((beat) => ({
+          id: beat.id,
+          paragraphs: [beat.id === 'B1' ? '补'.repeat(90) : '长'.repeat(150)],
+        })),
+      },
+      finishReason: 'stop',
+    };
+  };
+
+  const out = await segmentWriter.expandMissingBeats({
+    plan,
+    groups,
+    expandShots: [
+      { id: 'B1', chars: 630, target: 900 },
+      { id: 'B3', chars: 450, target: 900 },
+    ],
+    runSegment,
+  });
+
+  const byBeat = new Map(out.expandRejected.map((row) => [row.beatId, row]));
+  assert.deepStrictEqual(
+    calledBeats.filter((ids) => ids.includes('B1')),
+    [],
+    'B1 名额为 0，连请求都不该发'
+  );
+  assert.strictEqual(byBeat.get('B1').blocked, 'no_capacity', 'B1 是本拍没名额');
+  assert.strictEqual(byBeat.get('B1').capacity, 0);
+  assert.match(byBeat.get('B1').problems.join(' '), /没有追加名额/);
+  assert.strictEqual(byBeat.get('B3').blocked, 'invalid', 'B3 是新增段超 140 字');
+  assert.ok(byBeat.get('B3').capacity > 0);
+});
+
 test('V2 扩写后重算：新掉到 85% 以下的拍补进第二遍', async () => {
   const plan = expandablePlan();
   const groups = [expandableGroup()];
@@ -567,7 +741,7 @@ test('V2 扩写后重算：新掉到 85% 以下的拍补进第二遍', async () 
     const id = calls === 1 ? 'B1' : 'B2';
     return {
       content: '',
-      parsed: { beats: [{ id, paragraphs: Array.from({ length: 5 }, () => '补'.repeat(100)) }] },
+      parsed: { beats: [{ id, paragraphs: Array.from({ length: 5 }, () => '补'.repeat(120)) }] },
       finishReason: 'stop',
     };
   };
@@ -605,8 +779,8 @@ test('V2 补完仍不足：不再循环，记 underFilledShots', async () => {
     content: '',
     parsed: {
       beats: [
-        { id: 'B1', paragraphs: Array.from({ length: 5 }, () => '补'.repeat(100)) },
-        { id: 'B2', paragraphs: Array.from({ length: 5 }, () => '补'.repeat(100)) },
+        { id: 'B1', paragraphs: Array.from({ length: 5 }, () => '补'.repeat(120)) },
+        { id: 'B2', paragraphs: Array.from({ length: 5 }, () => '补'.repeat(120)) },
       ],
     },
     finishReason: 'stop',
@@ -645,18 +819,21 @@ test('V3 扩写指令写明每段至少两句、不少于 90 字，并给示例'
     ],
   });
 
-  assert.match(instruction, /每段至少两句/);
-  assert.match(instruction, /不少于 90 字/);
-  assert.match(instruction, /示例（单段约 100 字）/);
+  assert.match(instruction, /只追加，不重写/);
+  assert.match(instruction, /只返回\*\*新增的段落\*\*/);
+  assert.match(instruction, /系统会把新增段落按顺序接在该拍末尾/);
   assert.match(instruction, /每段 80–140 字（含标点）/);
+  assert.match(instruction, /本次最多再加 2 段/, '段数余量要按计划 ±2 算出来');
+  assert.match(instruction, /不要复制该拍原有正文/);
+  assert.match(instruction, /"action":"append"/);
 });
 
-test('V3 每次被拒都记 expandRejected：attempt、段数、逐段段长、失败原因', async () => {
+test('V3 每次有段落被丢都记 expandRejected：attempt、段数、逐段段长、失败原因', async () => {
   const plan = expandablePlan();
   const groups = [expandableGroup()];
   const runSegment = async () => ({
     content: '',
-    parsed: { beats: [{ id: 'B2', paragraphs: ['短'.repeat(30), '短'.repeat(30)] }] },
+    parsed: { beats: [{ id: 'B2', paragraphs: ['长'.repeat(150), '长'.repeat(150)] }] },
     finishReason: 'stop',
   });
 
@@ -676,7 +853,8 @@ test('V3 每次被拒都记 expandRejected：attempt、段数、逐段段长、�
   for (const row of out.expandRejected) {
     assert.strictEqual(row.beatId, 'B2');
     assert.strictEqual(row.paragraphCount, 2);
-    assert.deepStrictEqual(row.paragraphLengths, [30, 30]);
+    assert.deepStrictEqual(row.paragraphLengths, [150, 150]);
+    assert.strictEqual(row.dropped.length, 2);
     assert.ok(row.problems.length > 0, '每次被拒都要带失败原因');
   }
 });
@@ -689,7 +867,7 @@ test('X3 单次被拒也留痕：第二次成功时仍能看到第一次的段�
     attempts += 1;
     const paragraphs = attempts === 1
       ? ['长'.repeat(150), '长'.repeat(150)]
-      : Array.from({ length: 5 }, () => '补'.repeat(100));
+      : Array.from({ length: 5 }, () => '补'.repeat(120));
     return { content: '', parsed: { beats: [{ id: 'B2', paragraphs }] }, finishReason: 'stop' };
   };
 
@@ -701,10 +879,11 @@ test('X3 单次被拒也留痕：第二次成功时仍能看到第一次的段�
   });
 
   assert.strictEqual(out.expanded.length, 1, '第二次合规应被接受');
-  assert.strictEqual(out.expandRejected.length, 1, '第一次的拒绝不能被抹掉');
-  assert.strictEqual(out.expandRejected[0].attempt, 1);
-  assert.deepStrictEqual(out.expandRejected[0].paragraphLengths, [150, 150]);
-  assert.match(out.expandRejected[0].problems.join(' '), /超 140/);
+  const first = out.expandRejected.find((row) => row.attempt === 1);
+  assert.ok(first, '第一次的拒绝不能被抹掉');
+  assert.deepStrictEqual(first.paragraphLengths, [150, 150]);
+  // 追加式扩写里 150 字超过单段 140 的上限，只丢这两段；第二段为超段数上限被丢。
+  assert.match(first.problems.join(' '), /超过 140/);
 });
 
 /** 固定 100 字一段的正文，用来精确验证 80% 门槛。 */
@@ -961,12 +1140,29 @@ test('W1 预算耗尽徽标写明类别，不再统称分段起稿到上限', ()
   assert.match(segmentWriter.segmentBadge('call_limit'), /调用次数达到上限/);
 });
 
-test('W1 扩写预算不够时先覆盖每个组，不让第一组吃光两次额度', async () => {
-  const plan = makePlan(4, 5);
-  const groups = segmentWriter.planSegments(plan);
-  groups.forEach((group, index) => {
-    group.content = body(`原${index}`, 10);
-  });
+test('W1 扩写名额不足时先覆盖每个组；写得太少的那次退名额', async () => {
+  const plan = {
+    beats: [
+      { id: 'B1', paragraphs: 5, targetChars: 700 },
+      { id: 'B2', paragraphs: 5, targetChars: 700 },
+      { id: 'B3', paragraphs: 5, targetChars: 700 },
+      { id: 'B4', paragraphs: 5, targetChars: 700 },
+    ],
+  };
+  const groups = [
+    {
+      index: 0,
+      beatIds: ['B1', 'B2'],
+      beats: [{ id: 'B1', paragraphs: 5 }, { id: 'B2', paragraphs: 5 }],
+      content: Array.from({ length: 10 }, () => '原'.repeat(60)).join('\n\n'),
+    },
+    {
+      index: 1,
+      beatIds: ['B3', 'B4'],
+      beats: [{ id: 'B3', paragraphs: 5 }, { id: 'B4', paragraphs: 5 }],
+      content: Array.from({ length: 10 }, () => '原'.repeat(60)).join('\n\n'),
+    },
+  ];
   const seen = [];
   const runSegment = async (meta) => {
     seen.push(meta.group.index);
@@ -994,11 +1190,13 @@ test('W1 扩写预算不够时先覆盖每个组，不让第一组吃光两次�
     maxCalls: 2,
   });
 
-  assert.deepStrictEqual(seen, [0, 1], '两次预算必须一组一次，不能 0,0');
-  assert.strictEqual(out.calls.length, 2);
-  assert.strictEqual(out.degraded, 'call_limit');
-  assert.strictEqual(out.budgetExhaustedBy, 'expand');
-  assert.deepStrictEqual(out.skippedGroups, [0], '第二轮没预算时留下被挡的组');
+  // 每次只加 60 字、远不到缺口一半，全部判无效并退名额；
+  // 于是两组按「先各组一遍、再各组补一遍」轮流来，不会 0,0 吃光。
+  assert.deepStrictEqual(seen, [0, 1, 0, 1], '两组必须交替拿到机会');
+  assert.strictEqual(out.calls.length, 4);
+  assert.strictEqual(out.refundedCalls, 4);
+  assert.strictEqual(out.callCount, 0, '无效调用不占预算');
+  assert.strictEqual(out.expanded.length, 0);
 });
 
 test('W2 形态违规按类型计数，总数与违规数组一致', () => {

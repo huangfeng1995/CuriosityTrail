@@ -2240,6 +2240,7 @@ router.post('/chat', async (req, res) => {
                   supplement: expandedBody.supplement,
                   unconverged: expandedBody.unconverged,
                   rejected: expandedBody.expandRejected,
+                  ineffective: expandedBody.expandIneffective || [],
                   before: shortShots,
                   after: segmentWriter
                     .shotCharStats(beatPlan, sharesAfter)
@@ -2262,6 +2263,8 @@ router.post('/chat', async (req, res) => {
                 supplement: expandedBody.supplement,
                 unconverged: expandedBody.unconverged,
                 expandRejected: expandedBody.expandRejected,
+                expandIneffective: expandedBody.expandIneffective || [],
+                refundedCalls: expandedBody.refundedCalls || 0,
                 microPatched: expandedBody.microPatched || [],
                 contentLength: payload.content.length,
                 degraded: expandedBody.degraded || '',
