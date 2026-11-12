@@ -379,12 +379,14 @@ test('U1 只替换点名拍的段落，同组其他拍原样保留', () => {
     beats: [{ id: 'B1', paragraphs: 2 }, { id: 'B2', paragraphs: 2 }],
     content: ['甲'.repeat(90), '乙'.repeat(90), '丙'.repeat(90), '丁'.repeat(90)].join('\n\n'),
   };
+  const plan = { beats: [{ id: 'B1', paragraphs: 2 }, { id: 'B2', paragraphs: 2 }] };
 
-  const replaced = segmentWriter.spliceExpandedBeats(group, [
-    { id: 'B2', paragraphs: ['戊'.repeat(100), '己'.repeat(100)] },
-  ]);
+  // 重写只给了 B2 的新段；B1 的段落由调用方按原稿切出后原样传进来。
+  const trim = segmentWriter.trimBeatParagraphs(group, plan, ['B2'], {
+    chunks: [['甲'.repeat(90), '乙'.repeat(90)], ['戊'.repeat(100), '己'.repeat(100)]],
+  });
 
-  assert.strictEqual(replaced, true);
+  assert.strictEqual(trim.merged, 0, '段数正好等于计划，不该合并');
   const rows = group.content.split('\n\n');
   assert.strictEqual(rows.length, 4);
   assert.match(rows[0], /^甲/);
@@ -652,8 +654,10 @@ test('V1 同拍同时有形态与禁写问题：合并成一次请求，不重�
   assert.match(instruction, /B2：.*段落形态不合规/, '形态要求必须合并在同一行');
 });
 
-test('V1 重写后总字数少 15% 以上：记录缩水拍与差值', async () => {
+test('V1 重写后本组低于原稿 85%：整组回滚，正文等于原稿并记 rewriteReverted', async () => {
   const { plan, groups } = rewriteFixture();
+  const original = groups[0].content;
+  const originalChars = countWords(original);
   const runner = parsedRunner([beatReply('B2', ['短'.repeat(10)])]);
 
   const out = await segmentWriter.rewriteMissingGroups({
@@ -665,10 +669,67 @@ test('V1 重写后总字数少 15% 以上：记录缩水拍与差值', async () 
     maxCalls: 8,
   });
 
-  assert.ok(out.shrink, '整体缩水超过 15% 必须显式记录');
-  assert.ok(out.shrink.after < out.shrink.before * 0.85, 'after 必须低于 before 的 85%');
-  assert.strictEqual(out.shrink.beats[0].beatId, 'B2', '要标出缩水拍');
-  assert.ok(out.shrink.beats[0].delta < 0, '要给出差值');
+  assert.strictEqual(out.rewriteReverted.length, 1, '低于原稿 85% 必须回滚并留痕');
+  const row = out.rewriteReverted[0];
+  assert.strictEqual(row.group, 0);
+  assert.deepStrictEqual(row.beatIds, ['B2'], '要标出这次重写涉及的拍');
+  assert.strictEqual(row.before, originalChars, '要记回滚前本组字数');
+  assert.ok(row.after < row.before * 0.85, 'after 必须低于 before 的 85%');
+  assert.ok(row.delta < 0, '要给出差值');
+  assert.match(row.reason, /低于原稿 85%/, '原因要写清楚是缩水回滚');
+  assert.strictEqual(out.groups[0].content, original, '回滚后正文必须与原稿逐字相同');
+  assert.strictEqual(out.rewroteGroups, 0, '回滚的组不算重写成功');
+});
+
+test('Y3.3 重写段数超计划 ±2：按拍合并瘦身，不整组回滚', async () => {
+  const { plan, groups } = rewriteFixture();
+  const beforeCount = segmentWriter.splitParagraphs(groups[0].content).length;
+  // B2 被拆成 14 段（计划 5，上限 7）——组内段落按计划比例重新分配后
+  // B2 仍会超上限，必须合并而不是回滚。
+  const runner = parsedRunner([
+    beatReply('B2', Array.from({ length: 14 }, () => '改'.repeat(90))),
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: ['B2'], weak: [] },
+    runSegment: runner,
+    callCount: 0,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(out.rewriteReverted.length, 0, '能合并救回来的不许整组回滚');
+  assert.strictEqual(out.rewroteGroups, 1);
+  assert.ok(out.groupDeltas[0].trimmed > 0, '要记合并了几次');
+  const paragraphs = segmentWriter.splitParagraphs(groups[0].content);
+  assert.ok(paragraphs.length < beforeCount + 14, '合并必须真的减少段数');
+  const ranges = segmentWriter.beatParagraphRanges(groups[0].beats, paragraphs.length);
+  assert.ok(ranges[1][1] - ranges[1][0] <= 7, 'B2 段数必须落回计划 ±2');
+});
+
+test('Y3.4 段数瘦不动（每对合并都超 320）：回滚并写明是段数导致', async () => {
+  const { plan, groups } = rewriteFixture();
+  const original = groups[0].content;
+  // 14 段 × 200 字：字数没缩水，但任意两段合并都超过 320，合不回容差。
+  const runner = parsedRunner([
+    beatReply('B2', Array.from({ length: 14 }, () => '长'.repeat(200))),
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: ['B2'], weak: [] },
+    runSegment: runner,
+    callCount: 0,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(out.rewriteReverted.length, 1);
+  assert.match(out.rewriteReverted[0].reason, /段数仍超出计划/);
+  assert.doesNotMatch(out.rewriteReverted[0].reason, /低于原稿 85%/, '别把段数问题写成缩水');
+  assert.strictEqual(out.rewriteReverted[0].trimmed, 0, '一段都合不动');
+  assert.strictEqual(groups[0].content, original, '回滚后正文等于原稿');
 });
 
 test('Y3.5 expandRejected 区分「本拍没名额」与「新增段不合格」', async () => {
@@ -1642,12 +1703,13 @@ test('Y3.1 扩写段只差 1–4 字到 80 时就地补一句，60–75 字仍�
   assert.strictEqual(countWords(paragraphs[3]), 60, '差 20 字不补，仍拒绝');
 });
 
-test('Y3.2 重写按组留痕：低于原稿 85% 的组进 shrunkGroups，且不丢正文', async () => {
+test('Y3.2 重写按组留痕：低于原稿 85% 的组进 rewriteReverted，正文回滚为原稿', async () => {
   const plan = makePlan(4);
   const draftRunner = makeRunner([body('甲', 8), body('乙', 8)]);
   const draft = await segmentWriter.draftInSegments({ plan, runSegment: draftRunner });
 
   const beforeGroup = countWords(draft.groups[1].content);
+  const beforeContent = draft.groups[1].content;
   // 只重写 B4，且只回 2 段：本组字数必然低于原稿 85%。
   const rewriteRunner = makeRunner(['重写这一组：\n\n' + body('乙改', 2)]);
 
@@ -1661,12 +1723,13 @@ test('Y3.2 重写按组留痕：低于原稿 85% 的组进 shrunkGroups，且不
     maxCalls: 8,
   });
 
-  assert.strictEqual(rewritten.shrunkGroups.length, 1, '缩水组必须留痕');
-  const row = rewritten.shrunkGroups[0];
+  assert.strictEqual(rewritten.rewriteReverted.length, 1, '缩水组必须留痕');
+  const row = rewritten.rewriteReverted[0];
   assert.strictEqual(row.group, 1);
   assert.strictEqual(row.before, beforeGroup);
   assert.ok(row.ratio < 0.85, `组字数比例 ${row.ratio} 应低于 0.85`);
-  assert.ok(rewritten.content.length > 0, '缩水也必须交付正文，不能整组丢弃');
+  assert.strictEqual(rewritten.groups[1].content, beforeContent, '回滚后本组正文必须等于原稿');
+  assert.ok(rewritten.content.length > 0, '回滚也必须交付正文，不能整组丢弃');
   assert.ok(
     rewritten.groupDeltas.every((item) => typeof item.after === 'number'),
     '每个重写组都要有前后字数'

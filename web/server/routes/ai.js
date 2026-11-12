@@ -1880,8 +1880,8 @@ router.post('/chat', async (req, res) => {
                 degraded: rewrite.degraded,
                 finishReason: rewrite.finishReason || '',
                 contentLength: rewrite.content.length,
-                shrink: rewrite.shrink || null,
-                shrunkGroups: rewrite.shrunkGroups || [],
+                rewriteReverted: rewrite.rewriteReverted || [],
+                groupDeltas: rewrite.groupDeltas || [],
                 usage: segmentWriter.usageSum(rewrite.calls),
               })
             );
@@ -1941,10 +1941,14 @@ router.post('/chat', async (req, res) => {
               beatCheck.shapeBeatIds = shapeCheck.beatIds;
               beatCheck.paragraphCount = shapeCheck.totalParagraphs;
               beatCheck.avgParagraphChars = shapeCheck.avgChars;
-              // 整体缩水不许静默：前后总字数与每拍差值随交付一起带出。
-              if (rewrite.shrink) beatCheck.rewriteShrink = rewrite.shrink;
-              if ((rewrite.shrunkGroups || []).length) {
-                beatCheck.rewriteShrunkGroups = rewrite.shrunkGroups;
+              // 回滚的组必须显式带出（组/拍/前后字数/差值/原因），不能静默吃掉一次重写。
+              // 回滚后正文就是原稿，下面的形态与禁写复检都按这份原稿重算——
+              // 原有违规照旧报出，不因为「这次重写被回滚」就记成通过。
+              if ((rewrite.rewriteReverted || []).length) {
+                beatCheck.rewriteReverted = rewrite.rewriteReverted;
+              }
+              if ((rewrite.groupDeltas || []).length) {
+                beatCheck.rewriteGroupDeltas = rewrite.groupDeltas;
               }
             }
 

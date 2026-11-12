@@ -875,7 +875,9 @@ function buildBeatRewriteInstruction({
     '## 篇幅（硬约束）',
     `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点）：按各拍计划段数（±2 段）落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。` +
       `段数优先落在 ${Math.max(1, group.targetParagraphs - 2)}–${group.targetParagraphs + 2} 段；若为压掉超长段而多出一段，允许超出计划 ±2，只记数、不判失败。` +
-      '重写先保本组纯汉字目标，再调形状；重写后本组不得低于原稿 85%。扩写也不许用加空段、拆句、加标点凑字数。',
+      '重写先保本组纯汉字目标，再调形状；重写后本组不得低于原稿 85%，低于就整组作废。' +
+      '修形态不许删内容：只许调段落切分与句间顺序，删除整句须同时补等量叙述。' +
+      '扩写也不许用加空段、拆句、加标点凑字数。',
     '',
     '## 每拍硬约束',
     beats
@@ -1713,7 +1715,12 @@ function groupsForIds(groups, ids) {
   return groups.filter((g) => g.beatIds.some((id) => wanted.has(id)));
 }
 
-/** 重写后总字数低于重写前的这个比例，就记一次整体缩水（不允许静默）。 */
+/**
+ * 重写后本组字数低于原稿的这个比例，就整组回滚。
+ *
+ * 取舍写死在这里：内容不缩水优先于段落形态。宁可有几段超长，
+ * 也不许一次「修形状」把本组砍掉 15% 以上——实测重写能把全章从 4,608 压到 2,823。
+ */
 const REWRITE_SHRINK_RATIO = 0.85;
 
 /**
@@ -1749,9 +1756,9 @@ async function rewriteMissingGroups({
   let rewroteGroups = 0;
   let boundaryTrimmed = 0;
   const failedGroups = [];
-  const beatDeltas = [];
-  // 按组记账：重写后本组低于原稿 85% 必须留痕，不能只靠全章缩水兜底。
+  // 按组记账：重写后本组低于原稿 85% 就回滚，逐组留痕（组/拍/前后/差值/原因）。
   const groupDeltas = [];
+  const rewriteReverted = [];
 
   const weakIds = (coverage?.weak || []).map((w) => w.id);
   const dupIds = coverage?.handoverDuplicated || [];
@@ -1769,9 +1776,6 @@ async function rewriteMissingGroups({
   const wanted = new Set(missingIds);
   const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
   const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
-  const chapterBefore = countWords(
-    composeChapterContent({ groups, existingBody, mergeScenes }).content
-  );
 
   for (const group of affected) {
     const beats = factsOnly ? group.beats : group.beats.filter((beat) => wanted.has(beat.id));
@@ -1795,16 +1799,8 @@ async function rewriteMissingGroups({
     const afterGroup = groups.find((g) => g.index === group.index + 1);
     const nextHead = afterGroup ? splitParagraphs(afterGroup.content).slice(0, 2).join('\n\n') : '';
 
-    // 替换前的拍区间与字数：缩水判定要精确到「哪一拍少了多少」。
+    // 替换前的本组原稿：回滚时原样放回。
     const snapshot = group.content;
-    const paragraphsBefore = splitParagraphs(snapshot);
-    const rangesBefore = beatParagraphRanges(group.beats, paragraphsBefore.length);
-    const beforeChars = new Map(
-      group.beats.map((beat, index) => {
-        const [from, to] = rangesBefore[index] || [0, 0];
-        return [beat.id, countWords(paragraphsBefore.slice(from, to).join(''))];
-      })
-    );
 
     const instruction = buildBeatRewriteInstruction({
       plan,
@@ -1877,39 +1873,93 @@ async function rewriteMissingGroups({
       })
       .filter((row) => row.paragraphs.length);
 
+    // 写回前的全章交付判定：作为「这次重写新造了哪些违规」的对照基线。
+    const beforeDelivery = evaluateShapeDelivery(
+      checkParagraphShape(plan, composeChapterContent({ groups, existingBody, mergeScenes }).content)
+    );
     group.content = snapshot;
-    if (!spliceExpandedBeats(group, cleaned)) {
+    if (!cleaned.length) {
       failedGroups.push(group.index);
       continue;
     }
-    for (const row of cleaned) {
-      const beforeCharsOfBeat = beforeChars.get(row.id) || 0;
-      const afterCharsOfBeat = row.paragraphs.reduce(
-        (sum, paragraph) => sum + countWords(paragraph),
-        0
-      );
-      beatDeltas.push({
-        beatId: row.id,
-        group: group.index,
-        before: beforeCharsOfBeat,
-        after: afterCharsOfBeat,
-        delta: afterCharsOfBeat - beforeCharsOfBeat,
-      });
-    }
-    // 按组留痕：先保纯汉字目标，再调形状；本组仍低于原稿 85% 就记名。
+    // 先按真实拍边界切出各拍段落，再把点名拍换成模型新写的段。
+    // 用真实边界而不是拼接后按权重反推：反推会把段数摊到没重写的拍上，
+    // 瘦身看起来达标、扩写按真实拍算名额时依然没有位置。
+    const baseParagraphs = splitParagraphs(snapshot);
+    const baseRanges = beatParagraphRanges(group.beats, baseParagraphs.length);
+    const byId = new Map(cleaned.map((row) => [row.id, row.paragraphs]));
+    const chunks = group.beats.map((beat, index) => {
+      const next = byId.get(beat.id);
+      if (next && next.length) return next.slice();
+      const [from, to] = baseRanges[index] || [0, 0];
+      return baseParagraphs.slice(from, to);
+    });
+    // 先按拍瘦身，再判净增：把重写拆碎的段合回去，别让「段数超」白触发整组回滚。
+    // 合并只减不删，形态改好的部分保住；合不动才在下面按段数回滚。
+    // 瘦身收到「计划段数」而不是「计划 +2」：那 ±2 正是扩写要用的追加名额。
+    const trim = trimBeatParagraphs(group, plan, beats.map((beat) => beat.id), { chunks });
+
+    const afterDelivery = evaluateShapeDelivery(
+      checkParagraphShape(plan, composeChapterContent({ groups, existingBody, mergeScenes }).content)
+    );
+    // 形态验收与交付同一把尺子：只拦这次重写新造出来的 >320、连续 3 段 <40、
+    // 40–79 超配额。全章本来就有的问题不该由一次重写背锅。
+    const shapeProblems = shapeAcceptProblems(
+      beforeDelivery,
+      afterDelivery,
+      beats.map((beat) => beat.id)
+    );
+    // 内容不缩水优先于段落形态：本组被砍掉 15% 以上就整组回滚。
+    // 形态/禁写问题保留原状，由交付自检如实报出——不因为回滚就把违规报成通过。
     const groupBeforeChars = countWords(snapshot);
     const groupAfterChars = countWords(group.content);
     const groupRatio = groupBeforeChars
       ? Math.round((groupAfterChars / groupBeforeChars) * 1000) / 1000
       : 1;
+    const groupDelta = groupAfterChars - groupBeforeChars;
+    const beatIdsOfGroup = beats.map((beat) => beat.id);
+    const shrinkReason = groupRatio < REWRITE_SHRINK_RATIO
+      ? `重写后 ${groupAfterChars}/${groupBeforeChars} 字（${Math.round(groupRatio * 100)}%），低于原稿 85%`
+      : '';
+    // 瘦身之后仍超容差：说明同拍里找不到能合的一对（每对合并都会超 140 字），
+    // 这时才回滚，并在原因里写明是段数问题而不是缩水。
+    const countReason = trim.overflow > 0
+      ? `重写后段数仍超出计划 ±${SHAPE_BEAT_TOLERANCE}（多 ${trim.overflow} 段，无法再合并）`
+      : '';
+    if (groupBeforeChars > 0 && (shrinkReason || shapeProblems.length || countReason)) {
+      group.content = snapshot;
+      rewriteReverted.push({
+        group: group.index,
+        beatIds: beatIdsOfGroup,
+        before: groupBeforeChars,
+        after: groupAfterChars,
+        delta: groupDelta,
+        ratio: groupRatio,
+        reason: [shrinkReason, countReason, ...shapeProblems].filter(Boolean).join('；'),
+        shapeProblems,
+        trimmed: trim.merged,
+      });
+      groupDeltas.push({
+        group: group.index,
+        beatIds: beatIdsOfGroup,
+        before: groupBeforeChars,
+        after: groupAfterChars,
+        delta: groupDelta,
+        ratio: groupRatio,
+        trimmed: trim.merged,
+        reverted: true,
+      });
+      continue;
+    }
     groupDeltas.push({
       group: group.index,
-      beatIds: beats.map((beat) => beat.id),
+      beatIds: beatIdsOfGroup,
       before: groupBeforeChars,
       after: groupAfterChars,
-      delta: groupAfterChars - groupBeforeChars,
+      delta: groupDelta,
       ratio: groupRatio,
-      shrunk: groupBeforeChars > 0 && groupRatio < REWRITE_SHRINK_RATIO,
+      trimmed: trim.merged,
+      reverted: false,
     });
     rewroteGroups += 1;
   }
@@ -1917,17 +1967,6 @@ async function rewriteMissingGroups({
   const composed = composeChapterContent({ groups, existingBody, mergeScenes });
   const normalized = normalizeChapterShape(composed.content);
   const beforeNormalized = normalizeChapterShape(composed.contentBeforeMerge);
-  // 整体缩水超过 15%：把前后总字数与每一拍的差值带出去，交付时写进 beatCheck。
-  const shrink =
-    chapterBefore > 0 && normalized.chars < Math.round(chapterBefore * REWRITE_SHRINK_RATIO)
-      ? {
-          before: chapterBefore,
-          after: normalized.chars,
-          delta: normalized.chars - chapterBefore,
-          ratio: Math.round((normalized.chars / chapterBefore) * 1000) / 1000,
-          beats: beatDeltas.filter((row) => row.delta < 0).sort((a, b) => a.delta - b.delta),
-        }
-      : null;
   return {
     groups,
     content: normalized.content,
@@ -1942,10 +1981,8 @@ async function rewriteMissingGroups({
     rewroteGroups,
     failedGroups,
     boundaryTrimmed,
-    beatDeltas,
     groupDeltas,
-    shrunkGroups: groupDeltas.filter((row) => row.shrunk),
-    shrink,
+    rewriteReverted,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
@@ -2112,29 +2149,6 @@ function microPatchNearMiss(paragraphs) {
 }
 
 /**
- * 只替换点名拍的段落，同组其他拍原样保留。
- *
- * 拍区间按计划段数权重切分（与 checkParagraphShape 同一口径），
- * 因此替换后不会挪动其他拍的段落。
- */
-function spliceExpandedBeats(group, expanded) {
-  const paragraphs = splitParagraphs(group.content);
-  const ranges = beatParagraphRanges(group.beats, paragraphs.length);
-  const chunks = ranges.map(([from, to]) => paragraphs.slice(from, to));
-  const byId = new Map((expanded || []).map((row) => [row.id, row.paragraphs]));
-  let replaced = 0;
-  group.beats.forEach((beat, index) => {
-    const next = byId.get(beat.id);
-    if (!next || !next.length) return;
-    chunks[index] = next.slice();
-    replaced += 1;
-  });
-  if (!replaced) return false;
-  group.content = chunks.flat().join('\n\n');
-  return true;
-}
-
-/**
  * 把新增段落接到对应拍末尾，其他拍一字不动。
  *
  * 扩写只走这一条路：模型给的是「新增」，代码负责拼，结构上不可能比原稿短。
@@ -2154,6 +2168,113 @@ function appendExpandedBeats(group, additions) {
   if (!appended) return false;
   group.content = chunks.flat().join('\n\n');
   return true;
+}
+
+/**
+ * 重写后段数超计划 ±2 时，按拍瘦身。
+ *
+ * 重写常把一段拆成两三段"匀"出来，段数一超，扩写那边就没有追加名额了
+ * （扩写规则：段数到顶只丢新增段）。整组回滚又会把已经改好的形态一起丢掉，
+ * 所以这里只做合并不做删除：把同拍内相邻的短段、或明显是从一句拆出来的
+ * 碎段并回上一段。
+ *
+ * 三条硬约束：
+ *   - 合并不删字，只调段落切分（一个字都不改）。
+ *   - 合并只发生在同一拍内部，不跨拍合并（跨拍会串掉节拍边界）。
+ *   - 合并后不超过 320 字（交付唯一硬拦），且不低于 40 字（不新造碎段）。
+ *
+ * 收口目标是「计划段数」而不是「计划 +2」：±2 那点余量正是扩写阶段要用的
+ * 追加名额，瘦身停在 +2 等于把名额又吃光，扩写照样被堵死。
+ * 段数本来就少于计划的拍不动（不拆段）。
+ *
+ * 为什么按拍收而不是按整组总数收：整组总数达标时，某一拍仍可能超容差，
+ * 而扩写的名额是按**组内拍区间**算的——组内看着够、扩写照样没名额，
+ * 这正是「扩写被堵死」的真正来源。
+ *
+ * @param {Object} options
+ * @param {string[][]} [options.chunks] 每拍的真实段落（重写拍是模型新给的，
+ *        其余拍是原稿切出来的）。不给就按拍区间反推。
+ * @returns {{merged: number, mergedByBeat: Object, overflow: number, overflowBeats: Array}}
+ *          merged 是合并次数；overflow 是瘦身后仍超出容差的段数（>0 说明
+ *          合不回来了，这组只能回滚）；overflowBeats 记是哪几拍合不动。
+ */
+function trimBeatParagraphs(group, plan, rewrittenBeatIds, options = {}) {
+  const beats = Array.isArray(group.beats) ? group.beats : [];
+  const planBeats = Array.isArray(plan?.beats) ? plan.beats : [];
+  const plannedById = new Map(planBeats.map((beat) => [beat.id, Number(beat.paragraphs) || 0]));
+  const rewritten = new Set(rewrittenBeatIds || []);
+  const plannedOf = (beat) => plannedById.get(beat.id) || Number(beat.paragraphs) || 0;
+
+  // 每拍的真实段落：重写拍是模型新给的，其余拍按原稿拍区间切出来。
+  let chunks;
+  if (Array.isArray(options.chunks) && options.chunks.length === beats.length) {
+    chunks = options.chunks.map((chunk) => [...chunk]);
+  } else {
+    const paragraphs = splitParagraphs(group.content);
+    const ranges = beatParagraphRanges(beats, paragraphs.length);
+    chunks = beats.map((beat, index) => {
+      const [from, to] = ranges[index] || [0, 0];
+      return paragraphs.slice(from, to);
+    });
+  }
+
+  /** 在本拍里挑一对最该合的相邻段。 */
+  const pickPair = (paragraphs) => {
+    let best = null;
+    for (let i = 0; i < paragraphs.length - 1; i += 1) {
+      const left = countWords(paragraphs[i]);
+      const right = countWords(paragraphs[i + 1]);
+      const combined = left + right;
+      // 合完不能超 320 字（交付硬拦），也不能还是碎段（<40 字）。
+      if (combined > SHAPE_HARD_MAX || combined < SHAPE_SHORT_FRAGMENT_MAX) continue;
+      // 优先合出 80–140 字的段（范文主力区间），其次合短的。
+      const score = [combined > SHAPE_PARAGRAPH_MAX ? 1 : 0, combined];
+      if (
+        !best ||
+        score[0] < best.score[0] ||
+        (score[0] === best.score[0] && score[1] < best.score[1])
+      ) {
+        best = { i, score };
+      }
+    }
+    return best;
+  };
+
+  let merged = 0;
+  const mergedByBeat = {};
+  beats.forEach((beat, index) => {
+    // 只动被重写的拍：没重写的拍一个字都不碰。
+    if (!rewritten.has(beat.id)) return;
+    const planned = plannedOf(beat);
+    const paragraphs = chunks[index];
+    if (!planned || !paragraphs.length || paragraphs.length <= planned) return;
+    let guard = 0;
+    while (paragraphs.length > planned && guard < 200) {
+      const pair = pickPair(paragraphs);
+      if (!pair) break;
+      paragraphs.splice(pair.i, 2, `${paragraphs[pair.i]}${paragraphs[pair.i + 1]}`);
+      merged += 1;
+      guard += 1;
+      mergedByBeat[beat.id] = (mergedByBeat[beat.id] || 0) + 1;
+    }
+  });
+
+  group.content = chunks.flat().join('\n\n');
+
+  // 瘦身后仍超容差（计划 +2）：这一组合不回来了，交给回滚判断。
+  const overflowBeats = beats
+    .map((beat, index) => {
+      if (!rewritten.has(beat.id)) return null;
+      const planned = plannedOf(beat);
+      if (!planned) return null;
+      const count = chunks[index].length;
+      const limit = planned + SHAPE_BEAT_TOLERANCE;
+      if (count <= limit) return null;
+      return { beatId: beat.id, count, limit, excess: count - limit };
+    })
+    .filter(Boolean);
+  const overflow = overflowBeats.reduce((sum, row) => sum + row.excess, 0);
+  return { merged, mergedByBeat, overflow, overflowBeats };
 }
 
 /**
@@ -2575,9 +2696,9 @@ module.exports = {
   underFilledShots,
   buildExpandInstruction,
   expandedBeatsFrom,
-  spliceExpandedBeats,
   filterAppendParagraphs,
   appendExpandedBeats,
+  trimBeatParagraphs,
   expandMissingBeats,
   RESTATEMENT_SIMILARITY,
   MERGE_MAX_PARAGRAPH_CHARS,
