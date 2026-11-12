@@ -1373,6 +1373,56 @@ function evaluateShapeDelivery(shape) {
 }
 
 /**
+ * 扩写与重写共用的验收口径。
+ *
+ * 尺子与交付完全一致（同一个 evaluateShapeDelivery）：40–79 字段本身不算
+ * 问题，只有单段 >320、连续 3 段 <40、40–79 占比超 38.9% 才拦。
+ *
+ * 与交付唯一的差别是比法：交付判「全章现状」，这里判「这次改动新造出来的
+ * 违规」。全章本来就有 40–79 超额时，不能因此把一次有效的扩写整组拒掉——
+ * 那正是线上扩写一次都不生效的原因（模型给出 41–85 字段就被判不合格）。
+ *
+ * @param {Object} before 改动前的交付判定
+ * @param {Object} after 改动后的交付判定
+ * @param {string[]} ownedBeatIds 本次改动涉及的拍
+ * @returns {string[]} 新造出来的违规（空数组表示通过）
+ */
+function shapeAcceptProblems(before, after, ownedBeatIds) {
+  const problems = [];
+  const owned = new Set(ownedBeatIds || []);
+  const beforeBlocking = (before && before.blocking) || [];
+  const afterBlocking = (after && after.blocking) || [];
+
+  const countKind = (rows, kind) => rows.filter((row) => row.kind === kind).length;
+
+  const longBefore = countKind(beforeBlocking, 'too_long');
+  const longAfter = countKind(afterBlocking, 'too_long');
+  if (longAfter > longBefore) {
+    problems.push(`新增 ${longAfter - longBefore} 段超过 ${SHAPE_HARD_MAX} 字`);
+  }
+
+  const runBefore = countKind(beforeBlocking, 'short_run');
+  const runAfter = countKind(afterBlocking, 'short_run');
+  if (runAfter > runBefore) {
+    problems.push(
+      `新增 ${runAfter - runBefore} 处连续 ${SHAPE_SHORT_RUN} 段不足 ${SHAPE_SHORT_FRAGMENT_MAX} 字`
+    );
+  }
+
+  // 段数按拍 ±2 是排布约束，在新增段验收（filterAppendParagraphs）与重写指令里判，
+  // 这里不重复：整章区间是按权重反推的，同一次改动会让别的拍跟着漂。
+
+  const limit = (after && after.distribution && after.distribution.fragmentLimit) || 0;
+  const ratioBefore = (before && before.distribution && before.distribution.fragmentRatio) || 0;
+  const ratioAfter = (after && after.distribution && after.distribution.fragmentRatio) || 0;
+  if (ratioBefore <= limit && ratioAfter > limit) {
+    problems.push(`40–79 字段占比 ${ratioAfter}%（上限 ${limit}%）`);
+  }
+
+  return problems;
+}
+
+/**
  * 把一组形态违规压缩成给写手看的一句话，同类只报数量，不逐段罗列。
  */
 function describeShapeViolations(rows) {
@@ -2358,6 +2408,7 @@ module.exports = {
   checkParagraphShape,
   summarizeShapeViolations,
   evaluateShapeDelivery,
+  shapeAcceptProblems,
   describeShapeViolations,
   composeChapterContent,
   beatMarkers,
