@@ -62,20 +62,37 @@ export default function SettingPanel({ workId }) {
    * 正文里那个旧名是某个角色的口头称呼，不该动。
    */
   const offerRenameInText = async (settingId, from, to, before) => {
-    if (!before?.total) return;
+    // 出现统计是异步扫的：刚打开面板就改名时 stats 可能还是空的，
+    // 直接 return 会让「全文一起改」悄悄不出现，作者以为功能没做。
+    // 这里现扫一次旧名，确认正文里到底有没有。
+    let known = before;
+    if (!known?.total) {
+      try {
+        const res = await api.post('/occurrences/scan', {
+          workId,
+          items: [{ key: 'rename', words: [from] }],
+        });
+        const hit = res.data?.rename;
+        if (hit?.total) known = hit;
+      } catch (e) {
+        // 扫描失败就当没出现：不能因为一个统计把改名本身卡住
+      }
+    }
+    if (!known?.total) return;
+    const hits = known;
     Modal.confirm({
       title: '正文里的旧名要一起改吗？',
       content: (
         <div>
           <p style={{ marginBottom: 6 }}>
-            正文里有 <b>{before.total}</b> 处「{from}」，分布在 {before.chapters.length} 章。
+            正文里有 <b>{hits.total}</b> 处「{from}」，分布在 {hits.chapters.length} 章。
           </p>
           <p style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
             一并替换会直接改写正文，每章都会留一份自动版本，可在版本历史里回滚。
           </p>
         </div>
       ),
-      okText: `全部替换（${before.total} 处）`,
+      okText: `全部替换（${hits.total} 处）`,
       cancelText: '只改卡片',
       onOk: async () => {
         try {
