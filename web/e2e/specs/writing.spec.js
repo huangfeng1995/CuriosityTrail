@@ -84,6 +84,34 @@ test.describe('章节写作', () => {
     // 一组拆块只记一个撤销点：按一次就回到原段落
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
     await expect(page.locator('[data-block-id]')).toHaveCount(1);
-    await expect(text).toHaveValue('第一句。第二句。第三句。');
+    await expect(page.locator('textarea[placeholder="正文…"]')).toHaveValue(
+      '第一句。第二句。第三句。'
+    );
+  });
+
+  test('防抖窗口内切章，刚写的字不丢', async ({ page }) => {
+    const f = fixture();
+    // 章节名带时间戳：重试用例复用同一个库，固定名字会堆出重复行
+    const otherTitle = `换章测试 ${Date.now()}`;
+    const created = await page.request.post(`/api/works/${f.work.id}/chapters`, {
+      data: { title: otherTitle },
+    });
+    expect(created.ok()).toBeTruthy();
+
+    await page.goto(`/works/${f.work.id}`);
+    await expect(page.locator('[data-block-id]')).toHaveCount(1);
+    // 别的用例可能改过标题，现取当前章名，别用 fixture 里的旧值
+    const firstTitle = await page.locator('.ant-input-borderless').inputValue();
+
+    // 写完立刻切章：800ms 防抖还没触发，最容易被上一次实现整段丢掉
+    await page.locator('textarea[placeholder="正文…"]').fill('换章前刚写的一句。');
+    await page.locator('.ct-tree-label', { hasText: otherTitle }).first().click();
+    await expect(page.locator('.ant-input-borderless')).toHaveValue(otherTitle);
+    // 新章还没有块：确认确实切过去了，而不是停在旧章
+    await expect(page.locator('[data-block-id]')).toHaveCount(0);
+
+    // 切回来，内容必须还在
+    await page.locator('.ct-tree-label', { hasText: firstTitle }).first().click();
+    await expect(page.locator('textarea[placeholder="正文…"]')).toHaveValue('换章前刚写的一句。');
   });
 });

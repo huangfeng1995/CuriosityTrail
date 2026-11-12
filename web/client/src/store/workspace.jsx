@@ -216,47 +216,86 @@ export function WorkspaceProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
   // blocks 的防抖保存
+  //
+  // 待落库的快照必须连同 chapterId 一起记下来，不能等定时器触发时再去读
+  // stateRef：那时作者可能已经切到别的章节，轻则把新章的空白写进旧章，
+  // 重则被 effect 的 cleanup 清掉定时器——在 800ms 窗口内点另一章，
+  // 刚打的字就凭空消失。pendingRef 一旦填入，切章/关页都会先把它写掉。
   const dirtyRef = useRef(false);
   const timerRef = useRef(null);
+  const pendingRef = useRef(null); // { chapterId, blocks }
+  // 章节加载的请求序号：连点两章时只认最后一次点击的结果
+  const loadSeqRef = useRef(0);
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  /** 把一份快照写进库。失败时由调用方决定是否留着重试。 */
+  const persist = useCallback(async ({ chapterId, blocks }) => {
+    dispatch({ type: 'save/status', status: 'saving' });
+    try {
+      await api.put(`/chapters/${chapterId}`, { blocks });
+      dispatch({ type: 'save/status', status: 'saved' });
+      return true;
+    } catch (e) {
+      dispatch({
+        type: 'notice/set',
+        error: '自动保存失败：' + (e.response?.data?.error || e.message),
+      });
+      dispatch({ type: 'save/status', status: 'error' });
+      return false;
+    }
+  }, []);
+
+  /** 立刻写掉待落库的快照。切章、关页前调用。 */
+  const flushPending = useCallback(async () => {
+    clearTimeout(timerRef.current);
+    const snapshot = pendingRef.current;
+    if (!snapshot) return;
+    pendingRef.current = null;
+    if (await persist(snapshot)) {
+      dirtyRef.current = false;
+    } else {
+      // 写失败就留着，下一次切章/关页再试一次，别静默丢掉这段输入
+      pendingRef.current = pendingRef.current || snapshot;
+      dirtyRef.current = true;
+    }
+  }, [persist]);
+
   useEffect(() => {
     if (!dirtyRef.current) return;
+    const { chapter, blocks } = stateRef.current;
+    if (!chapter) return;
+
+    pendingRef.current = { chapterId: chapter.id, blocks };
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(async () => {
-      const { chapter, blocks } = stateRef.current;
-      if (!chapter) return;
-      dispatch({ type: 'save/status', status: 'saving' });
-      try {
-        await api.put(`/chapters/${chapter.id}`, { blocks });
-        dirtyRef.current = false;
-        dispatch({ type: 'save/status', status: 'saved' });
-      } catch (e) {
-        dispatch({
-          type: 'notice/set',
-          error: '自动保存失败：' + (e.response?.data?.error || e.message),
-        });
-        dispatch({ type: 'save/status', status: 'error' });
-      }
+    timerRef.current = setTimeout(() => {
+      flushPending();
     }, 800);
 
     return () => clearTimeout(timerRef.current);
-  }, [state.blocks]);
+  }, [state.blocks, flushPending]);
 
   // 离开页面前把未落库的改动写掉
   useEffect(() => {
     const flush = () => {
-      const { chapter, blocks } = stateRef.current;
-      if (!dirtyRef.current || !chapter) return;
+      const snapshot =
+        pendingRef.current ||
+        (dirtyRef.current && stateRef.current.chapter
+          ? {
+              chapterId: stateRef.current.chapter.id,
+              blocks: stateRef.current.blocks,
+            }
+          : null);
+      if (!snapshot) return;
+      pendingRef.current = null;
       dirtyRef.current = false;
       const blob = new Blob(
-        [JSON.stringify({ blocks })],
+        [JSON.stringify({ blocks: snapshot.blocks })],
         { type: 'application/json' }
       );
       // 同步请求走 keepalive，页面关闭时也能发出去
       navigator.sendBeacon?.(
-        `/api/chapters/${chapter.id}`,
+        `/api/chapters/${snapshot.chapterId}`,
         blob
       );
     };
@@ -373,6 +412,9 @@ export function WorkspaceProvider({ children }) {
    */
   const replaceAllBlocks = useCallback((blocks) => {
     dirtyRef.current = false;
+    // 回滚前的待存快照作废：留着的话下一次切章会把旧内容再写回去
+    pendingRef.current = null;
+    clearTimeout(timerRef.current);
     dispatch({ type: 'blocks/replaceAll', blocks });
   }, []);
 
@@ -401,26 +443,41 @@ export function WorkspaceProvider({ children }) {
     }
   }, []);
 
-  const loadChapter = useCallback(async (chapterId) => {
-    try {
-      const res = await api.get(`/chapters/${chapterId}`);
-      const chapter = res.data;
-      dispatch({
-        type: 'chapter/loaded',
-        chapter,
-        blocks: parseBlocks(chapter.blocks),
-      });
-      dirtyRef.current = false;
-      lastEditRef.current = null;
-      return chapter;
-    } catch (e) {
-      dispatch({
-        type: 'notice/set',
-        error: '章节加载失败：' + (e.response?.data?.error || e.message),
-      });
-      return null;
-    }
-  }, []);
+  const loadChapter = useCallback(
+    async (chapterId) => {
+      const seq = ++loadSeqRef.current;
+
+      // 切章前先把上一章防抖窗口里的改动写掉。
+      // 不写的话，cleanup 会把定时器清掉，这段输入就再也发不出去了。
+      await flushPending();
+
+      try {
+        const res = await api.get(`/chapters/${chapterId}`);
+        // 连点两个章节时，先发的请求可能后到；只认最后一次点击
+        if (seq !== loadSeqRef.current) return null;
+
+        const chapter = res.data;
+        // 拉取期间作者可能又在旧章里写了两句：落库后再切换
+        await flushPending();
+        if (seq !== loadSeqRef.current) return null;
+
+        dispatch({
+          type: 'chapter/loaded',
+          chapter,
+          blocks: parseBlocks(chapter.blocks),
+        });
+        lastEditRef.current = null;
+        return chapter;
+      } catch (e) {
+        dispatch({
+          type: 'notice/set',
+          error: '章节加载失败：' + (e.response?.data?.error || e.message),
+        });
+        return null;
+      }
+    },
+    [flushPending]
+  );
 
   const value = useMemo(
     () => ({
