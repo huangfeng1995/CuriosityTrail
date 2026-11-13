@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 
 // 2026-11-03 栏宽默认值下调（左 288→240、右 352→288），
-// 键名升到 v2：旧的 ct.workspace.columns 记的是老默认值，
-// 直接沿用会让老用户永远看不到新默认，所以旧键只读一次做迁移后即删除。
-const STORAGE_KEY = 'ct.workspace.columns.v2';
+// 2026-11-13 右栏改回按视口算（作者反馈「内容挤在一条窄列」）。
+// 键名跟着升到 v3：旧键记的是老默认值，直接沿用会让老用户永远看不到新默认，
+// 所以旧键只读一次做迁移后即删除。
+const STORAGE_KEY = 'ct.workspace.columns.v3';
+const PREV_STORAGE_KEY = 'ct.workspace.columns.v2';
 const LEGACY_STORAGE_KEY = 'ct.workspace.columns';
 const COLLAPSE_KEY = 'ct.workspace.collapsed';
 
@@ -21,7 +23,21 @@ export const LIMITS = {
 const DEFAULTS = { left: 240, right: 288 };
 /** v1 时代的默认宽度。用来判断旧值到底是"没动过"还是"手动拖过"。 */
 const LEGACY_DEFAULTS = { left: 288, right: 352 };
+/** v2 时代的右栏默认宽度，迁移时用来识别「没拖过」。 */
+const PREV_RIGHT_DEFAULT = 288;
 const COLLAPSED_DEFAULTS = { left: false, right: false };
+
+/**
+ * 右栏默认宽度：按视口比例走，夹在 336–420 之间。
+ *
+ * 固定 288 在大屏上只占不到两成，对话与卡片被挤成一条窄列；
+ * 按比例的默认值在大屏给足位置，窄屏也不会把正文挤没。
+ * 下限 336 卡在角色标签「只显示图标」的阈值上——默认状态下五个名字都看得见。
+ */
+function defaultRightWidth() {
+  const vw = typeof window === 'undefined' ? 1440 : window.innerWidth;
+  return Math.min(Math.max(Math.round(vw * 0.23), 336), 420);
+}
 
 /** 中间编辑区的最小宽度。左右两栏加起来不能把正文挤没。 */
 const CENTER_MIN = 420;
@@ -31,23 +47,42 @@ const clamp = (v, { min, max }) => Math.min(Math.max(v, min), max);
 /**
  * 读初始宽度。
  *
- * 先读 v2；没有 v2 再看 v1 旧键做一次性迁移：
- * - 旧值和旧默认（288/352）完全一样 → 用户没拖过，换成新默认；
+ * 先读 v3；没有 v3 依次看 v2、v1 旧键做一次性迁移：
+ * - 旧值和那一代的默认值完全一样 → 用户没拖过，换成当前默认；
  * - 任何一栏和旧默认不同 → 视为手动拖过，保留手动值。
  * 旧键在挂载后即删除，迁移只发生一次。
  */
 function readStoredWidths() {
+  const fallback = { left: DEFAULTS.left, right: defaultRightWidth() };
+
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const saved = JSON.parse(raw);
       return {
-        left: clamp(Number(saved.left) || DEFAULTS.left, LIMITS.left),
-        right: clamp(Number(saved.right) || DEFAULTS.right, LIMITS.right),
+        left: clamp(Number(saved.left) || fallback.left, LIMITS.left),
+        right: clamp(Number(saved.right) || fallback.right, LIMITS.right),
       };
     }
   } catch {
     // 存储不可用（隐私模式）就往下走默认值
+  }
+
+  // v2 → v3：右栏还停在上一个默认值 288 的，说明作者没拖过，
+  // 换成按视口算的新默认；拖过的值一律原样保留。
+  try {
+    const prevRaw = localStorage.getItem(PREV_STORAGE_KEY);
+    if (prevRaw) {
+      const prev = JSON.parse(prevRaw);
+      const left = clamp(Number(prev.left) || DEFAULTS.left, LIMITS.left);
+      const right = clamp(Number(prev.right) || PREV_RIGHT_DEFAULT, LIMITS.right);
+      return {
+        left,
+        right: right === PREV_RIGHT_DEFAULT ? fallback.right : right,
+      };
+    }
+  } catch {
+    // 旧值坏了就当没有
   }
 
   try {
@@ -64,7 +99,7 @@ function readStoredWidths() {
     // 旧值坏了就当没有
   }
 
-  return DEFAULTS;
+  return fallback;
 }
 
 /**
@@ -107,10 +142,11 @@ export default function useColumnWidths() {
   }, [collapsed]);
 
   // 旧键读完就删：迁移只做一次，之后改默认值不会再被老数据盖住。
-  // 新宽度由上面的 effect 写进 v2；用户手拖的值也记在 v2，不受影响。
+  // 新宽度由上面的 effect 写进 v3；用户手拖的值也记在 v3，不受影响。
   useEffect(() => {
     try {
       localStorage.removeItem(LEGACY_STORAGE_KEY);
+      localStorage.removeItem(PREV_STORAGE_KEY);
     } catch {
       // 存储不可用就算了
     }
@@ -133,9 +169,12 @@ export default function useColumnWidths() {
   const setLeft = useCallback((v) => setWidth('left', v), [setWidth]);
   const setRight = useCallback((v) => setWidth('right', v), [setWidth]);
 
-  /** 双击把手：回到默认宽度。 */
+  /** 双击把手：回到默认宽度。右栏的默认值按当前视口算。 */
   const reset = useCallback((side) => {
-    setWidths((prev) => ({ ...prev, [side]: DEFAULTS[side] }));
+    setWidths((prev) => ({
+      ...prev,
+      [side]: side === 'right' ? defaultRightWidth() : DEFAULTS[side],
+    }));
   }, []);
 
   /** 折叠 / 展开某栏。折叠时栏宽不丢，展开后恢复上次的宽度。 */

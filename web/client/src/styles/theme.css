@@ -2055,20 +2055,34 @@ body.ct-resizing * {
    AI 侧边栏
    ============================================================ */
 .ct-ai {
+  /* 右栏左右留白只有这一处定义：角色条、建议、提案、消息流、输入区、
+     空态全部引用它。以前各块各写 8/10/12/24，拖宽或对齐时左缘会错开。 */
+  --ct-ai-pad: 12px;
+
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
+/* 每一层都按栏宽铺满并允许收缩：拖宽面板时内容跟着重排，
+   不会被内容撑出横向滚动条。 */
+.ct-ai > * {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
 
 /* ---------- 角色标签 ---------- */
-/* 角色标签：右栏只有 352px，横向排 5 个一定放不下会被裁掉，
+/* 角色标签：右栏默认 336–420px，横向排 5 个一定放不下会被裁掉，
    改成 5 列网格——每个角色都看得见，一个都不藏。 */
 .ct-role-tabs {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
-  padding: 8px 8px 0;
+  padding: 8px var(--ct-ai-pad) 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -2096,8 +2110,8 @@ body.ct-resizing * {
   /* 底部朱砂线：比整块变色柔和，切换时像笔锋划过 */
   content: '';
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 4px;
+  right: 4px;
   bottom: -1px;
   height: 2px;
   background: var(--accent);
@@ -2227,7 +2241,7 @@ body.ct-resizing * {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 10px var(--ct-ai-pad);
   border-bottom: 1px solid var(--border-faint);
   flex-shrink: 0;
   /* 换角色时建议气泡整组淡入，不是硬邦邦地替换 */
@@ -2277,7 +2291,7 @@ body.ct-resizing * {
    原来是通栏贴边的一条色带，和面板内其他块不在同一条线上；
    改成带圆角的内嵌提示条，左右留白与消息区一致。 */
 .ct-ai-notice {
-  margin: 8px 12px 0;
+  margin: 8px var(--ct-ai-pad) 0;
   padding: 8px 10px;
   border-radius: 7px;
   font-size: 12px;
@@ -2302,12 +2316,12 @@ body.ct-resizing * {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px 4px;
+  padding: 8px var(--ct-ai-pad) 4px;
   font-size: 12px;
   color: var(--text-secondary);
 }
 .ct-card-props-row {
-  padding: 6px 12px 8px;
+  padding: 6px var(--ct-ai-pad) 8px;
   border-top: 1px dashed var(--border-faint);
 }
 .ct-card-props-line {
@@ -2421,17 +2435,31 @@ body.ct-resizing * {
 .ct-ai-scroll {
   flex: 1;
   overflow-y: auto;
+  /* 竖向滚动必然存在；横向一律不滚——内容层已全部 min-width:0，
+     残留的横向滚动只可能是子块被内容撑开，藏起来而不是拖着看。 */
+  overflow-x: hidden;
   min-height: 0;
 }
 .ct-msgs {
-  padding: 14px 12px 8px;
+  padding: 14px var(--ct-ai-pad) 8px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+/* 空态铺满消息区：不再只在上方留一块 24px、下方大片空白。 */
+.ct-ai-scroll > .ct-empty {
+  width: 100%;
+  height: 100%;
+  padding: 40px var(--ct-ai-pad);
+  box-sizing: border-box;
 }
 .ct-msg {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   animation: ct-msg-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 @keyframes ct-msg-in {
@@ -2557,6 +2585,7 @@ body.ct-resizing * {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+  min-width: 0;
   background: var(--bg-container);
   transition:
     border-color 0.24s ease,
