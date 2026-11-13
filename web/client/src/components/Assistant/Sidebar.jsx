@@ -102,8 +102,11 @@ export default function AssistantSidebar() {
     if (sending) return undefined;
     if (currentChapterKeyRef.current === chapterKey) return undefined;
 
-    // 先记住刚离开的那一章，切回来时连采纳状态一起还原
-    if (currentChapterKeyRef.current) {
+    // 先记住刚离开的那一章，切回来时连采纳状态一起还原。
+    // 只在确实还留着消息时才缓存：切章时 store 已经先把 messages 清空了，
+    // 这里读到的若已是空数组，存下去等于把这一章记成「没有对话」，
+    // 切回来会命中这条空缓存、不再去服务端拉，表现为对话丢失。
+    if (currentChapterKeyRef.current && messagesRef.current.length > 0) {
       chapterCacheRef.current.set(currentChapterKeyRef.current, {
         conversationId: conversationIdRef.current,
         messages: messagesRef.current,
