@@ -48,8 +48,20 @@ const initialState = {
 
 function reducer(state, action) {
   switch (action.type) {
-    case 'work/loaded':
-      return { ...state, work: action.work, chapters: action.chapters };
+    // 换作品才清会话：消息与 conversationId 属于某一部作品，跨作品必须断。
+    // 同一部作品里换章由 Sidebar 的 conversationStore 负责换回该章的会话，
+    // 所以这里只管作品边界，不管章节。
+    case 'work/loaded': {
+      const changedWork = (state.work?.id || '') !== (action.work?.id || '');
+      return {
+        ...state,
+        work: action.work,
+        chapters: action.chapters,
+        ...(changedWork
+          ? { conversationId: null, messages: [], streaming: '' }
+          : null),
+      };
+    }
 
     case 'chapter/loaded': {
       const blocks = Array.isArray(action.blocks) ? action.blocks : [];
@@ -58,7 +70,9 @@ function reducer(state, action) {
         chapter: action.chapter,
         blocks,
         selection: null,
-        // 换章即换会话上下文，避免上一章的对话串味
+        // 切章清空会话：每章的对话由 Sidebar 的 conversationStore 按
+        // workId:chapterId 记着自己那条，切回来时再拉回来。
+        // 这里留着上一章的 messages 反而会和恢复逻辑打架。
         conversationId: null,
         messages: [],
         streaming: '',
@@ -68,6 +82,19 @@ function reducer(state, action) {
         future: [],
         saveStatus: 'idle',
       };
+    }
+
+    // 改章节标题：章节树和编辑器标题栏读的是同一份状态，必须一起改。
+    // 只刷其中一边，就会出现「树里叫第 2 章、正文头上叫第 2 章-第一天」。
+    case 'chapter/title': {
+      const chapters = state.chapters.map((c) =>
+        c.id === action.chapterId ? { ...c, title: action.title } : c
+      );
+      const chapter =
+        state.chapter && state.chapter.id === action.chapterId
+          ? { ...state.chapter, title: action.title }
+          : state.chapter;
+      return { ...state, chapters, chapter };
     }
 
     case 'blocks/set':
@@ -443,6 +470,29 @@ export function WorkspaceProvider({ children }) {
     }
   }, []);
 
+  /**
+   * 改章节标题，并把结果同步回 state。
+   *
+   * 落库与回写放在一处：调用方（编辑器标题栏、章节树重命名）只管给新标题，
+   * 不用再各自重新拉列表——各自拉容易漏掉另一半，标题就不同步了。
+   */
+  const renameChapter = useCallback(async (chapterId, title) => {
+    const next = String(title).trim();
+    if (!next) return null;
+    try {
+      const res = await api.put(`/chapters/${chapterId}`, { title: next });
+      const saved = String(res.data?.title ?? next).trim();
+      dispatch({ type: 'chapter/title', chapterId, title: saved });
+      return saved;
+    } catch (e) {
+      dispatch({
+        type: 'notice/set',
+        error: '标题保存失败：' + (e.response?.data?.error || e.message),
+      });
+      return null;
+    }
+  }, []);
+
   const loadChapter = useCallback(
     async (chapterId) => {
       const seq = ++loadSeqRef.current;
@@ -495,6 +545,7 @@ export function WorkspaceProvider({ children }) {
       replaceAllBlocks,
       loadWork,
       loadChapter,
+      renameChapter,
     }),
     [
       state,
@@ -510,6 +561,7 @@ export function WorkspaceProvider({ children }) {
       replaceAllBlocks,
       loadWork,
       loadChapter,
+      renameChapter,
     ]
   );
 

@@ -1,18 +1,45 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Input, Modal, Form, message, Empty } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, AimOutlined } from '@ant-design/icons';
 import api from '../../api/client';
+import { useWorkspace } from '../../store/workspace';
+import useCardOccurrences from './useCardOccurrences';
+import { CardHitBadge, CardHitList } from './CardOccurrences';
+
+/** 别名串按作者常用的中英文标点拆开，与服务端匹配规则保持一致。 */
+function splitAliases(raw) {
+  return String(raw || '')
+    .split(/[,，、;；|/\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 /**
  * 人物卡面板。
  *
  * 人物卡是 AI 知道"这个人是谁"的唯一来源，因此字段要跟写作决策对齐：
  * 说话风格（对白辨识度）、核心目标（行为动机）、成长弧（转变铺垫）。
+ *
+ * 每张卡还显示本名和别名在正文里出现的章节：这是「这个角色到底写了多少」
+ * 最直接的度量，也是改名时判断影响面的依据。
  */
 export default function CharacterPanel({ workId }) {
+  const { chapter, loadChapter, dispatch } = useWorkspace();
   const [characters, setCharacters] = useState([]);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
+
+  // 本名 + 别名一起检索：正文里叫「老陈」和叫「陈默」都是在写这个人
+  const cards = useMemo(
+    () =>
+      characters.map((c) => ({
+        id: c.id,
+        label: c.name,
+        words: [c.name, ...splitAliases(c.aliases)],
+      })),
+    [characters]
+  );
+  const { stats, selectedId, toggle, goto } = useCardOccurrences(workId, cards);
 
   const load = async () => {
     if (!workId) return;
@@ -49,8 +76,82 @@ export default function CharacterPanel({ workId }) {
     );
   };
 
+  /**
+   * 改名后问一句要不要连正文一起改。
+   *
+   * 只替换旧本名：别名怎么改是另一件事，自动把「老陈」也换掉
+   * 很可能把对白的语气改没了。
+   */
+  const offerRenameInText = async (from, to, before) => {
+    // 出现统计是异步扫的：刚打开面板就改名时 stats 可能还是空的，
+    // 直接 return 会让「全文一起改」悄悄不出现，作者以为功能没做。
+    // 这里现扫一次旧名，确认正文里到底有没有。
+    let known = before;
+    if (!known?.total) {
+      try {
+        const res = await api.post('/occurrences/scan', {
+          workId,
+          items: [{ key: 'rename', words: [from] }],
+        });
+        const hit = res.data?.rename;
+        if (hit?.total) known = hit;
+      } catch (e) {
+        // 扫描失败就当没出现：不能因为一个统计把改名本身卡住
+      }
+    }
+    if (!known?.total) return;
+    const hits = known;
+    Modal.confirm({
+      title: '正文里的旧名要一起改吗？',
+      content: (
+        <div>
+          <p style={{ marginBottom: 6 }}>
+            正文里有 <b>{hits.total}</b> 处「{from}」，分布在 {hits.chapters.length} 章。
+          </p>
+          <p style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
+            一并替换会直接改写正文，每章都会留一份自动版本，可在版本历史里回滚。
+          </p>
+        </div>
+      ),
+      okText: `全部替换（${hits.total} 处）`,
+      cancelText: '只改卡片',
+      onOk: async () => {
+        try {
+          const res = await api.post('/occurrences/replace', {
+            workId,
+            words: [from],
+            replacement: to,
+          });
+          message.success(`已替换 ${res.data.replaced} 处`);
+          // 改动明细留在 AI 侧栏：弹窗一关、章节一切，只看 toast 就找不回来了。
+          dispatch({
+            type: 'message/add',
+            message: {
+              id: `chg-${Date.now()}`,
+              role: 'system',
+              content: `已把正文里的「${from}」改成「${to}」，共 ${res.data.replaced} 处`,
+              items: res.data.chapters || [],
+            },
+          });
+          // 接口返回的字段名是 chapterId，不是 id——写成 c.id 永远匹配不上，
+          // 表现就是「替换成功了，但屏幕上的字没变」。
+          if (res.data.chapters?.some((c) => c.chapterId === chapter?.id)) {
+            await loadChapter(chapter.id);
+          }
+          await load();
+        } catch (e) {
+          message.error(e.response?.data?.error || '替换失败');
+        }
+      },
+    });
+  };
+
   const save = async () => {
     const values = await form.validateFields();
+    const oldName = editing?.id ? editing.name : '';
+    const newName = String(values.name || '').trim();
+    // 改名前的出现统计要现在就取：保存后重扫的是新名字
+    const before = editing?.id ? stats[editing.id] : null;
     try {
       if (editing?.id) {
         await api.put(`/characters/${editing.id}`, values);
@@ -59,7 +160,10 @@ export default function CharacterPanel({ workId }) {
       }
       setEditing(null);
       message.success('已保存');
-      load();
+      await load();
+      if (oldName && newName && newName !== oldName) {
+        await offerRenameInText(oldName, newName, before);
+      }
     } catch (e) {
       message.error(e.response?.data?.error || '保存失败');
     }
@@ -89,39 +193,58 @@ export default function CharacterPanel({ workId }) {
         新建人物卡
       </button>
 
-      {characters.map((c) => (
-        <div key={c.id} className="ct-item">
-          <button
-            type="button"
-            className="ct-item-main"
-            onClick={() => openEditor(c)}
-            title={`编辑「${c.name}」`}
-          >
-            <span className="ct-item-title">{c.name}</span>
-            {c.role && <span className="ct-item-meta">{c.role}</span>}
-          </button>
-          <div className="ct-item-actions">
-            <button
-              type="button"
-              className="ct-item-act"
-              title="编辑"
-              aria-label={`编辑 ${c.name}`}
-              onClick={() => openEditor(c)}
-            >
-              <EditOutlined />
-            </button>
-            <button
-              type="button"
-              className="ct-item-act is-danger"
-              title="删除"
-              aria-label={`删除 ${c.name}`}
-              onClick={() => remove(c)}
-            >
-              <DeleteOutlined />
-            </button>
+      {characters.map((c) => {
+        const active = selectedId === c.id;
+        return (
+          <div key={c.id} className={`ct-card-item${active ? ' is-selected' : ''}`}>
+            <div className="ct-item">
+              <button
+                type="button"
+                className="ct-item-main"
+                onClick={() => openEditor(c)}
+                title={`编辑「${c.name}」`}
+              >
+                <span className="ct-item-title">{c.name}</span>
+                {c.role && <span className="ct-item-meta">{c.role}</span>}
+                <CardHitBadge stat={stats[c.id]} />
+              </button>
+              <div className="ct-item-actions">
+                <button
+                  type="button"
+                  className={`ct-item-act${active ? ' is-on' : ''}`}
+                  title={active ? '取消正文标黄' : '在正文中标出这个人物'}
+                  aria-label={`定位 ${c.name}`}
+                  onClick={() => toggle(cards.find((x) => x.id === c.id))}
+                >
+                  <AimOutlined />
+                </button>
+                <button
+                  type="button"
+                  className="ct-item-act"
+                  title="编辑"
+                  aria-label={`编辑 ${c.name}`}
+                  onClick={() => openEditor(c)}
+                >
+                  <EditOutlined />
+                </button>
+                <button
+                  type="button"
+                  className="ct-item-act is-danger"
+                  title="删除"
+                  aria-label={`删除 ${c.name}`}
+                  onClick={() => remove(c)}
+                >
+                  <DeleteOutlined />
+                </button>
+              </div>
+            </div>
+
+            {active && (
+              <CardHitList stat={stats[c.id]} label={c.name} onGoto={goto} />
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       {characters.length === 0 && (
         <p className="ct-hint">还没有人物卡。AI 写对白时靠它区分说话人。</p>

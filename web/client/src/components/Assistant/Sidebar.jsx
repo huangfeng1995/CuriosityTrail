@@ -270,7 +270,14 @@ export default function AssistantSidebar() {
         userBubbleId = `u-${Date.now()}`;
         dispatch({
           type: 'message/add',
-          message: { id: userBubbleId, role: 'user', content },
+          message: {
+            id: userBubbleId,
+            role: 'user',
+            content,
+            // 记下这一问出自哪一章：换章后消息仍留在右栏，
+            // 但要能认出它属于哪一章
+            chapterId: chapter?.id || '',
+          },
         });
       }
 
@@ -291,6 +298,9 @@ export default function AssistantSidebar() {
         beatCheck: null,
         planDegraded: '',
         anchorViolations: [],
+        // 这一条出自哪一章。换章后消息仍留在右栏，
+        // 采纳/撤销要据此判断能不能落进当前章。
+        chapterId: chapter?.id || '',
         // 记住这次问了什么：重新生成时要拿它重发
         prompt: content,
         memoryRefs: [],
@@ -608,6 +618,12 @@ export default function AssistantSidebar() {
    */
   const applyAction = useCallback(
     (msg) => {
+      // 会话跨章保留后，旧章的卡片仍留在右栏。
+      // 采纳是按「当前章的 blocks」定位块与落笔的，跨章点下去会写错地方。
+      if (msg.chapterId && chapter?.id && msg.chapterId !== chapter.id) {
+        toast.warning('这条回复属于另一章，切回那一章再采纳');
+        return;
+      }
       const plan = planApply(blocks, msg.action, msg.target, msg.content);
 
       if (plan.kind === 'error') {
@@ -673,6 +689,13 @@ export default function AssistantSidebar() {
   const revertAction = useCallback(
     (msg) => {
       if (!msg.snapshot) return;
+      // 同采纳：撤销动的是块，块属于哪一章必须与消息一致，
+      // 否则会在当前章里删掉/覆盖一个同 id 的无关块。
+      if (msg.chapterId && chapter?.id && msg.chapterId !== chapter.id) {
+        toast.warning('这条回复属于另一章，切回那一章再撤销');
+        return;
+      }
+
       if (msg.snapshot.inserted) {
         removeBlock(msg.snapshot.id);
       } else {
@@ -681,7 +704,7 @@ export default function AssistantSidebar() {
       dispatch({ type: 'message/update', id: msg.id, patch: { applied: false } });
       toast.info('已撤销');
     },
-    [updateBlock, removeBlock, dispatch, toast]
+    [updateBlock, removeBlock, dispatch, toast, chapter]
   );
 
   /**
@@ -989,6 +1012,7 @@ export default function AssistantSidebar() {
           onRemember={rememberMessage}
           findingsByMessage={findingsByMessage}
           chapterSeq={chapter?.seq}
+          currentChapterId={chapter?.id || ''}
           activeFindingKey={activeFindingKey}
           adoptedFindingKeys={adoptedFindingKeys}
           onAdoptFindings={adoptFindings}
