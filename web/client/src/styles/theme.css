@@ -2268,6 +2268,9 @@ body.ct-resizing * {
   /* 窄屏放不下一整排按钮时折行，而不是顶出正文栏外被裁掉 */
   flex-wrap: wrap;
   max-width: 100%;
+  /* 未选中时只显示一句提示，高度也不能塌：保持与整排按钮一致，
+     选中前后的章节头不跟着上下跳。 */
+  min-height: 31px;
   background: var(--ink-0);
   border-radius: 8px;
 }
@@ -3124,19 +3127,20 @@ body.ct-resizing * {
 }
 
 /* 生成中的「停止」。
-   原来是 antd 24px 小按钮 + 9px 图标 + 14px 文字，方块和字挤在一起、
-   贴着输入框右下角。现在改成胶囊：8px 实心方块 + 7px 间隙，
-   尺寸与站点按钮同一套，悬停/按下都有明确反馈。 */
+   生成时它是这一行里唯一能点的东西，之前用朱砂底 + 朱砂描边的胶囊，
+   比旁边的「发送」还抢眼。停止是个中性动作，不该用强调色：改成与相邻
+   按钮同高同圆角的墨线按钮，方块随文字取色，只有悬停/按下时底色加深。
+   尺寸与圆角跟 .ct-ai-actions 里的 antd 按钮完全一致，切换状态时不跳。 */
 .ct-ai-stop {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   height: 28px;
-  padding: 0 13px;
-  border: 1px solid var(--cinnabar-glow);
-  border-radius: 999px;
-  background: var(--cinnabar-dim);
-  color: var(--accent);
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
   font-family: inherit;
   font-size: 12.5px;
   line-height: 1;
@@ -3147,21 +3151,27 @@ body.ct-resizing * {
     color 0.16s ease;
 }
 .ct-ai-stop:hover:not(:disabled) {
-  background: var(--cinnabar-glow);
-  border-color: var(--accent);
+  background: var(--bg-hover);
+  border-color: var(--text-quaternary);
+  color: var(--text-primary);
 }
+/* 按下只压底色，不做位移/缩放，按钮不会"跳"一下 */
 .ct-ai-stop:active:not(:disabled) {
-  background: var(--cinnabar);
-  border-color: var(--cinnabar);
-  color: var(--paper-0);
+  background: var(--bg-sunken);
+  border-color: var(--text-tertiary);
+}
+.ct-ai-stop:focus-visible {
+  outline: 2px solid var(--cinnabar-glow);
+  outline-offset: 1px;
 }
 .ct-ai-stop:disabled {
   cursor: default;
+  color: var(--text-tertiary);
 }
 .ct-ai-stop-glyph {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 1.5px;
   background: currentColor;
   flex-shrink: 0;
 }
@@ -3169,7 +3179,7 @@ body.ct-resizing * {
   font-size: 11px;
 }
 
-/* 已停止：与「停止」同高的收尾提示，短暂显示后回到「发送」。
+/* 已停止：与「停止」同高同圆角的收尾提示，短暂显示后回到「发送」。
    虚线边 = 一次性状态，不给它做成可点的按钮，免得又多一个入口。 */
 .ct-ai-stopped {
   display: inline-flex;
@@ -3178,7 +3188,7 @@ body.ct-resizing * {
   height: 28px;
   padding: 0 12px;
   border: 1px dashed var(--border-strong);
-  border-radius: 999px;
+  border-radius: 7px;
   color: var(--text-tertiary);
   font-size: 12.5px;
   line-height: 1;

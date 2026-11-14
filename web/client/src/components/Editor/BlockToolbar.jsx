@@ -93,7 +93,11 @@ export default function BlockToolbar({
         </span>
       </Tooltip>
 
-      <span className="ct-scope-sep" />
+      {/* 没选中时只留这一句提示：把八个暂时点不动的动作一起摆出来，
+          既占满标题行，又读成一串看不懂的选项。 */}
+      {hasSelection && (
+        <>
+          <span className="ct-scope-sep" />
 
       {/* 「标记」改的是段落类型，跟后面一排改文字的动作不是一类，排在最前。 */}
       {canMark && (
@@ -182,6 +186,8 @@ export default function BlockToolbar({
       >
         <X size={13} />
       </button>
+        </>
+      )}
     </div>
   );
 }

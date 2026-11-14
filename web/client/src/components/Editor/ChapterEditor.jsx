@@ -571,29 +571,34 @@ export default function ChapterEditor() {
         </div>
       )}
 
-      {/* 正文区 */}
-      <div ref={editorRef} className="ct-editor-scroll ct-ruled">
+      {/* 正文区。
+          格线只画在内容块这一层：块高都是 34px 的整数倍，格线正好收在
+          最后一行下面。挂在滚动容器上时，格子会一直铺到容器边缘，
+          最后一条被裁在半格中间，就成了一条时有时无、位置随内容浮动的横线。 */}
+      <div ref={editorRef} className="ct-editor-scroll">
         <div className="ct-editor-body">
-          {blocks.map((block, index) => (
-            <Block
-              key={block.id}
-              block={block}
-              index={index}
-              total={blocks.length}
-              isActive={activeBlockId === block.id}
-              highlightWords={cardHighlight?.words || null}
-              findings={findingsByBlock.get(block.id) || []}
-              activeFindingKey={activeFindingKey}
-              focusSeq={findingFocusSeq}
-              onFindingClick={focusFinding}
-              onFocus={() => setActiveBlockId(block.id)}
-              onChange={(patch) => handleBlockChange(block.id, patch)}
-              onSelect={handleSelect}
-              onDelete={() => handleDelete(block.id)}
-              onMove={(offset) => handleMove(block.id, offset)}
-              onConvert={(id, type) => handleConvert(id, type)}
-            />
-          ))}
+          <div className="ct-editor-blocks ct-ruled">
+            {blocks.map((block, index) => (
+              <Block
+                key={block.id}
+                block={block}
+                index={index}
+                total={blocks.length}
+                isActive={activeBlockId === block.id}
+                highlightWords={cardHighlight?.words || null}
+                findings={findingsByBlock.get(block.id) || []}
+                activeFindingKey={activeFindingKey}
+                focusSeq={findingFocusSeq}
+                onFindingClick={focusFinding}
+                onFocus={() => setActiveBlockId(block.id)}
+                onChange={(patch) => handleBlockChange(block.id, patch)}
+                onSelect={handleSelect}
+                onDelete={() => handleDelete(block.id)}
+                onMove={(offset) => handleMove(block.id, offset)}
+                onConvert={(id, type) => handleConvert(id, type)}
+              />
+            ))}
+          </div>
 
           <BlockPalette onAdd={(type) => handleAdd(type)} />
         </div>
