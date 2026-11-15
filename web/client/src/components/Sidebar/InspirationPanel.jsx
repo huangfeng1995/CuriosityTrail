@@ -142,7 +142,7 @@ export default function InspirationPanel() {
       )}
 
       {items.length === 0 && (
-        <p className="ct-hint">还没有灵感。想到什么随手记一条，灵感师会用它来提方向。</p>
+        <p className="ct-hint">还没有灵感。</p>
       )}
 
       <Modal

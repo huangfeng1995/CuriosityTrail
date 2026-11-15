@@ -240,14 +240,14 @@ export default function CharacterPanel({ workId }) {
             </div>
 
             {active && (
-              <CardHitList stat={stats[c.id]} label={c.name} onGoto={goto} />
+              <CardHitList stat={stats[c.id]} onGoto={goto} />
             )}
           </div>
         );
       })}
 
       {characters.length === 0 && (
-        <p className="ct-hint">还没有人物卡。AI 写对白时靠它区分说话人。</p>
+        <p className="ct-hint">还没有人物卡。</p>
       )}
 
       <Modal

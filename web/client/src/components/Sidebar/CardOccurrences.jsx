@@ -5,14 +5,15 @@ import React from 'react';
  *
  * 徽章挂在卡片标题旁边（一眼看到这名字在正文里有多少存在感），
  * 列表挂在卡片下方（点某一章直接跳过去）。
+ * 没有命中时两者都不占位：一句「正文里还没有」既没有动作，
+ * 也会把卡片撑高一截，不如干脆不出现。
  */
 
 /**
  * @param {{stat?: {total: number, chapters: Array}}} props
  */
 export function CardHitBadge({ stat }) {
-  if (!stat) return null;
-  if (!stat.total) return <span className="ct-hit-badge is-empty">正文里还没有</span>;
+  if (!stat || !stat.total) return null;
   return (
     <span className="ct-hit-badge">
       {stat.chapters.length} 章 · {stat.total} 处
@@ -23,19 +24,11 @@ export function CardHitBadge({ stat }) {
 /**
  * @param {{
  *   stat?: {total: number, chapters: Array},
- *   label: string,
  *   onGoto: (chapterEntry: Object) => void,
  * }} props
  */
-export function CardHitList({ stat, label, onGoto }) {
-  if (!stat) return null;
-  if (!stat.total) {
-    return (
-      <p className="ct-hit-empty">
-        正文里还没有出现过「{label}」。写进去之后，这里会列出章节和原句。
-      </p>
-    );
-  }
+export function CardHitList({ stat, onGoto }) {
+  if (!stat || !stat.total) return null;
 
   return (
     <div className="ct-hit-list">

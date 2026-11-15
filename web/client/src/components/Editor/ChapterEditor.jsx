@@ -498,16 +498,18 @@ export default function ChapterEditor() {
         </div>
 
         {/* 动作条固定在章节头：不再跟着光标飘、不压正文。
-            没选中文字时整条置灰；选中后显示「已选 N 字」并只作用于那一段。 */}
+            没选中文字时连槽位内容一起不渲染；槽位本身保留高度，
+            出现/消失时章节头不伸缩，正文第一行不会上下跳。 */}
         <div className="ct-editor-actions">
-          <BlockToolbar
-            hasSelection={selectedChars > 0}
-            selectedChars={selectedChars}
-            blockType={selectedBlockType}
-            onRun={runInline}
-            onMark={handleMark}
-            onClose={() => dispatch({ type: 'selection/set', selection: null })}
-          />
+          {selectedChars > 0 && (
+            <BlockToolbar
+              selectedChars={selectedChars}
+              blockType={selectedBlockType}
+              onRun={runInline}
+              onMark={handleMark}
+              onClose={() => dispatch({ type: 'selection/set', selection: null })}
+            />
+          )}
         </div>
       </header>
 
@@ -559,7 +561,7 @@ export default function ChapterEditor() {
         <div className="ct-card-highlight-bar">
           <span>
             正在标出「{cardHighlight.label || cardHighlight.words.join('、')}」
-            {cardHitBlocks > 0 ? `　本章 ${cardHitBlocks} 段` : '　本章没有出现'}
+            {cardHitBlocks > 0 && `　本章 ${cardHitBlocks} 段`}
           </span>
           <button
             type="button"

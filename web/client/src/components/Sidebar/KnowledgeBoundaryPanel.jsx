@@ -82,7 +82,7 @@ export default function KnowledgeBoundaryPanel({ workId, chapter, templateEnable
       )}
 
       {!loading && view && view.characters.length === 0 && (
-        <p className="ct-hint">还没有人物。先建人物卡，知情边界才有对象。</p>
+        <p className="ct-hint">还没有人物。</p>
       )}
 
       {!loading &&

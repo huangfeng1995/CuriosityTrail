@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Tooltip, Spin } from 'antd';
 import { X } from 'lucide-react';
 import { BLOCK_TYPES, MARKABLE_TYPES } from './blocks';
@@ -9,9 +9,9 @@ import { BLOCK_TYPES, MARKABLE_TYPES } from './blocks';
  * 以前它跟着选区浮在光标正下方，会压住下面几行正文，点一下就发 AI，容易误触。
  * 现在固定在章节头里，不参与正文排版：滚动、缩放、改选区都不会盖住正文。
  *
- * 只有选中文字后才可用：
- *  - 选中了 → 显示「已选 N 字」，动作只作用于这一段；
- *  - 没选中 → 整条置灰并提示怎么用，点不动，不会误发请求。
+ * 只在选中文字后才渲染（由 ChapterEditor 决定），因此这里不再处理
+ * "未选中时置灰并解释怎么用"的形态：没有内容就不占位。
+ * 动作名本身就是说明（改写 / 扩写 / 缩写…），不再额外挂一遍解释文案。
  */
 
 const MARK_TARGETS = BLOCK_TYPES.filter((t) => MARKABLE_TYPES.includes(t.type));
@@ -26,39 +26,14 @@ const ACTIONS = [
   { key: 'colloquialize', label: '口语化' },
 ];
 
-const TIP = {
-  rewrite: '换一种表达，意思不变',
-  expand: '增加细节与描写',
-  shorten: '精简表达，保留要点',
-  tone: '改变语气',
-  continue: '在选区后接一句',
-  critique: '审稿人视角挑问题，只给建议',
-  colloquialize: '把书面语改自然',
-};
-
-export default function BlockToolbar({
-  hasSelection = false,
-  selectedChars = 0,
-  onRun,
-  onMark,
-  blockType,
-  onClose,
-}) {
+export default function BlockToolbar({ selectedChars = 0, onRun, onMark, blockType, onClose }) {
   const [busy, setBusy] = useState('');
   const [toneOpen, setToneOpen] = useState(false);
   const [markOpen, setMarkOpen] = useState(false);
 
-  // 选区消失时把二级菜单一并收起，别留一个不知道作用在哪的菜单。
-  useEffect(() => {
-    if (!hasSelection) {
-      setToneOpen(false);
-      setMarkOpen(false);
-    }
-  }, [hasSelection]);
-
-  // 「标记」只在选中文字、且选中的块可标时才出现。
-  const canMark = hasSelection && !!onMark && MARKABLE_TYPES.includes(blockType);
-  const disabled = !hasSelection || !!busy;
+  // 「标记」只在选中的块可标时才出现。
+  const canMark = !!onMark && MARKABLE_TYPES.includes(blockType);
+  const disabled = !!busy;
 
   const run = async (action, instruction) => {
     setBusy(action);
@@ -77,43 +52,26 @@ export default function BlockToolbar({
 
   return (
     <div
-      className={`ct-inline-toolbar${hasSelection ? ' is-active' : ' is-idle'}`}
+      className="ct-inline-toolbar is-active"
       // 点按钮时别让 textarea 失焦：失焦会清掉选区，按钮就不知道改哪一段了。
       onMouseDown={(e) => e.preventDefault()}
     >
-      <Tooltip
-        title={
-          hasSelection
-            ? '下面的动作只作用于选中的这段文字'
-            : '先在正文里选中一段文字，这一排才会变成可用'
-        }
-      >
-        <span className={`ct-scope-chip${hasSelection ? ' is-active' : ''}`}>
-          {hasSelection ? `已选 ${selectedChars} 字` : '选中文字后可用'}
-        </span>
-      </Tooltip>
-
-      {/* 没选中时只留这一句提示：把八个暂时点不动的动作一起摆出来，
-          既占满标题行，又读成一串看不懂的选项。 */}
-      {hasSelection && (
-        <>
-          <span className="ct-scope-sep" />
+      <span className="ct-scope-chip">已选 {selectedChars} 字</span>
+      <span className="ct-scope-sep" />
 
       {/* 「标记」改的是段落类型，跟后面一排改文字的动作不是一类，排在最前。 */}
       {canMark && (
         <div style={{ position: 'relative' }}>
-          <Tooltip title="把选中的这段标成某种段落类型">
-            <button
-              onClick={() => {
-                setToneOpen(false);
-                setMarkOpen((v) => !v);
-              }}
-              disabled={disabled}
-              className="ct-inline-btn"
-            >
-              标记
-            </button>
-          </Tooltip>
+          <button
+            onClick={() => {
+              setToneOpen(false);
+              setMarkOpen((v) => !v);
+            }}
+            disabled={disabled}
+            className="ct-inline-btn"
+          >
+            标记
+          </button>
           {markOpen && (
             <div className="ct-tone-menu">
               {MARK_TARGETS.map((t) => (
@@ -136,18 +94,16 @@ export default function BlockToolbar({
         if (a.key === 'tone') {
           return (
             <div key={a.key} style={{ position: 'relative' }}>
-              <Tooltip title={TIP[a.key]}>
-                <button
-                  onClick={() => {
-                    setMarkOpen(false);
-                    setToneOpen((v) => !v);
-                  }}
-                  disabled={disabled}
-                  className="ct-inline-btn"
-                >
-                  {busy === 'tone' ? <Spin size="small" /> : a.label}
-                </button>
-              </Tooltip>
+              <button
+                onClick={() => {
+                  setMarkOpen(false);
+                  setToneOpen((v) => !v);
+                }}
+                disabled={disabled}
+                className="ct-inline-btn"
+              >
+                {busy === 'tone' ? <Spin size="small" /> : a.label}
+              </button>
               {toneOpen && (
                 <div className="ct-tone-menu">
                   {['正式', '口语', '冷峻', '温暖', '悬疑'].map((tone) => (
@@ -166,28 +122,20 @@ export default function BlockToolbar({
         }
 
         return (
-          <Tooltip key={a.key} title={TIP[a.key]}>
-            <button
-              onClick={() => run(a.key)}
-              disabled={disabled}
-              className="ct-inline-btn"
-            >
-              {busy === a.key ? <Spin size="small" /> : a.label}
-            </button>
-          </Tooltip>
+          <button
+            key={a.key}
+            onClick={() => run(a.key)}
+            disabled={disabled}
+            className="ct-inline-btn"
+          >
+            {busy === a.key ? <Spin size="small" /> : a.label}
+          </button>
         );
       })}
 
-      <button
-        onClick={onClose}
-        disabled={!hasSelection}
-        className="ct-inline-btn is-close"
-        title="关闭"
-      >
+      <button onClick={onClose} className="ct-inline-btn is-close" title="关闭">
         <X size={13} />
       </button>
-        </>
-      )}
     </div>
   );
 }

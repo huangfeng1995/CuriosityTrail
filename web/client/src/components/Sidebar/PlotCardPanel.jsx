@@ -205,9 +205,7 @@ export default function PlotCardPanel({ workId, chapters = [] }) {
       ))}
 
       {cards.length === 0 && (
-        <p className="ct-hint">
-          还没有情节卡。每章要发生的事先记成卡，写到后面就不会忘掉。
-        </p>
+        <p className="ct-hint">还没有情节卡。</p>
       )}
 
       <Modal

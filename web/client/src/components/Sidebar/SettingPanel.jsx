@@ -221,14 +221,14 @@ export default function SettingPanel({ workId }) {
             </div>
 
             {active && (
-              <CardHitList stat={stats[s.id]} label={s.name} onGoto={goto} />
+              <CardHitList stat={stats[s.id]} onGoto={goto} />
             )}
           </div>
         );
       })}
 
       {settings.length === 0 && (
-        <p className="ct-hint">还没有设定。地理、规则、组织——这些是 AI 不写崩的前提。</p>
+        <p className="ct-hint">还没有设定。</p>
       )}
 
       <Modal

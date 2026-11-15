@@ -251,10 +251,7 @@ export default function ConsistencyPanel({ workId, chapterId, onOpenChapter }) {
         </Button>
       </div>
 
-      <p className="ct-hint">
-        规则检查比对人物卡、设定卡与正文，不花钱。AI 深度检查逐批读完整个正文，
-        再汇总找跨章矛盾，会调用模型、需要等一会儿。
-      </p>
+      <p className="ct-hint">规则检查不花钱；AI 深度检查读完整本，需要稍等。</p>
 
       {running && (
         <div className="ct-ai-progress">
@@ -345,7 +342,7 @@ export default function ConsistencyPanel({ workId, chapterId, onOpenChapter }) {
       ))}
 
       {issues && !issues.length && !running && (
-        <p className="ct-hint">没发现问题。人物卡、设定卡与正文对得上。</p>
+        <p className="ct-hint">没发现问题。</p>
       )}
 
       {selectableCount > 0 && (
