@@ -181,7 +181,9 @@ test('编排与可读性要求写进起稿、续写与重写指令，不再有�
   for (const instruction of [middle, last, continuation, rewrite]) {
     assert.match(instruction, /全章按长章体量写/);
     assert.match(instruction, /4800–5600 字/);
-    assert.match(instruction, /每拍段数按节拍表给的段数为准/, '段数按拍，允许 ±2');
+    assert.match(instruction, /每拍段落数必须等于节拍表的段数（允许 ±2 段）/, '段数按拍，允许 ±2');
+    assert.match(instruction, /拆出来的碎段会被代码合并回相邻段/, '要写明超段会被代码收');
+    assert.match(instruction, /先把本组字数写够 → 再把每拍段数收到计划 ±2 → 最后才是段长分布/, '三口径优先级要写死');
     assert.match(instruction, /段长按范文分布写，不逐段卡 80–140/, '段长改成分布校验');
     assert.match(instruction, /单段不得超过 320 字/, '唯一硬拦是 320 字');
     assert.match(instruction, /40–79 字段不超过全章 39%/, '40–79 占比按范文实测 +10pp');
@@ -1123,6 +1125,45 @@ test('W1 三组起稿只拿 4 次：3 次初稿 + 最多 1 次续写，续写让
   assert.ok(draft.content.includes('丙第1段'), '续写不能挤掉第三组初稿');
 });
 
+test('起稿就按拍收段：一拍写成十段时当场合并回计划，不等到交付', async () => {
+  // 2 组 × 2 拍，每拍计划 5 段。第一组给 20 段（每拍 10 段），必须收到 10 段。
+  const plan = makePlan(4, 5);
+  const runner = makeRunner([body('甲', 20), body('乙', 10)]);
+
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
+
+  assert.strictEqual(segmentWriter.splitParagraphs(draft.groups[0].content).length, 10, '第一组收到计划 10 段');
+  assert.strictEqual(segmentWriter.splitParagraphs(draft.groups[1].content).length, 10, '合规的组一个字不碰');
+  assert.strictEqual(draft.draftTrimmed, 10, '合并次数要记账');
+  assert.deepStrictEqual(draft.draftOverflow, [], '能合回来的不许记溢出');
+
+  const lengths = segmentWriter.splitParagraphs(draft.content).map((p) => countWords(p));
+  assert.ok(lengths.every((n) => n <= 320), '合并不得造出 >320 的段');
+  let run = 0;
+  let longestShortRun = 0;
+  for (const n of lengths) {
+    run = n < 40 ? run + 1 : 0;
+    longestShortRun = Math.max(longestShortRun, run);
+  }
+  assert.ok(longestShortRun < 3, '合并不得造出连续 3 段 <40 字');
+});
+
+test('起稿收段合不动时如实记账，不删字也不整组失败', async () => {
+  // 每段 200 字：任意两段合并都超 320，只能留在原地并记 overflow。
+  const plan = makePlan(4, 5);
+  const runner = makeRunner([
+    Array.from({ length: 20 }, (_, i) => `长${i}${'字'.repeat(199)}`).join('\n\n'),
+    body('乙', 10),
+  ]);
+
+  const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
+
+  assert.strictEqual(segmentWriter.splitParagraphs(draft.groups[0].content).length, 20, '合不动就不删字');
+  assert.strictEqual(draft.draftTrimmed, 0);
+  assert.ok(draft.draftOverflow.length > 0, '合不动的拍要留痕');
+  assert.ok(draft.draftOverflow[0].overflow > 0);
+});
+
 test('W1 重写只吃自己的 2 次配额，剩余组记名并归因到 rewrite', async () => {
   const plan = makePlan(8);
   const groups = segmentWriter.planSegments(plan);
@@ -1310,6 +1351,27 @@ test('X1 段数超计划 ±2 只影响 distributionOk，不单独硬拦', () => 
   assert.strictEqual(delivery.hardBlocked, false, '没有 >320 就不进硬拦');
   assert.strictEqual(delivery.distributionOk, false, '段数越界属于分布不合规');
   assert.strictEqual(delivery.passed, false);
+});
+
+test('X1 段均偏高只记数、不判失败；偏低的碎段仍算失败', () => {
+  // 计划 2 拍 × 3 段 = 6 段，实际 6 段但每段 200 字：段均 200 偏高。
+  const plan = makePlan(2, 3);
+  const high = segmentWriter.checkParagraphShape(
+    plan,
+    Array.from({ length: 6 }, () => '字'.repeat(200)).join('\n\n')
+  );
+  assert.strictEqual(high.summary.avg, 1, '偏高要记数');
+  const highDelivery = segmentWriter.evaluateShapeDelivery(high);
+  assert.strictEqual(highDelivery.distributionOk, true, '段均偏高让路，不判失败');
+
+  // 同样 6 段，每段 50 字：段均 50 偏低，是碎段，必须判失败。
+  const low = segmentWriter.checkParagraphShape(
+    plan,
+    Array.from({ length: 6 }, () => '字'.repeat(50)).join('\n\n')
+  );
+  const lowDelivery = segmentWriter.evaluateShapeDelivery(low);
+  assert.strictEqual(low.summary.avg, 1);
+  assert.strictEqual(lowDelivery.distributionOk, false, '偏低是碎段，仍要拦');
 });
 
 test('X1 反向不允许：单段超过 320 仍按硬拦判失败', () => {

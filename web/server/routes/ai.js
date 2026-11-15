@@ -1415,6 +1415,9 @@ router.post('/chat', async (req, res) => {
           degraded: segmented.degraded,
           paragraphs: segmentWriter.splitParagraphs(segmented.content).length,
           chars: countWords(segmented.content),
+          // 起稿当场收段的记账：合并了多少次、哪几拍合不动。
+          draftTrimmed: segmented.draftTrimmed || 0,
+          draftOverflow: segmented.draftOverflow || [],
           originalChars: segmented.originalChars,
           truncated: segmented.truncated,
 

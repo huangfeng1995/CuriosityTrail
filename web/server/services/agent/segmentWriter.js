@@ -68,7 +68,8 @@ const MIN_TARGET_RATIO = 0.8;
 const PARAGRAPH_SHAPE_RULES = [
   '## 全章形态（分布校验）',
   '- 全章按长章体量写，总量大致在 4800–5600 字（含标点）；不要为凑数拉长段落，也不要写到 7000 字以上。',
-  '- 每拍段数按节拍表给的段数为准，允许 ±2 段；不要把一拍压成提纲，也不要把一个动作拆成好几段。',
+  '- 每拍段落数必须等于节拍表的段数（允许 ±2 段）；不要把一拍压成提纲，也不要把一个动作、一句对白拆成好几段——拆出来的碎段会被代码合并回相邻段。',
+  '- 三条的优先级固定：先把本组字数写够 → 再把每拍段数收到计划 ±2 → 最后才是段长分布。三者冲突时让段长分布让路，不要为凑 80–140 拆段或拉长段落。',
   '- 段长按范文分布写，不逐段卡 80–140：<40 约 4%、40–79 约 29%、80–140 约 47%、141–200 约 9%、>200 约 11%（全部含标点）。单段不得超过 320 字。',
   '- 40–79 字段不超过全章 39%；短段要有节奏作用，不能把一个小场景拆成几截。',
   '- 连续 3 段都 <40 字才算「碎」；短促反应、单句对白最多连续 2 段，且前后必须有动作或叙述句承接。',
@@ -625,7 +626,7 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     completed.length ? buildHandoffRules({ from: '上一组' }) : '',
     '',
     '## 本组篇幅（硬约束）',
-    `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点）：按各拍计划段数（±2 段）落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。写到大致够用就停；全章大致 4800–5600 字（含标点）即可，7000 字以上会被截断。`,
+    `本组大致写 ${group.targetChars} 个汉字（纯汉字，不含标点），共 ${group.targetParagraphs} 段：本组 ${group.beats.length} 拍按各拍计划段数落段，每拍不得超过计划 +2 段。段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。写到大致够用就停；全章大致 4800–5600 字（含标点）即可，7000 字以上会被截断。`,
     '',
     groupQuotaBlock(group.beats),
     '',
@@ -698,7 +699,7 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
     tail || '（暂无）',
     '',
     '## 还差多少',
-    `本组目标约 ${group.targetChars} 个汉字（纯汉字，不含标点），已经写了 ${written} 字，再补约 ${remainingChars} 个汉字就够；按各拍计划段数（±2 段）落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
+    `本组目标约 ${group.targetChars} 个汉字（纯汉字，不含标点），已经写了 ${written} 字，再补约 ${remainingChars} 个汉字就够；按各拍计划段数（±2 段）落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320），不要连续 3 段不足 40 字，单段不超 320 字。续写只在已有段落里往下接，不要新增段落（本组共 ${group.targetParagraphs} 段，现在 ${splitParagraphs(group.content).length} 段）。补到目标就停，不要为凑数拉长段落，也不要继续往下写。`,
     '',
     groupQuotaBlock(group.beats),
     '',
@@ -953,6 +954,22 @@ function appendFresh(existing, next) {
     }
   }
 
+  // 按拍收段会把「衔接句」并进两边的边界段，整段相等就比不出来了：
+  // 这里按「上一组尾段的后缀 == 本组首段的前缀」取最长匹配，剥掉重复部分。
+  if (!overlap && nextParagraphs.length) {
+    const head = nextParagraphs[0];
+    const tail = prevParagraphs[prevParagraphs.length - 1] || '';
+    const limit = Math.min(head.length, tail.length);
+    for (let n = limit; n >= 4; n -= 1) {
+      const prefix = head.slice(0, n);
+      // 只认完整句尾，避免把半句当重复剥掉。
+      if (/[。！？!?…]$/.test(prefix) && tail.endsWith(prefix)) {
+        nextParagraphs[0] = head.slice(n).trim();
+        break;
+      }
+    }
+  }
+
   // 除了接缝处的重复，还要挡“续写从中间整段复述”的情况：
   // 已出现过的完整段落不再拼进来；短句（「陈默没动。」）不参与，避免误删有意重复。
   const seen = new Set(
@@ -962,6 +979,7 @@ function appendFresh(existing, next) {
   );
   const fresh = [];
   for (const paragraph of nextParagraphs.slice(overlap)) {
+    if (!paragraph) continue; // 剥完重复前缀可能把整段剥空
     const normalized = normalizedParagraph(paragraph);
     if (normalized.length >= MIN_DEDUPE_PARAGRAPH_CHARS) {
       if (seen.has(normalized)) continue;
@@ -1355,9 +1373,13 @@ function evaluateShapeDelivery(shape) {
     : summarizeShapeViolations(shape && shape.violations);
   const blocking = shape && Array.isArray(shape.violations) ? shape.violations : [];
   const hardBlocked = blocking.some((row) => row.kind === 'too_long');
-  const distributionOk = !blocking.some((row) =>
-    ['count', 'fragment_ratio', 'short_run', 'avg'].includes(row.kind)
-  );
+  // 分布判定的优先级写死：字数 > 每拍段数 > 段长分布。
+  // 段均偏低是碎段，仍算失败；段均偏高只是这一章内容多——按拍收段之后
+  // 段数被压到计划、字数没减，段均必然偏高，此时让段长分布让路，只记数。
+  const distributionOk = !blocking.some((row) => {
+    if (['count', 'fragment_ratio', 'short_run'].includes(row.kind)) return true;
+    return row.kind === 'avg' && row.side === 'low';
+  });
   const styleOk = !blocking.some((row) =>
     ['dialogue_stack', 'corner_quote'].includes(row.kind)
   );
@@ -1572,6 +1594,29 @@ async function draftInSegments({
   let boundaryTrimmed = 0;
   let boundaryConflicts = 0;
   let continuationDropped = 0;
+  // 起稿当场收段：合并次数与合不动的拍（后者留给交付自检兜底，不整组回滚）。
+  let draftTrimmed = 0;
+  const draftOverflow = [];
+
+  /**
+   * 起稿收段：把每拍收到「计划段数」——比容差更紧，把 ±2 留给扩写追加。
+   *
+   * 只合并不删字，pickPair 保证合并后不超 320、不造连续 3 段 <40。
+   * 不做拆段：字数不够交给续写与扩写，拆段只会把段均拉下来。
+   */
+  const trimDraft = (target) => {
+    const trim = trimBeatParagraphs(target, plan, target.beatIds);
+    draftTrimmed += trim.merged;
+    if (trim.overflow > 0) {
+      draftOverflow.push({
+        group: target.index,
+        beatIds: target.beatIds,
+        overflow: trim.overflow,
+        beats: trim.overflowBeats,
+      });
+    }
+    return trim;
+  };
 
   const invoke = async ({ instruction, group, kind }) => {
     callCount += 1;
@@ -1630,6 +1675,9 @@ async function draftInSegments({
     if (bounded.boundaryTrimmed) boundaryTrimmed += 1;
     if (bounded.boundaryConflict) boundaryConflicts += 1;
     group.content = bounded.content;
+    // 写回前就把段数收到计划：模型常把一拍拆成十几段，等到交付自检才发现，
+    // 扩写已经因为「段数到顶」没有名额了。
+    trimDraft(group);
 
     // 续写只补到本组目标的字数；到量即停，不再用段数或 105% 硬线二次裁剪。
     //
@@ -1670,6 +1718,8 @@ async function draftInSegments({
             } else {
               group.content = appendFresh(group.content, contBounded.content);
               group.continued = true;
+              // 续写很容易再添几段，写完同样按拍收一次，避免边补字数边涨段数。
+              trimDraft(group);
             }
           }
         }
@@ -1698,6 +1748,9 @@ async function draftInSegments({
     continuationSkipped,
     continuations: groups.filter((g) => g.continued).length,
     continuationDropped,
+    // 起稿收段：draftTrimmed 是合并次数；draftOverflow 是合不动、仍超计划 ±2 的拍。
+    draftTrimmed,
+    draftOverflow,
     boundaryTrimmed,
     boundaryConflicts,
     truncated: normalized.truncated,
