@@ -3,10 +3,12 @@ import test from 'node:test';
 
 import {
   readChapterConversation,
+  readChapterEntry,
   saveChapterConversation,
   clearChapterConversation,
   mapConversationMessages,
 } from '../src/components/Assistant/conversationStore.js';
+import { restoreChapterConversation } from '../src/components/Assistant/conversationRestore.js';
 
 /** 最小的 localStorage 替身：conversationStore 在调用时才读全局。 */
 function installStorage() {
@@ -42,6 +44,27 @@ test('清空某一章只删这一章，别的章还在', () => {
 
   assert.equal(readChapterConversation('w1', 'c1'), '');
   assert.equal(readChapterConversation('w1', 'c2'), 'conv-b');
+});
+
+test('清空后留下 cleared 标记：兜底恢复不能再把对话拉回来', () => {
+  installStorage();
+
+  saveChapterConversation('w1', 'c1', 'conv-a');
+  clearChapterConversation('w1', 'c1');
+
+  assert.deepEqual(readChapterEntry('w1', 'c1'), { id: '', cleared: true });
+  assert.equal(readChapterEntry('w1', 'c2').cleared, false);
+});
+
+test('旧版本的字符串指针仍然读得出来', () => {
+  installStorage();
+  globalThis.localStorage.setItem(
+    'ct.chat.chapter.v1',
+    JSON.stringify({ w1: { c1: 'conv-legacy' } })
+  );
+
+  assert.equal(readChapterConversation('w1', 'c1'), 'conv-legacy');
+  assert.deepEqual(readChapterEntry('w1', 'c1'), { id: 'conv-legacy', cleared: false });
 });
 
 test('存储里有脏数据时按「没有」处理，不抛错', () => {
@@ -81,4 +104,126 @@ test('服务端消息映射成消息流：补上章节、角色名与重新生�
   assert.equal(list[1].applied, false);
   assert.deepEqual(list[1].findings, [{ id: 'f1' }]);
   assert.deepEqual(list[1].toolTrace, [{ tool: 'search' }]);
+});
+
+// ---------------------------------------------------------------------------
+// 恢复：指针优先，没指针按作品兜底
+// ---------------------------------------------------------------------------
+
+const MSG_SET = {
+  id: 'conv-latest',
+  messages: [
+    { id: 'm1', role: 'user', content: '继续写' },
+    { id: 'm2', role: 'assistant', roleKey: 'writer', content: '写好了' },
+  ],
+};
+
+function fakeFetch(routes) {
+  const calls = [];
+  const impl = async (url) => {
+    calls.push(url);
+    const hit = Object.keys(routes).find((k) => url.includes(k));
+    if (!hit) return { ok: false, json: async () => ({ error: 'not found' }) };
+    return { ok: true, json: async () => routes[hit] };
+  };
+  impl.calls = calls;
+  return impl;
+}
+
+test('没有指针时按作品兜底：恢复最近一条会话，并绑定到当前章', async () => {
+  installStorage();
+
+  const fetchImpl = fakeFetch({
+    '/api/ai/conversations?workId=w1': [{ id: 'conv-latest', messageCount: 2 }],
+    '/api/ai/conversations/conv-latest/messages': MSG_SET,
+  });
+
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c1',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'latest');
+  assert.equal(restored.conversationId, 'conv-latest');
+  assert.equal(restored.messages.length, 2);
+  assert.equal(restored.lastRoleKey, 'writer');
+  // 兜底之后要落指针，否则下次进来又会跳到别处更新的会话
+  assert.equal(readChapterConversation('w1', 'c1'), 'conv-latest');
+});
+
+test('有指针时按章恢复，不去请求作品会话列表', async () => {
+  installStorage();
+  saveChapterConversation('w1', 'c1', 'conv-mine');
+
+  const fetchImpl = fakeFetch({
+    '/api/ai/conversations/conv-mine/messages': { id: 'conv-mine', messages: MSG_SET.messages },
+  });
+
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c1',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'pointer');
+  assert.equal(restored.conversationId, 'conv-mine');
+  assert.equal(fetchImpl.calls.length, 1);
+});
+
+test('指针指向的会话已不存在时继续兜底', async () => {
+  installStorage();
+  saveChapterConversation('w1', 'c1', 'conv-gone');
+
+  const fetchImpl = fakeFetch({
+    '/api/ai/conversations/conv-gone/messages': null,
+    '/api/ai/conversations?workId=w1': [{ id: 'conv-latest' }],
+    '/api/ai/conversations/conv-latest/messages': MSG_SET,
+  });
+
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c1',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'latest');
+  assert.equal(restored.conversationId, 'conv-latest');
+});
+
+test('作者点过清空就不再兜底，也不发任何请求', async () => {
+  installStorage();
+  clearChapterConversation('w1', 'c1');
+
+  const fetchImpl = fakeFetch({});
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c1',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'cleared');
+  assert.equal(restored.conversationId, null);
+  assert.equal(restored.messages.length, 0);
+  assert.deepEqual(fetchImpl.calls, []);
+});
+
+test('作品没有任何会话时安静返回空', async () => {
+  installStorage();
+
+  const fetchImpl = fakeFetch({ '/api/ai/conversations?workId=w1': [] });
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c1',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'none');
+  assert.equal(restored.messages.length, 0);
+  assert.equal(readChapterConversation('w1', 'c1'), '');
 });

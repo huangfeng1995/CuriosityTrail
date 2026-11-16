@@ -30,6 +30,10 @@ const initialState = {
   work: null,
   chapters: [],
   chapter: null,
+  // 每成功装载一次章节就加一。同一章被重新装载（点树里的当前章、定位回本章）
+  // 时 chapter.id 不变，但 messages 已被清空；Sidebar 靠这个计数知道
+  // 「该重新恢复一次对话了」，否则会停在空列表上。
+  chapterEpoch: 0,
   blocks: [],
   selection: null, // { blockId, start, end, text }
   roleKey: 'writer',
@@ -77,6 +81,7 @@ function reducer(state, action) {
         messages: [],
         streaming: '',
         error: '',
+        chapterEpoch: (state.chapterEpoch || 0) + 1,
         // 撤销栈按章隔离：上一章的快照对这一章没有意义
         past: [],
         future: [],

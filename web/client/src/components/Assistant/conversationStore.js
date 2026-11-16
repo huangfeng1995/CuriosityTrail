@@ -31,27 +31,52 @@ function writeMap(map) {
 
 /** 读某一章上次用的会话 id；没有则返回空串。 */
 export function readChapterConversation(workId, chapterId) {
-  if (!workId || !chapterId) return '';
+  return readChapterEntry(workId, chapterId).id;
+}
+
+/**
+ * 读某一章的指针条目。
+ *
+ * 条目有两种形态：
+ *   { id }            —— 这一章上次聊的是这条会话；
+ *   { cleared: true } —— 作者在这一章点过「清空 / 新对话」，不要再兜底恢复。
+ *
+ * 旧版本直接存字符串，这里兼容一下，读到时按「有指针」处理。
+ */
+export function readChapterEntry(workId, chapterId) {
+  if (!workId || !chapterId) return { id: '', cleared: false };
   const map = readMap();
-  const id = map[workId]?.[chapterId];
-  return typeof id === 'string' ? id : '';
+  const raw = map[workId]?.[chapterId];
+  if (typeof raw === 'string') {
+    return { id: raw, cleared: false };
+  }
+  if (raw && typeof raw === 'object') {
+    return {
+      id: typeof raw.id === 'string' ? raw.id : '',
+      cleared: Boolean(raw.cleared),
+    };
+  }
+  return { id: '', cleared: false };
 }
 
 /** 记住某一章当前用的会话 id。 */
 export function saveChapterConversation(workId, chapterId, conversationId) {
   if (!workId || !chapterId || !conversationId) return;
   const map = readMap();
-  map[workId] = { ...(map[workId] || {}), [chapterId]: conversationId };
+  map[workId] = { ...(map[workId] || {}), [chapterId]: { id: conversationId } };
   writeMap(map);
 }
 
-/** 清掉某一章的会话指针（作者点了「清空当前对话」或开了新对话）。 */
+/**
+ * 清掉某一章的会话指针（作者点了「清空当前对话」或开了新对话）。
+ *
+ * 这里不是简单删除：删掉之后「按作品恢复最近会话」的兜底会把刚清掉的
+ * 对话又拉回来。留一个 cleared 标记，兜底见到它就停手。
+ */
 export function clearChapterConversation(workId, chapterId) {
   if (!workId || !chapterId) return;
   const map = readMap();
-  if (!map[workId] || !(chapterId in map[workId])) return;
-  delete map[workId][chapterId];
-  if (!Object.keys(map[workId]).length) delete map[workId];
+  map[workId] = { ...(map[workId] || {}), [chapterId]: { cleared: true } };
   writeMap(map);
 }
 

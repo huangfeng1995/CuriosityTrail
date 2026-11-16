@@ -8,11 +8,11 @@ import { createBlock } from '../Editor/blocks';
 import { planApply } from './applyPlan';
 import { collectCriticFindings, sendAdoptionBatch } from './findings';
 import {
-  readChapterConversation,
   saveChapterConversation,
   clearChapterConversation,
   mapConversationMessages,
 } from './conversationStore';
+import { restoreChapterConversation } from './conversationRestore';
 import { pendingActions } from './pendingActions';
 import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
@@ -31,6 +31,7 @@ export default function AssistantSidebar() {
   const {
     work,
     chapter,
+    chapterEpoch,
     blocks,
     roleKey,
     conversationId,
@@ -93,14 +94,23 @@ export default function AssistantSidebar() {
     work?.id && chapter?.id ? `${work.id}:${chapter.id}` : '';
   const chapterCacheRef = useRef(new Map());
   const currentChapterKeyRef = useRef('');
+  // 已经为「哪一章的第几次装载」恢复过。同一章被重新装载时 epoch 会变，
+  // 需要再恢复一次；只是重渲染则不会重复拉取。
+  const restoredRef = useRef('');
   const restoreSeqRef = useRef(0);
 
   useEffect(() => {
     if (!chapterKey) return undefined;
+    // 章节必须属于当前作品。换作品时 work 先到、chapter 还是上一章的，
+    // 这中间如果按「新作品 + 旧章」去恢复，会把别的作品的对话绑到旧章上。
+    if (chapter.work_id && work.id && chapter.work_id !== work.id) return undefined;
+
     // 正在生成时不切会话：作者的这一轮回答还在往这条对话里写。
     // sending 结束后依赖变化会再跑一次，把新章接上来。
     if (sending) return undefined;
-    if (currentChapterKeyRef.current === chapterKey) return undefined;
+
+    const mark = `${chapterKey}:${chapterEpoch || 0}`;
+    if (restoredRef.current === mark) return undefined;
 
     // 先记住刚离开的那一章，切回来时连采纳状态一起还原。
     // 只在确实还留着消息时才缓存：切章时 store 已经先把 messages 清空了，
@@ -113,6 +123,7 @@ export default function AssistantSidebar() {
       });
     }
     currentChapterKeyRef.current = chapterKey;
+    restoredRef.current = mark;
 
     const cached = chapterCacheRef.current.get(chapterKey);
     if (cached) {
@@ -124,42 +135,31 @@ export default function AssistantSidebar() {
       return undefined;
     }
 
-    const storedId = readChapterConversation(work.id, chapter.id);
-    if (!storedId) {
-      dispatch({ type: 'conversation/load', conversationId: null, messages: [] });
-      return undefined;
-    }
-
     const seq = ++restoreSeqRef.current;
     let alive = true;
-    fetch(`/api/ai/conversations/${encodeURIComponent(storedId)}/messages`, {
-      credentials: 'include',
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        // 连点两章时只认最后一次；卸载后也不再回写
-        if (!alive || seq !== restoreSeqRef.current || !data) return;
-        dispatch({
-          type: 'conversation/load',
-          conversationId: data.id || storedId,
-          messages: mapConversationMessages(data.messages || [], rolesRef.current, chapter.id),
-        });
 
-        // 沿用这条对话最后用的角色，接着问不会突然换人设
-        const lastRoleKey = (data.messages || [])
-          .map((m) => m.roleKey)
-          .filter(Boolean)
-          .pop();
-        if (lastRoleKey) dispatch({ type: 'role/set', roleKey: lastRoleKey });
-      })
-      .catch(() => {
-        // 拉不到就空着，不挡住作者继续写；下次切章会再试
+    restoreChapterConversation({
+      workId: work.id,
+      chapterId: chapter.id,
+      roles: rolesRef.current,
+    }).then((restored) => {
+      // 连点两章时只认最后一次；卸载后也不再回写
+      if (!alive || seq !== restoreSeqRef.current) return;
+      dispatch({
+        type: 'conversation/load',
+        conversationId: restored.conversationId,
+        messages: restored.messages,
       });
+      // 沿用这条对话最后用的角色，接着问不会突然换人设
+      if (restored.lastRoleKey) {
+        dispatch({ type: 'role/set', roleKey: restored.lastRoleKey });
+      }
+    });
 
     return () => {
       alive = false;
     };
-  }, [chapterKey, sending, work?.id, chapter?.id, dispatch]);
+  }, [chapterKey, chapterEpoch, sending, work?.id, chapter?.id, dispatch]);
 
   // 新开/清空对话时，这一章的指针也要作废——否则下次进来又恢复出旧对话
   const forgetChapterConversation = useCallback(() => {
