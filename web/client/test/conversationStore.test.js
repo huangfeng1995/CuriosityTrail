@@ -212,6 +212,88 @@ test('作者点过清空就不再兜底，也不发任何请求', async () => {
   assert.deepEqual(fetchImpl.calls, []);
 });
 
+test('别的章已有指针时，这一章不兜底、也不请求会话列表', async () => {
+  installStorage();
+  saveChapterConversation('w1', 'c1', 'conv-a');
+
+  // c2 没有任何指针：不能借用 c1 的会话
+  const fetchImpl = fakeFetch({
+    '/api/ai/conversations?workId=w1': [{ id: 'conv-a' }],
+    '/api/ai/conversations/conv-a/messages': MSG_SET,
+  });
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c2',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'isolated');
+  assert.equal(restored.messages.length, 0);
+  assert.deepEqual(fetchImpl.calls, []);
+  assert.equal(readChapterConversation('w1', 'c2'), '');
+});
+
+test('别的章只是清空过，也不把它的旧会话借过来', async () => {
+  installStorage();
+  clearChapterConversation('w1', 'c1');
+
+  const fetchImpl = fakeFetch({
+    '/api/ai/conversations?workId=w1': [{ id: 'conv-a' }],
+  });
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c2',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'isolated');
+  assert.deepEqual(fetchImpl.calls, []);
+});
+
+test('指针失效时，别的章有指针就不再兜底', async () => {
+  installStorage();
+  saveChapterConversation('w1', 'c1', 'conv-gone');
+  saveChapterConversation('w1', 'c2', 'conv-b');
+
+  const fetchImpl = fakeFetch({
+    '/api/ai/conversations/conv-gone/messages': null,
+    '/api/ai/conversations?workId=w1': [{ id: 'conv-b' }],
+  });
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c1',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'isolated');
+  assert.equal(restored.messages.length, 0);
+  assert.equal(readChapterConversation('w1', 'c1'), 'conv-gone');
+});
+
+test('指针失效且整部作品没有别的章指针时才兜底', async () => {
+  installStorage();
+  saveChapterConversation('w1', 'c1', 'conv-gone');
+
+  const fetchImpl = fakeFetch({
+    '/api/ai/conversations/conv-gone/messages': null,
+    '/api/ai/conversations?workId=w1': [{ id: 'conv-latest' }],
+    '/api/ai/conversations/conv-latest/messages': MSG_SET,
+  });
+  const restored = await restoreChapterConversation({
+    workId: 'w1',
+    chapterId: 'c1',
+    roles: [],
+    fetchImpl,
+  });
+
+  assert.equal(restored.source, 'latest');
+  assert.equal(restored.conversationId, 'conv-latest');
+  assert.equal(readChapterConversation('w1', 'c1'), 'conv-latest');
+});
+
 test('作品没有任何会话时安静返回空', async () => {
   installStorage();
 

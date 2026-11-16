@@ -8,12 +8,14 @@
  * 现在的顺序：
  *   ① 这一章点过「清空 / 新对话」→ 就该是空的，不再兜底；
  *   ② 有指针 → 按指针恢复，保证「每章各自一条」；
- *   ③ 没指针 / 指针失效 → 取这部作品最近一条有消息的会话恢复，
- *      并把它绑定到当前章，下次不会又跳到别处更新的会话。
+ *   ③ 没指针 / 指针失效 → 只有整部作品还从没有过任何章节指针时，
+ *      才把最近一条会话恢复给当前章并落指针；之后其它没有指针的章
+ *      保持空态，不再借用别人的会话。
  */
 import {
   mapConversationMessages,
   readChapterEntry,
+  readWorkEntries,
   saveChapterConversation,
 } from './conversationStore.js';
 
@@ -66,8 +68,16 @@ export async function restoreChapterConversation({
   if (entry.id) {
     const data = await getJson(fetchImpl, messagesUrl(entry.id));
     if (data) return pack(data, data.id || entry.id, roles, chapterId, 'pointer');
-    // 指针指向的会话已不存在（被删、换了账号）：继续走兜底
+    // 指针指向的会话已不存在（被删、换了账号）：继续往下判断能不能兜底
   }
+
+  // 别的章已经有指针记录（哪怕是被清空的墓碑），说明这部作品早就按章用起来了。
+  // 这一章既然没有自己的指针，就该是空的——兜底只借给「还没分过章」的作品。
+  // 只看 key、不看值：清空过的章也不能把它的旧会话转手借给别人。
+  const hasOtherChapter = Object.keys(readWorkEntries(workId)).some(
+    (otherChapterId) => otherChapterId !== chapterId
+  );
+  if (hasOtherChapter) return { ...EMPTY, source: 'isolated' };
 
   const list = await getJson(
     fetchImpl,

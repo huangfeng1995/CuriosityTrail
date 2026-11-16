@@ -43,13 +43,8 @@ export function readChapterConversation(workId, chapterId) {
  *
  * 旧版本直接存字符串，这里兼容一下，读到时按「有指针」处理。
  */
-export function readChapterEntry(workId, chapterId) {
-  if (!workId || !chapterId) return { id: '', cleared: false };
-  const map = readMap();
-  const raw = map[workId]?.[chapterId];
-  if (typeof raw === 'string') {
-    return { id: raw, cleared: false };
-  }
+function normalizeEntry(raw) {
+  if (typeof raw === 'string') return { id: raw, cleared: false };
   if (raw && typeof raw === 'object') {
     return {
       id: typeof raw.id === 'string' ? raw.id : '',
@@ -57,6 +52,29 @@ export function readChapterEntry(workId, chapterId) {
     };
   }
   return { id: '', cleared: false };
+}
+
+export function readChapterEntry(workId, chapterId) {
+  if (!workId || !chapterId) return { id: '', cleared: false };
+  const map = readMap();
+  return normalizeEntry(map[workId]?.[chapterId]);
+}
+
+/**
+ * 读这部作品下所有章节的指针，key 是 chapterId。
+ *
+ * 兜底恢复要用它判断「这部作品到底分没分过章」：
+ * 只要别的章已经指到某条会话，说明作品已经按章用起来了，
+ * 这一章没用过对话就该是空的，不能去借别人的会话。
+ */
+export function readWorkEntries(workId) {
+  if (!workId) return {};
+  const map = readMap();
+  const raw = map[workId];
+  if (!raw || typeof raw !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(raw).map(([chapterId, value]) => [chapterId, normalizeEntry(value)])
+  );
 }
 
 /** 记住某一章当前用的会话 id。 */
