@@ -13,6 +13,7 @@ import {
   mapConversationMessages,
 } from './conversationStore';
 import { restoreChapterConversation } from './conversationRestore';
+import { createConversationBinding } from './conversationBinder';
 import { pendingActions } from './pendingActions';
 import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
@@ -98,6 +99,13 @@ export default function AssistantSidebar() {
   // 需要再恢复一次；只是重渲染则不会重复拉取。
   const restoredRef = useRef('');
   const restoreSeqRef = useRef(0);
+  // 当前展示的是哪一章：done 到达时要据此判断作者有没有切走。
+  // store 里的 conversationId 属于「正在看的那一章」，生成中切章后
+  // 不能把上一章的会话 id 写进去，否则下一句会接到别人的会话上。
+  const activeChapterIdRef = useRef('');
+  activeChapterIdRef.current = chapter?.id || '';
+  // 这一轮正在给哪一章生成（没有生成时为空）。
+  const sendingChapterIdRef = useRef('');
 
   useEffect(() => {
     if (!chapterKey) return undefined;
@@ -106,8 +114,10 @@ export default function AssistantSidebar() {
     if (chapter.work_id && work.id && chapter.work_id !== work.id) return undefined;
 
     // 正在生成时不切会话：作者的这一轮回答还在往这条对话里写。
-    // sending 结束后依赖变化会再跑一次，把新章接上来。
-    if (sending) return undefined;
+    // 只挡「正在生成的那一章」——作者中途切到别的章，那一章自己的历史
+    // 必须立刻恢复，否则要在空栏里干等到这一轮生成结束；
+    // 回到正在生成的那一章则继续等 done，避免拉到「只有提问」的半截记录。
+    if (sending && sendingChapterIdRef.current === chapter?.id) return undefined;
 
     const mark = `${chapterKey}:${chapterEpoch || 0}`;
     if (restoredRef.current === mark) return undefined;
@@ -131,6 +141,8 @@ export default function AssistantSidebar() {
         type: 'conversation/load',
         conversationId: cached.conversationId,
         messages: cached.messages,
+        // 另一章还在生成：这是切章带来的恢复，不是生成结束
+        keepSending: true,
       });
       return undefined;
     }
@@ -149,6 +161,8 @@ export default function AssistantSidebar() {
         type: 'conversation/load',
         conversationId: restored.conversationId,
         messages: restored.messages,
+        // 同上：别把还在跑的那一轮当作结束
+        keepSending: true,
       });
       // 沿用这条对话最后用的角色，接着问不会突然换人设
       if (restored.lastRoleKey) {
@@ -329,6 +343,9 @@ export default function AssistantSidebar() {
       abortRef.current = controller;
       streamBufRef.current = '';
       toolTraceRef.current = [];
+      // 记下这一轮在给哪一章生成：作者切走后，别的章的历史该恢复就恢复，
+      // 不用在空栏里干等到这一轮结束。
+      sendingChapterIdRef.current = chapter?.id || '';
       // 本次请求有没有拿到过实质回复。
       // 流正常结束却没收到 action 事件时，占位消息会一直是空的——
       // 必须兜底给作者一句看得见的话，不能留一个空气泡。
@@ -337,7 +354,19 @@ export default function AssistantSidebar() {
       // 批量采纳要据此决定「是否标记已采纳」：失败整批都不标
       let failed = false;
 
+      // 指针不能等 done 才写：消息刚出现作者就可能切章、刷新、关页面，
+      // 那时流被中断，done 永远到不了，这一章下次进来就是空的。
+      // 绑定对象在这里就固定「作品 + 发起的章」，之后作者切到哪一章，
+      // 指针也只写回这一章。
+      const binding = createConversationBinding({
+        workId: work?.id,
+        chapterId: chapter?.id,
+        conversationId,
+      });
+
       try {
+        // 发送前先记下作品现有会话，第一次发问要靠它认出新建的那条
+        await binding.start();
         await streamPost(
           '/api/ai/chat',
           {
@@ -353,12 +382,19 @@ export default function AssistantSidebar() {
             replaceMessageId,
           },
           (event) => {
+            // 第一个事件到时，服务端的会话行已经建好了：
+            // 借这一刻把「本章用的是哪条会话」认下来，别等 done。
+            binding.onEvent(event);
             if (event.type === 'token') {
               streamBufRef.current += event.content;
-              dispatch({
-                type: 'streaming/set',
-                streaming: streamBufRef.current,
-              });
+              // 作者可能已经切到别的章：这段正文属于发起的那一章，
+              // 不能流进当前章的栏里。
+              if (activeChapterIdRef.current === (chapter?.id || '')) {
+                dispatch({
+                  type: 'streaming/set',
+                  streaming: streamBufRef.current,
+                });
+              }
             } else if (event.type === 'notice') {
               dispatch({ type: 'notice/set', notice: event.content });
             } else if (event.type === 'memory') {
@@ -477,14 +513,17 @@ export default function AssistantSidebar() {
                 },
               });
             } else if (event.type === 'done') {
-              dispatch({
-                type: 'conversation/set',
-                conversationId: event.conversationId,
-              });
-              // 记住这一章用的是哪条会话：刷新或离开再回来据此恢复
-              if (event.conversationId && work?.id && chapter?.id) {
-                saveChapterConversation(work.id, chapter.id, event.conversationId);
+              // 作者在生成中途切去了别的章：这条会话属于发起的章，
+              // 不能写进当前章的 store，等切回来按指针恢复即可。
+              if (activeChapterIdRef.current === (chapter?.id || '')) {
+                dispatch({
+                  type: 'conversation/set',
+                  conversationId: event.conversationId,
+                });
               }
+              // 记住这一章用的是哪条会话：刷新或离开再回来据此恢复。
+              // 绑定对象固定的是「发起的章」，作者中途切走也不会写错。
+              binding.finish(event.conversationId);
               // 记住服务端的助手消息 id：下次重新生成要靠它替换旧回答
               dispatch({
                 type: 'message/update',
@@ -548,6 +587,7 @@ export default function AssistantSidebar() {
           });
         }
       } finally {
+        binding.dispose();
         // 流结束了，但既没收到 action 也没收到 error。
         // 说明连接在中途断掉了——给作者一句话，别留空白气泡。
         if (!gotReply && !aborted) {
@@ -560,6 +600,7 @@ export default function AssistantSidebar() {
         dispatch({ type: 'sending/set', sending: false });
         dispatch({ type: 'streaming/set', streaming: '' });
         streamBufRef.current = '';
+        sendingChapterIdRef.current = '';
         abortRef.current = null;
         // 停下来的这一下要留痕：先让「停止中」站住 0.4 秒（中断本身是瞬间的，
         // 不留这一下的话按钮会直接跳回发送，作者看不出点没点到），

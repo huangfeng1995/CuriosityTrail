@@ -163,13 +163,17 @@ function reducer(state, action) {
 
     // 打开一条历史对话：整体换掉消息流，之后继续发消息会接在这个会话上。
     // 流式状态必须清空——上一轮如果正卡在输出里，留着它会把旧气泡和新历史混在一起。
+    //
+    // keepSending：切章时给「别的那一章」恢复历史，不是作者主动结束生成。
+    // 这时候不能把 sending 抹成 false，否则后台那一轮还在跑，
+    // 界面却认为空了、可以再发一句。
     case 'conversation/load':
       return {
         ...state,
         conversationId: action.conversationId,
         messages: action.messages,
         streaming: '',
-        sending: false,
+        sending: action.keepSending === true ? state.sending : false,
         notice: '',
         error: '',
       };
