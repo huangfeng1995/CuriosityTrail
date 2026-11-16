@@ -86,6 +86,18 @@ function startFakeModel(options = {}) {
           Connection: 'keep-alive',
         });
 
+        // 先吐一段流再挂起：模拟「已经 200、正在往里写」时客户端断开。
+        // 这条路径抛的是原生 DOMException（message 只有 getter），
+        // 不是 provider 包装过的普通 Error——崩溃就发生在这里。
+        if (b.holdStream) {
+          res.write(
+            `data: ${JSON.stringify({
+              choices: [{ delta: { content: '这段输出到一半就断了' }, finish_reason: null }],
+            })}\n\n`
+          );
+          return;
+        }
+
         if (b.reasoning) {
           res.write(
             `data: ${JSON.stringify({

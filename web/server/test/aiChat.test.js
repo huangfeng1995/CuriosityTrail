@@ -688,6 +688,50 @@ test('provider 超时会被标记成 AI_TIMEOUT', async () => {
   }
 });
 
+test('客户端中途断开：按中止正常收尾，不崩在 err.message 上', async () => {
+  // 中止路径抛的是 DOMException（AbortError），message 只有 getter：
+  // 旧实现里 catch 直接写 err.message = ...，严格模式下抛 TypeError，
+  // 从 catch 逃出去变成未捕获异常，整个进程退出。
+  const logs = [];
+  const originalInfo = console.info;
+  const originalError = console.error;
+  console.info = (...args) => logs.push(args);
+  console.error = (...args) => logs.push(args);
+
+  try {
+    fakeModel.setDefault({ holdStream: true });
+
+    const controller = new AbortController();
+    const pending = server
+      .request('/api/ai/chat', {
+        method: 'POST',
+        body: { message: '这一轮会被中途掐断', roleKey: 'writer' },
+        signal: controller.signal,
+      })
+      .catch(() => null);
+
+    // 等请求真正打到假模型、进入流式等待，再断开。
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    controller.abort();
+    await pending;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  } finally {
+    console.info = originalInfo;
+    console.error = originalError;
+  }
+
+  fakeModel.setDefault({ content: '{"action":"none","content":"恢复"}', finishReason: 'stop' });
+
+  // 进程还活着：中断之后普通请求仍然可用。
+  const res = await server.request('/api/ai/roles');
+  assert.strictEqual(res.status, 200, '中断之后服务仍然可用');
+
+  const aborted = logs.find((row) => String(row[0]).includes('请求已中止'));
+  assert.ok(aborted, '中止要留一条可查的记录');
+  assert.ok(aborted[1] && aborted[1].traceId, '记录里要带 traceId');
+  assert.strictEqual(aborted[1].errorCode, 'AI_ABORTED', '中止要归到 AI_ABORTED');
+});
+
 // ---------------------------------------------------------------------------
 // T3 节拍规划：规划 → 写作 → 自检 → （缺拍时）重写一次
 // ---------------------------------------------------------------------------

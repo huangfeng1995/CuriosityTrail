@@ -115,6 +115,25 @@ function toText(value) {
 }
 
 /**
+ * 安全读取异常信息。
+ *
+ * 中止路径抛的是 DOMException（AbortError），它的 message 只有 getter：
+ * 严格模式下 `err.message = ...` 会抛 TypeError，把 catch 块本身打断、
+ * 变成未捕获异常让进程退出。所以一律不改原对象，只取一份局部字符串；
+ * err 还可能压根不是对象（throw null），取值也要走安全版本。
+ */
+function errorText(err) {
+  if (!err) return '';
+  if (typeof err === 'string') return err;
+  if (typeof err.message === 'string' && err.message) return err.message;
+  try {
+    return String(err);
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
  * 归一化结构化输出，确保字段齐全且类型正确。
  */
 function normalizeAction(payload) {
@@ -2831,30 +2850,46 @@ router.post('/chat', async (req, res) => {
       setImmediate(() => {
         knowledgeScan
           .scanKnowledge({ workId, chapterId, text: scanText })
-          .catch((err) => console.error('[ai] 知情扫描失败（已跳过）:', err.message));
+          .catch((err) => console.error('[ai] 知情扫描失败（已跳过）:', errorText(err)));
       });
     }
   } catch (err) {
-    console.error('AI chat 失败：', err.message);
-
-    // 失败也带 code：前端和日志都要能分辨「超时 / 被取消 / 上游报错 / 技能打转」，
-    // 否则所有异常都只剩一句转述给作者的话，排查时无从下手。
-    let errorCode = err.code || 'AI_PROVIDER_ERROR';
+    // 中止路径抛的是 DOMException（AbortError），message 只有 getter：
+    // 不能像普通 Error 那样改 err.message（严格模式会抛 TypeError 并从
+    // catch 里逃出去，把整个进程带走）。这里一律用局部变量。
+    const rawCode = (err && err.code) || '';
+    const rawName = (err && err.name) || '';
+    const aborted = rawCode === 'AI_ABORTED' || rawName === 'AbortError';
+    let errorCode = rawCode || 'AI_PROVIDER_ERROR';
+    let errorMessage = errorText(err);
 
     // 模型反复调用技能却拿不到结果：这句话要说明白，
     // 作者才知道是自己问得太绕，而不是平台坏了。
-    if (err.code === 'MAX_STEPS') {
+    if (rawCode === 'MAX_STEPS') {
       errorCode = 'AI_MAX_STEPS';
-      err.message = '这次没能查完：模型反复调用技能但没有拿到结果。请换个说法再问一次。';
-    } else if (err.code === 'AI_TIMEOUT' || err.name === 'TimeoutError') {
+      errorMessage = '这次没能查完：模型反复调用技能但没有拿到结果。请换个说法再问一次。';
+    } else if (rawCode === 'AI_TIMEOUT' || rawName === 'TimeoutError') {
       // 整轮超时上限到了，或流式读取中途被中止时，抛的是 DOMException，
       // message 是英文（"The operation was aborted due to timeout"）。
       // 原样透给作者既看不懂，还会让他以为平台坏了。
       errorCode = 'AI_TIMEOUT';
-      err.message = 'AI 这次超时了：等了很久都没有返回完整结果。可以把要求说得短一点，或分几次写。';
-    } else if (err.code === 'AI_ABORTED' || err.name === 'AbortError') {
+      errorMessage = 'AI 这次超时了：等了很久都没有返回完整结果。可以把要求说得短一点，或分几次写。';
+    } else if (aborted) {
       errorCode = 'AI_ABORTED';
-      err.message = '这次请求被中止了，没有拿到完整结果。';
+      errorMessage = '这次请求被中止了，没有拿到完整结果。';
+    }
+
+    // 中止/断开是正常情况：作者关掉了页面，或这一轮被取消，不是平台故障。
+    // 留一条带 traceId 的记录备查，但不打 error、不抛、不让它继续往上冒。
+    if (aborted || clientGone) {
+      console.info('[ai] 请求已中止（客户端断开或取消）', {
+        traceId,
+        conversationId: conversation ? conversation.id : '',
+        errorCode,
+        clientGone,
+      });
+    } else {
+      console.error('AI chat 失败：', errorMessage);
     }
 
     // 失败的这轮同样不能留下孤立消息。
@@ -2875,14 +2910,14 @@ router.post('/chat', async (req, res) => {
       return;
     }
 
-    send({ type: 'error', code: errorCode, message: err.message });
+    send({ type: 'error', code: errorCode, message: errorMessage });
     // 补一个 done：前端靠它同步 conversationId，
     // 缺了这一条，作者下一句话会另起一个会话，前面的对话就断了。
     if (conversation) {
       send({
         type: 'done',
         conversationId: conversation.id,
-        stopReason: err.stopReason || 'error',
+        stopReason: (err && err.stopReason) || 'error',
         traceId,
       });
     }
@@ -3264,20 +3299,24 @@ router.post('/inline', async (req, res) => {
       memoryDegraded: memoryResult.degraded,
     });
   } catch (err) {
-    console.error('AI inline 失败：', err.message);
+    // 与 /chat 一致：不改原对象（中止抛的 DOMException 没有 message setter），
+    // err 也可能不是对象。
+    const rawCode = (err && err.code) || '';
+    const rawName = (err && err.name) || '';
+    console.error('AI inline 失败：', errorText(err));
 
     // 与 /chat 一致：超时不能混在 500 里笼统报，前端要能区分。
-    if (err.code === 'AI_TIMEOUT' || err.name === 'TimeoutError') {
+    if (rawCode === 'AI_TIMEOUT' || rawName === 'TimeoutError') {
       return res.status(504).json({
         code: 'AI_TIMEOUT',
         error: 'AI 这次超时了：等了很久都没有返回结果。可以把选区缩小一点再试。',
       });
     }
-    if (err.code === 'AI_ABORTED' || err.name === 'AbortError') {
+    if (rawCode === 'AI_ABORTED' || rawName === 'AbortError') {
       return res.status(499).json({ code: 'AI_ABORTED', error: '这次请求被中止了，没有拿到结果。' });
     }
 
-    res.status(500).json({ error: err.message, code: err.code || 'AI_PROVIDER_ERROR' });
+    res.status(500).json({ error: errorText(err), code: rawCode || 'AI_PROVIDER_ERROR' });
   }
 });
 
