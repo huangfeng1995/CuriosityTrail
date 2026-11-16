@@ -3240,6 +3240,17 @@ router.post('/inline', async (req, res) => {
     }
 
     const rawText = result.content || '';
+
+    // 被长度上限截断的输出一律不返回：它看起来像"改写成功"，
+    // 实际只有前半段，写回正文会把整段吞掉（线上就是这么丢的稿子）。
+    if (result.finishReason === 'length') {
+      return res.status(502).json({
+        code: 'AI_TRUNCATED',
+        error:
+          '这次输出被长度上限截断了，可能只写了一半，已丢弃。把选区缩小一点再试一次。',
+      });
+    }
+
     const parsed = parseModelJson(rawText);
 
     if (!parsed) {
@@ -3286,6 +3297,23 @@ router.post('/inline', async (req, res) => {
           code: 'AI_NO_BODY',
           error:
             'AI 没能给出可写入的正文（可能是指令不够明确）。请说明要改写哪段、改成什么样，再试一次。',
+        });
+      }
+    }
+
+    // 写回前的比例闸（服务端的一半，客户端还有同样一条）：
+    // 改写/扩写/换语气/口语化这类动作应当保持原有信息量，
+    // 返回的内容不到选区六成时，多半是模型截断或只回了摘要，直接拒收。
+    // 缩写与续写本就允许变短/变长，不套这条。
+    const KEEP_RATIO_ACTIONS = new Set(['rewrite', 'expand', 'tone', 'colloquialize']);
+    if (KEEP_RATIO_ACTIONS.has(action) && payload.action === 'replace') {
+      const visible = (s) => String(s || '').replace(/\s/g, '').length;
+      const beforeLen = visible(selection);
+      const afterLen = visible(payload.content);
+      if (beforeLen >= 30 && afterLen < beforeLen * 0.6) {
+        return res.status(422).json({
+          code: 'AI_SHRUNK',
+          error: `生成结果只有选区的 ${Math.round((afterLen / beforeLen) * 100)}%，可能被截断，已拒绝写回，原文保留。可以把选区缩小一点再试。`,
         });
       }
     }

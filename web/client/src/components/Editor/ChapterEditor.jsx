@@ -12,6 +12,7 @@ import { Maximize2, Minimize2 } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { useFocus } from '../../store/focus';
 import { createBlock, countChars } from './blocks';
+import { assessRewrite } from './writebackGuard';
 import { collectCriticFindings, REASON_LABEL } from '../Assistant/findings';
 import { countBlockWords, formatWords } from '../../utils/wordCount';
 import Block from './Block';
@@ -304,6 +305,16 @@ export default function ChapterEditor() {
             target.content.slice(0, selection.start) +
             data.content +
             target.content.slice(selection.end);
+
+          // 模型被长度上限截断时只回一句，这里会把整段压成那一句。
+          // 缩写是作者明确要求变短，其余动作都要过长度闸。
+          const guard = assessRewrite(target.content, next, { action });
+          if (!guard.ok) {
+            message.warning(guard.reason);
+            dispatch({ type: 'selection/set', selection: null });
+            return;
+          }
+
           updateBlock(target.id, { content: next });
         } else if (data.action === 'append' && data.content) {
           updateBlock(target.id, {

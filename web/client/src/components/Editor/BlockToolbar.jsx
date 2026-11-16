@@ -57,38 +57,6 @@ export default function BlockToolbar({ selectedChars = 0, onRun, onMark, blockTy
       onMouseDown={(e) => e.preventDefault()}
     >
       <span className="ct-scope-chip">已选 {selectedChars} 字</span>
-      <span className="ct-scope-sep" />
-
-      {/* 「标记」改的是段落类型，跟后面一排改文字的动作不是一类，排在最前。 */}
-      {canMark && (
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => {
-              setToneOpen(false);
-              setMarkOpen((v) => !v);
-            }}
-            disabled={disabled}
-            className="ct-inline-btn"
-          >
-            标记
-          </button>
-          {markOpen && (
-            <div className="ct-tone-menu">
-              {MARK_TARGETS.map((t) => (
-                <Tooltip key={t.type} title={t.hint} placement="right">
-                  <button
-                    onClick={() => mark(t.type)}
-                    disabled={t.type === blockType}
-                    className="ct-inline-btn"
-                  >
-                    {t.label}
-                  </button>
-                </Tooltip>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {ACTIONS.map((a) => {
         if (a.key === 'tone') {
@@ -132,6 +100,42 @@ export default function BlockToolbar({ selectedChars = 0, onRun, onMark, blockTy
           </button>
         );
       })}
+
+      {/* 段落类型与上面八个 AI 动作不是一回事：它只改块的 type，不写一个字，
+          也不发任何请求。单独隔开放在最后，避免被当成又一个"改写"入口。 */}
+      {canMark && (
+        <>
+          <span className="ct-scope-sep" />
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => {
+                setToneOpen(false);
+                setMarkOpen((v) => !v);
+              }}
+              disabled={disabled}
+              className="ct-inline-btn is-meta"
+              title="只改段落类型，不改文字"
+            >
+              类型
+            </button>
+            {markOpen && (
+              <div className="ct-tone-menu is-meta">
+                {MARK_TARGETS.map((t) => (
+                  <Tooltip key={t.type} title={t.hint} placement="right">
+                    <button
+                      onClick={() => mark(t.type)}
+                      disabled={t.type === blockType}
+                      className="ct-inline-btn"
+                    >
+                      {t.label}
+                    </button>
+                  </Tooltip>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       <button onClick={onClose} className="ct-inline-btn is-close" title="关闭">
         <X size={13} />

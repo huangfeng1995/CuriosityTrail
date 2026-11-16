@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
-import { Upload, Button, Dropdown, message } from 'antd';
+import { Upload, Button, Dropdown, Modal, message } from 'antd';
 import {
   DeleteOutlined,
   ArrowUpOutlined,
@@ -360,6 +360,27 @@ export default function Block({
     }
   };
 
+  const requestConvert = (type) => {
+    const label = BLOCK_TYPE_MAP.get(type)?.label || type;
+    const hasText = (block.content || '').trim().length > 0;
+    // 分场没有正文、插图只显示图，转过去之后这段文字在编辑器里就看不到了。
+    // 分场还会把 content 清空——先问一句，别让"改类型"变成删稿。
+    if (hasText && (type === 'scene_break' || type === 'image')) {
+      Modal.confirm({
+        title: `转成${label}后，这段正文不再显示`,
+        content:
+          type === 'scene_break'
+            ? '分场块没有正文，转换会清空这段文字。撤销（⌘Z）可以退回。'
+            : '插图块只显示图片与图注，正文会先留着，转回来还能看到。',
+        okText: '仍要转换',
+        cancelText: '取消',
+        onOk: () => onConvert?.(block.id, type),
+      });
+      return;
+    }
+    onConvert?.(block.id, type);
+  };
+
   const actions = (
     <>
       <Dropdown
@@ -369,7 +390,7 @@ export default function Block({
             key: t.type,
             label: t.label,
             disabled: t.type === block.type,
-            onClick: () => onConvert?.(block.id, t.type),
+            onClick: () => requestConvert(t.type),
           })),
         }}
       >

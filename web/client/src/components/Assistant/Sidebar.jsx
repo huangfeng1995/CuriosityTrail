@@ -5,6 +5,7 @@ import { History, MoreHorizontal } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
+import { assessRewrite } from '../Editor/writebackGuard';
 import { planApply } from './applyPlan';
 import { collectCriticFindings, sendAdoptionBatch } from './findings';
 import {
@@ -799,6 +800,13 @@ export default function AssistantSidebar() {
           const block = blocks.find((b) => b.id === update.blockId);
           if (!block) return;
           if (update.action === 'replace') {
+            // 与「应用到正文」同一条闸：模型返回的内容明显短于原段时拒绝覆盖。
+            // 采纳意见走的是整块替换，没有这道闸就会把整段吞成一句。
+            const guard = assessRewrite(block.content, update.content);
+            if (!guard.ok) {
+              toast.warning(guard.reason);
+              return;
+            }
             updateBlock(update.blockId, { content: update.content });
           } else if (update.action === 'append') {
             updateBlock(update.blockId, { content: block.content + update.content });

@@ -2309,6 +2309,17 @@ body.ct-resizing * {
   align-items: center;
   color: var(--text-quaternary);
 }
+/* 段落类型：改的是块属性，不是这段文字。
+   用虚线下边线做区分，作者一眼能看出它和左边那排 AI 动作不是一类。 */
+.ct-inline-btn.is-meta {
+  color: var(--text-tertiary);
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-underline-offset: 3px;
+}
+.ct-inline-btn.is-meta:hover:not(:disabled) {
+  color: var(--text-secondary);
+}
 .ct-tone-menu {
   position: absolute;
   top: calc(100% + 6px);

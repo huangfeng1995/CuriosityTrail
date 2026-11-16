@@ -14,6 +14,8 @@
  *   error   —— 落不进去，给作者一句能照着做的话
  */
 
+import { assessRewrite } from '../Editor/writebackGuard.js';
+
 /** 能被追加文字的块类型。分场/插图/设定引用不该被写进散文。 */
 const PROSE_TYPES = new Set(['paragraph', 'dialogue', 'inner']);
 
@@ -250,12 +252,21 @@ export function planApply(blocks, action, target, content) {
       const isFullRewrite = text.length >= block.content.length * 0.6;
       const wholeBlock = coversWhole || !spot || isFullRewrite;
 
+      const nextContent = wholeBlock
+        ? text
+        : block.content.slice(0, spot.start) + text + block.content.slice(spot.end);
+
+      // 写回前的硬保护：模型被截断时只回一句，整块就会被压成那一句。
+      // 这种情况一律不写、保留原文，让作者自己决定要不要手动替换。
+      const guard = assessRewrite(block.content, nextContent);
+      if (!guard.ok) {
+        return { kind: 'error', message: guard.reason };
+      }
+
       return {
         kind: 'replace',
         blockId: block.id,
-        text: wholeBlock
-          ? text
-          : block.content.slice(0, spot.start) + text + block.content.slice(spot.end),
+        text: nextContent,
       };
     }
     // 找不到原段落，但整章还没有正文：本来也无处可改，
