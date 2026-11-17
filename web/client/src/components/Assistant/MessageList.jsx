@@ -74,16 +74,7 @@ export default function MessageList({
 
   if (!messages.length && !streaming) {
     return (
-      <EmptyState
-        className="ct-empty-welcome"
-        text={
-          <>
-            选一个角色开始对话。
-            <br />
-            AI 会知道你正在写哪一章、涉及哪些人物与设定。
-          </>
-        }
-      />
+      <EmptyState className="ct-empty-welcome" text="选一个角色开始对话。" />
     );
   }
 

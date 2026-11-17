@@ -50,6 +50,25 @@ export default function BlockToolbar({ selectedChars = 0, onRun, onMark, blockTy
     setMarkOpen(false);
   };
 
+  /* 生成中不换掉按钮内容：动作名留在原位撑住宽度，加载态叠在它上面。
+     否则按钮一窄一宽，整排动作会左右跳，作者刚看清的位置就跑了。 */
+  const label = (a) => (
+    <React.Fragment key={a.key}>
+      <button
+        onClick={() => run(a.key)}
+        disabled={disabled}
+        className={`ct-inline-btn${busy === a.key ? ' is-busy' : ''}`}
+      >
+        <span className="ct-inline-label">{a.label}</span>
+        {busy === a.key && (
+          <span className="ct-inline-loading" aria-hidden="true">
+            <Spin size="small" />
+          </span>
+        )}
+      </button>
+    </React.Fragment>
+  );
+
   return (
     <div
       className="ct-inline-toolbar is-active"
@@ -70,7 +89,12 @@ export default function BlockToolbar({ selectedChars = 0, onRun, onMark, blockTy
                 disabled={disabled}
                 className="ct-inline-btn"
               >
-                {busy === 'tone' ? <Spin size="small" /> : a.label}
+                <span className="ct-inline-label">{a.label}</span>
+                {busy === 'tone' && (
+                  <span className="ct-inline-loading" aria-hidden="true">
+                    <Spin size="small" />
+                  </span>
+                )}
               </button>
               {toneOpen && (
                 <div className="ct-tone-menu">
@@ -89,16 +113,7 @@ export default function BlockToolbar({ selectedChars = 0, onRun, onMark, blockTy
           );
         }
 
-        return (
-          <button
-            key={a.key}
-            onClick={() => run(a.key)}
-            disabled={disabled}
-            className="ct-inline-btn"
-          >
-            {busy === a.key ? <Spin size="small" /> : a.label}
-          </button>
-        );
+        return label(a);
       })}
 
       {/* 段落类型与上面八个 AI 动作不是一回事：它只改块的 type，不写一个字，

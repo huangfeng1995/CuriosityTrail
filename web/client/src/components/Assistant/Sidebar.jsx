@@ -1017,7 +1017,7 @@ export default function AssistantSidebar() {
 
   if (!chapter) {
     return (
-      <EmptyState className="ct-empty-fill" text="选中一个章节后，AI 才能知道你在写什么" />
+      <EmptyState className="ct-empty-fill" text="先在左侧选一个章节" />
     );
   }
 
@@ -1082,7 +1082,7 @@ export default function AssistantSidebar() {
               send();
             }
           }}
-          placeholder={`以${activeRole?.name || 'AI'}的身份提问…（Enter 发送，Shift+Enter 换行）`}
+          placeholder={`以${activeRole?.name || 'AI'}的身份提问…`}
           autoSize={{ minRows: 2, maxRows: 6 }}
           disabled={sending}
           className="ct-ai-textarea"
