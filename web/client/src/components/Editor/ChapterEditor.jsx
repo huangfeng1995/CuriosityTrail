@@ -70,6 +70,9 @@ export default function ChapterEditor() {
 
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [activeFindingKey, setActiveFindingKey] = useState('');
+  // 侧栏采纳成功后，回执里带着这一批的 key。正文据此把对应序号收成已验证，
+  // 避免"已经改过"的段落还挂着待办的黄底与高亮序号。纯视图状态，不落库。
+  const [adoptedFindingKeys, setAdoptedFindingKeys] = useState(() => new Set());
   // 同一块意见被反复点击时，key 不变但作者仍然期望「再滚一次」。
   // 用递增序号触发块内的定位副作用，不把滚动逻辑塞进事件回调里。
   const [findingFocusSeq, setFindingFocusSeq] = useState(0);
@@ -100,11 +103,14 @@ export default function ChapterEditor() {
     const map = new Map();
     criticFindings.forEach((finding) => {
       if (finding.status !== 'located') return;
+      // 采纳过的意见仍留在沟槽里（号码要跟侧栏对得上），
+      // 但标记成已验证，正文不再整块标黄——改完的段落不该继续像待办。
+      const item = { ...finding, adopted: adoptedFindingKeys.has(finding.key) };
       if (!map.has(finding.blockId)) map.set(finding.blockId, []);
-      map.get(finding.blockId).push(finding);
+      map.get(finding.blockId).push(item);
     });
     return map;
-  }, [criticFindings]);
+  }, [criticFindings, adoptedFindingKeys]);
 
   // 当前正在核对的那条意见。章节头的定位条靠它常驻显示，
   // 这样正文滚走以后，作者仍然知道刚才看的是哪一句。
@@ -123,6 +129,24 @@ export default function ChapterEditor() {
     };
     window.addEventListener('ct:focus-block', onFocusBlock);
     return () => window.removeEventListener('ct:focus-block', onFocusBlock);
+  }, []);
+
+  // 采纳回执：侧栏（对话卡片、检查面板）改完正文后会广播这一批的 key。
+  // 只有成功才收，失败那批保持待办模样。
+  useEffect(() => {
+    const onAdoptResult = (e) => {
+      const detail = e.detail || {};
+      if (!detail.ok) return;
+      const keys = Array.isArray(detail.keys) ? detail.keys : [];
+      if (!keys.length) return;
+      setAdoptedFindingKeys((prev) => {
+        const next = new Set(prev);
+        keys.forEach((key) => next.add(key));
+        return next;
+      });
+    };
+    window.addEventListener('ct:adopt-result', onAdoptResult);
+    return () => window.removeEventListener('ct:adopt-result', onAdoptResult);
   }, []);
 
   /** 正文沟槽点序号 → 选中该条意见并让侧栏滚过去。 */

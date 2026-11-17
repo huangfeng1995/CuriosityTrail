@@ -1816,6 +1816,11 @@ body.ct-resizing * {
 .ct-block.has-findings {
   background: var(--gold-dim);
 }
+/* 这一段的意见都采纳过了：黄底撤掉，段落回到纸面。
+   序号还在（和侧栏编号对得上），只是淡下去，表示这条已经处理。 */
+.ct-block.is-findings-resolved {
+  background: transparent;
+}
 .ct-block.is-finding-active {
   background: var(--mark-bg);
 }
@@ -2082,6 +2087,10 @@ body.ct-resizing * {
 .ct-block-finding-no.is-active {
   background: var(--gold);
   color: #fff;
+}
+/* 已采纳：序号淡下去，仍可点（回看当时说的是哪一句）。 */
+.ct-block-finding-no.is-adopted {
+  opacity: 0.45;
 }
 .ct-block-finding-sep {
   padding: 0 1px;

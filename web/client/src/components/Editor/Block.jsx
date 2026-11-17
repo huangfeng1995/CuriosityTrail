@@ -421,6 +421,9 @@ export default function Block({
   );
 
   const hasFindings = findings.length > 0;
+  // 全部采纳过的段落不再整块标黄：改完就该回到纸面，
+  // 只留一个淡下去的序号，证明这条意见来过、已经处理。
+  const hasOpenFindings = findings.some((finding) => !finding.adopted);
 
   // 侧栏选中某张人物卡/设定卡时，命中词所在的块整块标黄。
   // 只做到块级：正文是 textarea，字符级高亮没有稳定的渲染落点。
@@ -435,8 +438,10 @@ export default function Block({
       ref={blockRef}
       data-block-id={block.id}
       className={`ct-block${isActive ? ' is-active' : ''}${hasFindings ? ' has-findings' : ''}${
-        activeIsBlockLevel ? ' is-finding-active' : ''
-      }${isCardHit ? ' is-card-hit' : ''}`}
+        hasFindings && !hasOpenFindings ? ' is-findings-resolved' : ''
+      }${activeIsBlockLevel ? ' is-finding-active' : ''}${
+        isCardHit ? ' is-card-hit' : ''
+      }`}
       style={hasFindings ? { '--ct-finding-count': findings.length } : undefined}
     >
       {renderBody()}
@@ -466,7 +471,7 @@ export default function Block({
                 }
                 className={`ct-block-finding-no${
                   finding.key === activeFindingKey ? ' is-active' : ''
-                }`}
+                }${finding.adopted ? ' is-adopted' : ''}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onFindingClick?.(finding);
