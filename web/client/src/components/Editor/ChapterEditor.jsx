@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Space, message, Modal, Input, Tooltip, Dropdown } from 'antd';
+import { Button, Space, message, Modal, Input, Tooltip, Dropdown, Spin } from 'antd';
 import {
   SaveOutlined,
   UndoOutlined,
@@ -7,17 +7,19 @@ import {
   HistoryOutlined,
   DownloadOutlined,
   MoreOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { useFocus } from '../../store/focus';
+import api from '../../api/client';
 import { createBlock, countChars } from './blocks';
 import { assessRewrite } from './writebackGuard';
 import { collectCriticFindings, REASON_LABEL } from '../Assistant/findings';
 import { countBlockWords, formatWords } from '../../utils/wordCount';
 import Block from './Block';
 import BlockPalette from './BlockPalette';
-import BlockToolbar from './BlockToolbar';
+import BlockToolbar, { ACTIONS as INLINE_ACTIONS } from './BlockToolbar';
 import VersionHistoryPanel from './VersionHistoryPanel';
 import EmptyState from '../EmptyState';
 import { useIsNarrow } from '../../hooks/useMediaQuery';
@@ -53,6 +55,8 @@ export default function ChapterEditor() {
     blocks,
     messages,
     selection,
+    work,
+    chapters,
     updateBlock,
     insertBlock,
     removeBlock,
@@ -66,6 +70,8 @@ export default function ChapterEditor() {
     saveStatus,
     dispatch,
     renameChapter,
+    loadWork,
+    loadChapter,
   } = useWorkspace();
 
   const [activeBlockId, setActiveBlockId] = useState(null);
@@ -73,6 +79,11 @@ export default function ChapterEditor() {
   // 侧栏采纳成功后，回执里带着这一批的 key。正文据此把对应序号收成已验证，
   // 避免"已经改过"的段落还挂着待办的黄底与高亮序号。纯视图状态，不落库。
   const [adoptedFindingKeys, setAdoptedFindingKeys] = useState(() => new Set());
+  // 上一次行内改写写在哪儿。保留「再来一次」用，不靠当前选区：
+  // 改完正文后选区已失效，若还拿旧偏移量重跑就会改错地方。
+  const [lastInline, setLastInline] = useState(null);
+  const [retrying, setRetrying] = useState(false);
+  const [creatingChapter, setCreatingChapter] = useState(false);
   // 同一块意见被反复点击时，key 不变但作者仍然期望「再滚一次」。
   // 用递增序号触发块内的定位副作用，不把滚动逻辑塞进事件回调里。
   const [findingFocusSeq, setFindingFocusSeq] = useState(0);
@@ -82,6 +93,10 @@ export default function ChapterEditor() {
   const [cardHighlight, setCardHighlight] = useState(null);
   const pendingCardBlockRef = useRef(null);
   const editorRef = useRef(null);
+  // 新章自动补的那一段：记下是哪一章补过，作者主动删光时不再偷偷加回来。
+  const blankChapterRef = useRef('');
+  // 段落刚插进 store 时 DOM 还没挂上，等下一次 blocks 更新再聚焦。
+  const pendingFocusRef = useRef('');
   // 选区所在块的类型：工具条据此决定「标记」能不能用、当前类型那一项是否置灰。
   const selectedBlockType = selection
     ? blocks.find((b) => b.id === selection.blockId)?.type
@@ -207,6 +222,27 @@ export default function ChapterEditor() {
     }
   }, [blocks, selection, dispatch]);
 
+  // 空章：补一个空段落，让第一屏就是能写的正文，而不是一排"添加内容块"。
+  // 只补一次；作者把这一段删掉是明确意图，不再替他加回来。
+  useEffect(() => {
+    if (!chapter || blocks.length || blankChapterRef.current === chapter.id) return;
+    blankChapterRef.current = chapter.id;
+    const block = createBlock('paragraph');
+    pendingFocusRef.current = block.id;
+    insertBlock(0, block);
+    setActiveBlockId(block.id);
+  }, [chapter, blocks, insertBlock]);
+
+  // 等新段落进了 DOM 再把光标放进去，作者点完入口就能敲第一句。
+  useEffect(() => {
+    const id = pendingFocusRef.current;
+    if (!id) return;
+    const el = editorRef.current?.querySelector(`[data-block-id="${id}"] textarea`);
+    if (!el) return;
+    pendingFocusRef.current = '';
+    el.focus();
+  }, [blocks]);
+
   // 点击正文以外的位置收起选区。
   //
   // 工具条固定在章节头里，不在正文滚动器内部：点它时必须单独豁免，
@@ -297,11 +333,14 @@ export default function ChapterEditor() {
    *
    * 动作条固定在章节头，不再由它自己关闭；改完稿后这里收起选区，
    * 免得「已选 N 字」还挂着旧偏移量，下一按就作用到错的位置。
+   *
+   * sel 可以显式传入：「再来一次」要在没有选区的情况下重跑同一个范围。
    */
   const runInline = useCallback(
-    async (action, instruction) => {
-      if (!selection || !chapter) return;
-      const target = blocks.find((b) => b.id === selection.blockId);
+    async (action, instruction, sel) => {
+      const target0 = sel || selection;
+      if (!target0 || !chapter) return;
+      const target = blocks.find((b) => b.id === target0.blockId);
       if (!target) return;
 
       try {
@@ -312,8 +351,8 @@ export default function ChapterEditor() {
           body: JSON.stringify({
             action,
             instruction,
-            selection: selection.text,
-            blockId: selection.blockId,
+            selection: target0.text,
+            blockId: target0.blockId,
             blocks,
             workId: chapter.work_id,
             chapterId: chapter.id,
@@ -326,9 +365,9 @@ export default function ChapterEditor() {
 
         if (data.action === 'replace' && data.content) {
           const next =
-            target.content.slice(0, selection.start) +
+            target.content.slice(0, target0.start) +
             data.content +
-            target.content.slice(selection.end);
+            target.content.slice(target0.end);
 
           // 模型被长度上限截断时只回一句，这里会把整段压成那一句。
           // 缩写是作者明确要求变短，其余动作都要过长度闸。
@@ -340,12 +379,30 @@ export default function ChapterEditor() {
           }
 
           updateBlock(target.id, { content: next });
+          // 记住写回后的区间：「再来一次」只在这段文字仍然原样时出现。
+          setLastInline({
+            action,
+            instruction,
+            blockId: target.id,
+            start: target0.start,
+            end: target0.start + data.content.length,
+            text: data.content,
+          });
         } else if (data.action === 'append' && data.content) {
           updateBlock(target.id, {
             content: target.content + data.content,
           });
+          setLastInline({
+            action,
+            instruction,
+            blockId: target.id,
+            start: target.content.length,
+            end: target.content.length + data.content.length,
+            text: data.content,
+          });
         } else {
           // 建议类输出：只展示，不动稿
+          setLastInline(null);
           Modal.info({
             title: data.reason || 'AI 的建议',
             content: (
@@ -364,6 +421,39 @@ export default function ChapterEditor() {
     },
     [blocks, chapter, selection, updateBlock, dispatch]
   );
+
+  // 写回后的那段文字被改动（或块被删）：入口自动失效，避免在别的内容上重跑。
+  const retryable = useMemo(() => {
+    if (!lastInline) return null;
+    const block = blocks.find((b) => b.id === lastInline.blockId);
+    if (!block) return null;
+    if (block.content.slice(lastInline.start, lastInline.end) !== lastInline.text) return null;
+    return lastInline;
+  }, [lastInline, blocks]);
+
+  const retryLabel =
+    INLINE_ACTIONS.find((a) => a.key === retryable?.action)?.label || '改写';
+
+  const retryInline = useCallback(async () => {
+    if (!retryable || retrying) return;
+    const sel = {
+      blockId: retryable.blockId,
+      start: retryable.start,
+      end: retryable.end,
+      text: retryable.text,
+    };
+    setRetrying(true);
+    try {
+      await runInline(retryable.action, retryable.instruction, sel);
+    } finally {
+      setRetrying(false);
+    }
+  }, [retryable, retrying, runInline]);
+
+  // 换章后上一次改写的位置不再有意义。
+  useEffect(() => {
+    setLastInline(null);
+  }, [chapter?.id]);
 
   // 撤销/重做快捷键。Cmd+Z 撤销，Cmd+Shift+Z 与 Cmd+Y 重做。
   useEffect(() => {
@@ -400,6 +490,22 @@ export default function ChapterEditor() {
     }
   }, [blocks, chapter]);
 
+  // 空作品的第一屏：直接建第一章并载入，作者点完就能写，
+  // 不必先去左栏找那行小字。
+  const createFirstChapter = useCallback(async () => {
+    if (!work || creatingChapter) return;
+    setCreatingChapter(true);
+    try {
+      const res = await api.post(`/works/${work.id}/chapters`, {});
+      await loadWork(work.id);
+      await loadChapter(res.data.id);
+    } catch (e) {
+      message.error(e.response?.data?.error || '新建章节失败');
+    } finally {
+      setCreatingChapter(false);
+    }
+  }, [work, creatingChapter, loadWork, loadChapter]);
+
   // 导出范围：整部作品 + 本章。放在「⋯」的子菜单里，章节头只留一个入口。
   const exportMenuItems = useMemo(() => {
     if (!chapter) return [];
@@ -421,8 +527,21 @@ export default function ChapterEditor() {
   }, [chapter]);
 
   if (!chapter) {
+    const hasChapters = (chapters || []).some((c) => c.work_id === work?.id);
+    // 一本还没章节的书：第一屏就放一个能点的开始，不必去左栏找那行小字。
+    const canCreate = Boolean(work) && !hasChapters;
     return (
-      <EmptyState className="ct-empty-fill" text="从左侧选择一个章节开始写作" />
+      <EmptyState
+        className="ct-empty-fill"
+        text={canCreate ? '这本书还没有章节' : '从左侧选择一个章节开始写作'}
+        action={
+          canCreate ? (
+            <Button type="primary" loading={creatingChapter} onClick={createFirstChapter}>
+              新建第一章
+            </Button>
+          ) : null
+        }
+      />
     );
   }
 
@@ -536,7 +655,7 @@ export default function ChapterEditor() {
             没选中文字时连槽位内容一起不渲染；槽位本身保留高度，
             出现/消失时章节头不伸缩，正文第一行不会上下跳。 */}
         <div className="ct-editor-actions">
-          {selectedChars > 0 && (
+          {selectedChars > 0 ? (
             <BlockToolbar
               selectedChars={selectedChars}
               blockType={selectedBlockType}
@@ -544,7 +663,38 @@ export default function ChapterEditor() {
               onMark={handleMark}
               onClose={() => dispatch({ type: 'selection/set', selection: null })}
             />
-          )}
+          ) : retryable ? (
+            /* 结果不满意：不用回正文重新选，原地再来一次。
+               入口只认写回后那段文字，正文一改它就自己消失。 */
+            <div
+              className="ct-inline-toolbar is-active"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <button
+                type="button"
+                className={`ct-inline-btn${retrying ? ' is-busy' : ''}`}
+                onClick={retryInline}
+                disabled={retrying}
+                title={`再用「${retryLabel}」改一次`}
+              >
+                <span className="ct-inline-label">再来一次</span>
+                {retrying && (
+                  <span className="ct-inline-loading" aria-hidden="true">
+                    <Spin size="small" />
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className="ct-inline-btn is-close"
+                onClick={() => setLastInline(null)}
+                title="关闭"
+                aria-label="关闭「再来一次」"
+              >
+                <CloseOutlined style={{ fontSize: 11 }} />
+              </button>
+            </div>
+          ) : null}
         </div>
       </header>
 

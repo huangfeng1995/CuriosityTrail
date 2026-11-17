@@ -16,7 +16,7 @@ import { BLOCK_TYPES, MARKABLE_TYPES } from './blocks';
 
 const MARK_TARGETS = BLOCK_TYPES.filter((t) => MARKABLE_TYPES.includes(t.type));
 
-const ACTIONS = [
+export const ACTIONS = [
   { key: 'rewrite', label: '改写' },
   { key: 'expand', label: '扩写' },
   { key: 'shorten', label: '缩写' },
