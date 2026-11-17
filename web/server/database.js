@@ -35,8 +35,10 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 11 → 12：锚点记录来源素材 id（素材显式升格用，不建外键、不双向同步）。
  * 版本 12 → 13：故事事实增加 fact_type（secret/background），背景事实用于 mustReveal；
  *              知情待确认增加 source（candidate/model_only/rule），区分来路与低可信条目。
+ * 版本 13 → 14：消息增加 status（complete/interrupted）。客户端断开时保留的半截正文
+ *              按 interrupted 落库，与正常完成区分；老消息一律视为 complete。
  */
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 /**
  * 版本号之前的老库遗留表。
@@ -316,7 +318,11 @@ CREATE TABLE IF NOT EXISTS messages (
   action          TEXT,
   payload         TEXT,
   citations       TEXT,
-  created_at      TEXT NOT NULL
+  created_at      TEXT NOT NULL,
+  -- complete：正常完成；interrupted：客户端断开，只留下了已流出的半截正文。
+  -- 半截消息只在历史里给作者看，不参与写作上下文与字数/段落校验。
+  status          TEXT NOT NULL DEFAULT 'complete'
+                    CHECK (status IN ('complete','interrupted'))
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
 
@@ -758,6 +764,14 @@ async function migrate(fromVersion) {
     await ensureColumn('story_facts', 'fact_type', "TEXT NOT NULL DEFAULT 'secret'");
     // 13：知情待确认的来路。老行都来自候选/规则层，默认 candidate。
     await ensureColumn('knowledge_pending', 'source', "TEXT NOT NULL DEFAULT 'candidate'");
+    // 13 → 14：消息状态。老消息都是正常完成的，默认 complete；
+    // 不建新索引：历史查询仍按 (conversation_id, created_at) 走 idx_messages_conv，
+    // status 只在这个小范围里做过滤，单独建索引没有收益。
+    await ensureColumn(
+      'messages',
+      'status',
+      "TEXT NOT NULL DEFAULT 'complete' CHECK (status IN ('complete','interrupted'))"
+    );
     await ensureColumn('prompt_overrides', 'model', 'TEXT');
     await ensureColumn('prompt_overrides', 'thinking', 'INTEGER');
     await ensureColumn('chapters', 'outline', 'TEXT');

@@ -134,6 +134,106 @@ function errorText(err) {
 }
 
 /**
+ * 从历史里剔掉被中断的那一轮。
+ *
+ * 中断时把半截正文留在库里，是为了让作者刷新后还能看到写了一半的内容；
+ * 但这些内容不能回到写作上下文——续写、重写、扩写会把它当成完整前文，
+ * 越写越歪。
+ *
+ * 先按状态剔：中断的那一轮，提问和半截回答都标成 interrupted，一起剔掉。
+ * 只剔助手那条会留下一条没人回答的提问，模型会以为上一轮没发生过，
+ * 顺着原问题再答一遍。
+ *
+ * 再剔「问了没人答」的孤立提问：作者对着半截稿点重新生成、结果那次也断了，
+ * 两版回答都是半截，剔完之后那条提问就没人答了。留着它同样会让模型
+ * 顺着旧问题再答一遍。
+ *
+ * @param {Array<{role: string, content: string, status?: string}>} rows
+ */
+function dropInterruptedTurns(rows) {
+  const kept = rows.filter((row) => row.status !== 'interrupted');
+
+  // 找出哪些提问后面还有回答
+  const answered = new Set();
+  let pending = null;
+  for (const row of kept) {
+    if (row.role === 'user') {
+      pending = row;
+      continue;
+    }
+    if (pending) {
+      answered.add(pending);
+      pending = null;
+    }
+  }
+
+  return kept.filter((row) => row.role !== 'user' || answered.has(row));
+}
+
+/**
+ * 从模型原文里取出「正文」。
+ *
+ * 正常完成时，正文来自 payload.content（解析后的 content 字段）。
+ * 中断时 JSON 没写完，parseModelJson 解析不出来，
+ * 而模型原文外面还包着协议外壳（{"action":...,"content":"..."}）。
+ * 直接存原文，作者刷新后看到的是半截 JSON，不是半截正文。
+ *
+ * 所以这里做两级兜底：
+ *   ① 整段能解析 → 取 content；
+ *   ② 解析不了 → 在半截 JSON 里把 content 字段的字符串值抠出来
+ *      （容忍尾部没闭合、转义没写完）；
+ *   ③ 压根不是 JSON（模型直接吐纯文本）→ 原文就是正文。
+ *
+ * @param {string} raw 模型原文
+ * @returns {string}
+ */
+function extractPartialContent(raw) {
+  const text = String(raw || '');
+  if (!text.trim()) return '';
+
+  const parsed = parseModelJson(text);
+  if (parsed && typeof parsed.content === 'string' && parsed.content.trim()) {
+    return parsed.content.trim();
+  }
+
+  // 半截 JSON：在 content 键之后抠出字符串字面量
+  const keyMatch = /"content"\s*:\s*"/.exec(text);
+  if (keyMatch) {
+    const start = keyMatch.index + keyMatch[0].length;
+    let out = '';
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+
+      if (ch === '\\') {
+        const next = text[i + 1];
+        // 尾部被截断的转义：没有下一个字符可转义，这一段作废
+        if (next === undefined) break;
+        if (next === 'n') out += '\n';
+        else if (next === 't') out += '\t';
+        else if (next === 'r') out += '\r';
+        else if (next === 'u') {
+          const hex = text.slice(i + 2, i + 6);
+          // 半个 \u 转义（后面被截断）：当成没写完，丢掉
+          if (!/^[0-9a-fA-F]{4}$/.test(hex)) break;
+          out += String.fromCharCode(parseInt(hex, 16));
+          i += 4;
+        } else out += next;
+        i += 1;
+        continue;
+      }
+
+      // 字符串正常结束
+      if (ch === '"') break;
+      out += ch;
+    }
+    if (out.trim()) return out.trim();
+  }
+
+  // 不是 JSON 形态：原文就是正文
+  return text.trim();
+}
+
+/**
  * 归一化结构化输出，确保字段齐全且类型正确。
  */
 function normalizeAction(payload) {
@@ -656,6 +756,13 @@ router.post('/chat', async (req, res) => {
 
   let conversation = null;
 
+  // 已经流式推给前端的正文。
+  //
+  // 声明在 try 外面：客户端断开时 catch 要把它落成一条「中断」消息。
+  // 分段起稿不往外推 token，这里始终是空串——那种情况作者一个字都没看到，
+  // 没有东西可保留。
+  let fullText = '';
+
   // 本次调用的追踪 id：日志和 done 事件都用它，排查时能把两边对上
   const traceId = crypto.randomUUID();
 
@@ -665,8 +772,8 @@ router.post('/chat', async (req, res) => {
   const restoreRemoved = async () => {
     for (const row of removedRows) {
       await run(
-        `INSERT INTO messages (id, conversation_id, role, content, role_key, action, payload, citations, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, conversation_id, role, content, role_key, action, payload, citations, created_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           row.id,
           row.conversation_id,
@@ -677,9 +784,75 @@ router.post('/chat', async (req, res) => {
           row.payload,
           row.citations,
           row.created_at,
+          // 放回去的可能是被中断的半截回答，状态要原样保留，
+          // 不能因为走了一次恢复就把它当成正常完成。
+          row.status || 'complete',
         ]
       ).catch(() => {});
     }
+  };
+
+  /**
+   * 客户端断开时收尾：把已经流出去的半截正文落成一条「中断」消息。
+   *
+   * 只保存真正推给作者看过的部分（fullText）。没推过 token 的轮次
+   * （分段起稿、技能前置轮）这里是空串，返回 null——那种情况作者一个字
+   * 都没看到，没有正文可留，但提问仍然保留（见下面 markUserInterrupted）。
+   *
+   * 这条消息不进记忆库，也不参与后续写作上下文与字数/段落校验：
+   * 它只是给作者看的一份「断在哪儿」的凭据，不是完整回答。
+   *
+   * @returns {Promise<{messageId: string, chars: number}|null>}
+   */
+  const persistInterrupted = async () => {
+    const partial = extractPartialContent(fullText);
+    if (!partial || !conversation) return null;
+
+    const messageId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const payload = {
+      action: 'none',
+      content: partial,
+      reason: '这次输出被中断了，下面是断开前已经写出的部分。',
+      interrupted: true,
+    };
+
+    await run(
+      `INSERT INTO messages
+         (id, conversation_id, role, content, role_key, action, payload, citations, created_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'interrupted')`,
+      [
+        messageId,
+        conversation.id,
+        'assistant',
+        partial,
+        roleKey,
+        'none',
+        JSON.stringify(payload),
+        '[]',
+        now,
+      ]
+    );
+    await run('UPDATE conversations SET updated_at = ? WHERE id = ?', [now, conversation.id]);
+
+    return { messageId, chars: partial.length };
+  };
+
+  /**
+   * 把本轮的用户消息标成「中断」。
+   *
+   * 为什么要标：这条提问在库里要留着（作者刷新后还能看到自己问过什么），
+   * 但不能进下一轮的写作上下文——一条没人回答的提问会让模型以为上一轮
+   * 没发生过，顺着旧问题再答一遍。标了状态，剔的时候按状态一把清掉，
+   * 不用靠「谁紧挨着谁」去猜。
+   *
+   * 重新生成时复用的那条提问不动：它属于上一轮，上一轮的回答还在。
+   */
+  const markUserInterrupted = async () => {
+    if (!insertedUserMessageId) return;
+    await run("UPDATE messages SET status = 'interrupted' WHERE id = ?", [
+      insertedUserMessageId,
+    ]).catch(() => {});
   };
 
   try {
@@ -775,19 +948,22 @@ router.post('/chat', async (req, res) => {
     // 出现在最后，所以先从历史里剔掉。
     const history = reusedUserMessage
       ? await all(
-          `SELECT role, content FROM messages
+          `SELECT role, content, status FROM messages
            WHERE conversation_id = ? AND id != ?
            ORDER BY created_at, rowid`,
           [conversation.id, reusedUserMessage.id]
         )
       : await all(
-          'SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid',
+          'SELECT role, content, status FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid',
           [conversation.id]
         );
 
     // 历史可能很长。超出预算时只保留最近一段，并从 user 消息开始——
     // 从 assistant 开头截断，模型会看到"没有提问的回答"，顺着它继续写。
-    const historyTrim = trimHistory(history);
+    //
+    // 被中断的那一轮整轮剔掉：半截正文进了上下文，续写/重写/扩写
+    // 会把它当完整前文接着写；只剔助手那条则会留下一条没人回答的提问。
+    const historyTrim = trimHistory(dropInterruptedTurns(history));
 
     // 保存用户消息
     // id 记下来：这次调用失败时要把它删掉，否则历史里会留下一条
@@ -797,7 +973,7 @@ router.post('/chat', async (req, res) => {
     if (!reusedUserMessage) {
       insertedUserMessageId = crypto.randomUUID();
       await run(
-        'INSERT INTO messages (id, conversation_id, role, content, role_key, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        "INSERT INTO messages (id, conversation_id, role, content, role_key, created_at, status) VALUES (?, ?, ?, ?, ?, ?, 'complete')",
         [insertedUserMessageId, conversation.id, 'user', String(message), roleKey, now]
       );
 
@@ -873,8 +1049,7 @@ router.post('/chat', async (req, res) => {
 
     const startedAt = Date.now();
 
-    // 流式输出
-    let fullText = '';
+    // 流式输出（fullText 在 try 外声明，见上）
 
     // 进入循环之前先告诉作者"正在判断"。
     // 第一轮模型调用的 token 全被缓冲不下发（见 loop.js），
@@ -2764,8 +2939,8 @@ router.post('/chat', async (req, res) => {
     // 保存助手消息
     const messageId = crypto.randomUUID();
     await run(
-      `INSERT INTO messages (id, conversation_id, role, content, role_key, action, payload, citations, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, conversation_id, role, content, role_key, action, payload, citations, created_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'complete')`,
       [
         messageId,
         conversation.id,
@@ -2879,18 +3054,51 @@ router.post('/chat', async (req, res) => {
       errorMessage = '这次请求被中止了，没有拿到完整结果。';
     }
 
-    // 中止/断开是正常情况：作者关掉了页面，或这一轮被取消，不是平台故障。
-    // 留一条带 traceId 的记录备查，但不打 error、不抛、不让它继续往上冒。
-    if (aborted || clientGone) {
-      console.info('[ai] 请求已中止（客户端断开或取消）', {
+    // 客户端断开（关页面、点取消、连接被重置）不是失败：
+    // 作者已经看到了一部分输出，把它留下来，刷新后还能接着看。
+    //
+    // 判断依据只有 clientGone：它由 res 的 close 事件置位。整轮超时、
+    // 单次写超时抛的也是 AbortError，但那时客户端还连着，是真失败，
+    // 走下面的错误分支。
+    if (clientGone) {
+      let kept = null;
+      try {
+        kept = await persistInterrupted();
+      } catch (persistErr) {
+        // 半截正文写不进库 = 真失败（写库失败）：按失败回滚，不留半截。
+        if (insertedUserMessageId) {
+          await run('DELETE FROM messages WHERE id = ?', [insertedUserMessageId]).catch(() => {});
+        }
+        await restoreRemoved();
+        console.error('[ai] 中断消息落库失败，已回滚本轮：', errorText(persistErr));
+        res.end();
+        return;
+      }
+
+      // 提问留着，但标成 interrupted：作者刷新后还能看到自己问过什么，
+      // 下一轮装配上下文时这一整轮又被剔掉，不会变成"作者问了没人答"。
+      await markUserInterrupted();
+
+      // 重新生成时上一版回答被摘掉了：半截稿不能替代它，原样放回去。
+      await restoreRemoved();
+
+      console.info('[ai] 请求已中止（客户端断开）', {
         traceId,
         conversationId: conversation ? conversation.id : '',
         errorCode,
-        clientGone,
+        // 有没有留下可看的半截正文：零输出时只有提问被保留。
+        keptChars: kept ? kept.chars : 0,
       });
-    } else {
-      console.error('AI chat 失败：', errorMessage);
+
+      // 作者已经断开：没有接收方了，写事件既发不出去也没有意义。
+      res.end();
+      return;
     }
+
+    // 走到这里的都是真失败：模型报错、上游返回非法、整轮/单次超时、写库失败。
+    // 判断依据是「客户端还在，但这一轮拿不到可用结果」，而不是「没有正常结束」——
+    // 正常中止在上面的分支已经返回了。
+    console.error('AI chat 失败：', errorMessage);
 
     // 失败的这轮同样不能留下孤立消息。
     // 注意只删用户消息：助手消息此时还没写库，删了也不会丢东西。
@@ -2902,13 +3110,6 @@ router.post('/chat', async (req, res) => {
 
     // 重生成失败：把上一版问答放回去
     await restoreRemoved();
-
-    // 作者已经断开：没有接收方了，写事件既发不出去也没有意义。
-    // 这时候也别打"失败"日志——取消不是故障。
-    if (clientGone) {
-      res.end();
-      return;
-    }
 
     send({ type: 'error', code: errorCode, message: errorMessage });
     // 补一个 done：前端靠它同步 conversationId，
@@ -2951,6 +3152,20 @@ router.post('/messages/:messageId/remember', async (req, res) => {
     const row = await memorySources.findMessage(messageId, req.userId);
     if (!row) {
       return res.status(404).json({ error: '消息不存在' });
+    }
+
+    // 中断的半截正文不记入长期记忆。
+    //
+    // 手动层是最高权重的一层，作者点了就得留下——但前提是这条内容成立。
+    // 半截正文只是模型写到一半的稿子（可能停在半个词、半个段落），
+    // 把它当"作者确认要记住的事实"存进去，之后每次召回都会把它当真，
+    // 写作就会顺着半句话往下编。
+    //
+    // 作者想留这段内容，正确做法是等它写完再记，或者自己抄进灵感速记。
+    if (row.status === 'interrupted') {
+      return res.status(409).json({
+        error: '这次输出被中断了，内容只有半截，不能记入记忆。等它写完再记。',
+      });
     }
 
     const result = await memoryConv.rememberManual({
@@ -3051,7 +3266,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
     }
 
     const rows = await all(
-      `SELECT id, role, content, role_key, action, payload, citations, created_at
+      `SELECT id, role, content, role_key, action, payload, citations, created_at, status
          FROM messages
         WHERE conversation_id = ?
         ORDER BY created_at, rowid`,
@@ -3084,7 +3299,13 @@ router.get('/conversations/:id/messages', async (req, res) => {
       }
 
       if (row.role === 'user') {
-        return { id: row.id, role: 'user', content: row.content, roleKey: row.role_key };
+        return {
+          id: row.id,
+          role: 'user',
+          content: row.content,
+          roleKey: row.role_key,
+          status: row.status || 'complete',
+        };
       }
 
       return {
@@ -3092,6 +3313,9 @@ router.get('/conversations/:id/messages', async (req, res) => {
         role: 'assistant',
         content: row.content,
         roleKey: row.role_key,
+        // complete：正常完成；interrupted：客户端断开时保留的半截正文。
+        // 前端据此给气泡加「已中断」标记，不要把半截稿当完整回答。
+        status: row.status || 'complete',
         roleLabel: role ? `${role.icon} ${role.name}` : '',
         action: (payload && payload.action) || row.action || '',
         target: (payload && payload.target) || '',

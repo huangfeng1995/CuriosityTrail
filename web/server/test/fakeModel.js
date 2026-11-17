@@ -89,12 +89,28 @@ function startFakeModel(options = {}) {
         // 先吐一段流再挂起：模拟「已经 200、正在往里写」时客户端断开。
         // 这条路径抛的是原生 DOMException（message 只有 getter），
         // 不是 provider 包装过的普通 Error——崩溃就发生在这里。
+        //
+        // 内容要写成半截 JSON：模型走的是 JSON 模式，循环层要看到
+        // "action" 字段才放行缓冲给客户端。给纯文本的话缓冲一直压着，
+        // 客户端一个字都收不到，就不是"写了一半"的状态了。
         if (b.holdStream) {
           res.write(
             `data: ${JSON.stringify({
-              choices: [{ delta: { content: '这段输出到一半就断了' }, finish_reason: null }],
+              choices: [
+                {
+                  delta: {
+                    content: '{"action":"comment","content":"这段输出到一半就断了',
+                  },
+                  finish_reason: null,
+                },
+              ],
             })}\n\n`
           );
+          return;
+        }
+
+        // 200 已回，但一个 token 都不吐就挂住：模拟「一个字都还没出就断开」。
+        if (b.hangStream) {
           return;
         }
 
