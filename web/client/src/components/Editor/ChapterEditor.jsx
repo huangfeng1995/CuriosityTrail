@@ -28,6 +28,16 @@ import {
   emitCardHighlight,
 } from '../Sidebar/useCardOccurrences';
 
+// 这些动作的产出是正文，必须直接落笔；找茬不在其中。
+const EDIT_ACTIONS = new Set([
+  'rewrite',
+  'expand',
+  'shorten',
+  'tone',
+  'continue',
+  'colloquialize',
+]);
+
 // 保存状态对应的提示文案。状态来自 store，与真实落库进度一致。
 const SAVE_LABEL = {
   idle: '已保存',
@@ -61,7 +71,6 @@ export default function ChapterEditor() {
     insertBlock,
     removeBlock,
     convertBlock,
-    markBlock,
     moveBlock,
     undo,
     redo,
@@ -97,10 +106,6 @@ export default function ChapterEditor() {
   const blankChapterRef = useRef('');
   // 段落刚插进 store 时 DOM 还没挂上，等下一次 blocks 更新再聚焦。
   const pendingFocusRef = useRef('');
-  // 选区所在块的类型：工具条据此决定「标记」能不能用、当前类型那一项是否置灰。
-  const selectedBlockType = selection
-    ? blocks.find((b) => b.id === selection.blockId)?.type
-    : '';
   // 动作条显示的字数：只报选中的字数。没选中时动作条置灰，不显示数字。
   const selectedChars = countChars(selection?.text || '');
   // 放不下三栏时（工作区改成抽屉布局）没有侧栏可藏，专注模式不成立。
@@ -297,21 +302,6 @@ export default function ChapterEditor() {
   );
 
   /**
-   * 行内标记：把选区标成正文 / 对白 / 独白。
-   *
-   * 拆块逻辑在 store 里，这里只负责把选区坐标递过去再收起工具条——
-   * 标记完选区就失效了，留着工具条会让作者以为还能对旧选区继续操作。
-   */
-  const handleMark = useCallback(
-    (type) => {
-      if (!selection) return;
-      markBlock(selection.blockId, selection.start, selection.end, type);
-      dispatch({ type: 'selection/set', selection: null });
-    },
-    [selection, markBlock, dispatch]
-  );
-
-  /**
    * 选区上报。除了「选中了哪一段」，还要处理「选区没了」：
    * 光标落回原处、焦点移走时都把状态收回，章节头那条动作栏才不会
    * 挂着上一段的字数继续可用。
@@ -343,14 +333,14 @@ export default function ChapterEditor() {
       const target = blocks.find((b) => b.id === target0.blockId);
       if (!target) return;
 
-      try {
+      const post = async (extra) => {
         const res = await fetch('/api/ai/inline', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
             action,
-            instruction,
+            instruction: [instruction, extra].filter(Boolean).join('；'),
             selection: target0.text,
             blockId: target0.blockId,
             blocks,
@@ -359,9 +349,24 @@ export default function ChapterEditor() {
             roleKey: action === 'critique' ? 'critic' : 'editor',
           }),
         });
-
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || '请求失败');
+        return data;
+      };
+
+      try {
+        let data = await post('');
+
+        // 模型偶尔不写正文，只回一段说明（action=comment）。
+        // 改写类动作要的是直接落笔：自动再要一次，明确不要建议；
+        // 还是只给说明就按失败处理——原文不动，也不再弹建议框让作者确认。
+        if (
+          EDIT_ACTIONS.has(action) &&
+          data.action !== 'replace' &&
+          data.action !== 'append'
+        ) {
+          data = await post('直接输出改写后的正文，不要给建议、解释或说明。');
+        }
 
         if (data.action === 'replace' && data.content) {
           const next =
@@ -373,26 +378,36 @@ export default function ChapterEditor() {
           // 缩写是作者明确要求变短，其余动作都要过长度闸。
           const guard = assessRewrite(target.content, next, { action });
           if (!guard.ok) {
+            // 被拦下时原文没动，选区也留着，作者可以直接再点一次或缩小选区。
             message.warning(guard.reason);
-            dispatch({ type: 'selection/set', selection: null });
             return;
           }
 
           updateBlock(target.id, { content: next });
-          // 记住写回后的区间：「再来一次」只在这段文字仍然原样时出现。
+          // 记住写回后的区间、改写前的原句与模式：
+          // 「再来一次」只在这段文字仍然原样时出现，「撤回」按原区间精确还原，
+          // 不碰作者在别处顺手改的字。
           setLastInline({
+            mode: 'replace',
             action,
             instruction,
             blockId: target.id,
             start: target0.start,
             end: target0.start + data.content.length,
             text: data.content,
+            beforeText: target0.text,
           });
-        } else if (data.action === 'append' && data.content) {
+        } else if (
+          data.action === 'append' &&
+          data.content &&
+          // 模型没按格式返回时服务端也会塞成 append，那种文本只有续写才敢直接落笔。
+          (action === 'continue' || !data.parseFailed)
+        ) {
           updateBlock(target.id, {
             content: target.content + data.content,
           });
           setLastInline({
+            mode: 'append',
             action,
             instruction,
             blockId: target.id,
@@ -400,8 +415,8 @@ export default function ChapterEditor() {
             end: target.content.length + data.content.length,
             text: data.content,
           });
-        } else {
-          // 建议类输出：只展示，不动稿
+        } else if (action === 'critique') {
+          // 找茬本来就只要建议，不动稿。
           setLastInline(null);
           Modal.info({
             title: data.reason || 'AI 的建议',
@@ -412,6 +427,12 @@ export default function ChapterEditor() {
             ),
             okText: '知道了',
           });
+          dispatch({ type: 'selection/set', selection: null });
+          return;
+        } else {
+          // 没拿到正文：原文保留，选区留着，作者可以直接再点一次。
+          message.warning('这次没有改出来，原文已保留');
+          return;
         }
 
         dispatch({ type: 'selection/set', selection: null });
@@ -433,6 +454,25 @@ export default function ChapterEditor() {
 
   const retryLabel =
     INLINE_ACTIONS.find((a) => a.key === retryable?.action)?.label || '改写';
+
+  // 撤回这一步改写：按写回时记下的区间精确还原，不依赖编辑器 undo 栈
+  // （跨块写回后那个栈对不上位置）。改法：
+  //   replace —— 把区间换回原句；append —— 把追加的那段切掉。
+  // 区间外的字一律不碰。撤过一次，撤回与再来一次一起收起。
+  const undoInline = useCallback(() => {
+    if (!retryable) return;
+    const block = blocks.find((b) => b.id === retryable.blockId);
+    if (!block) return;
+    const { content } = block;
+    const next =
+      retryable.mode === 'append'
+        ? content.slice(0, retryable.start) + content.slice(retryable.end)
+        : content.slice(0, retryable.start) +
+          retryable.beforeText +
+          content.slice(retryable.end);
+    updateBlock(block.id, { content: next });
+    setLastInline(null);
+  }, [retryable, blocks, updateBlock]);
 
   const retryInline = useCallback(async () => {
     if (!retryable || retrying) return;
@@ -658,9 +698,7 @@ export default function ChapterEditor() {
           {selectedChars > 0 ? (
             <BlockToolbar
               selectedChars={selectedChars}
-              blockType={selectedBlockType}
               onRun={runInline}
-              onMark={handleMark}
               onClose={() => dispatch({ type: 'selection/set', selection: null })}
             />
           ) : retryable ? (
@@ -670,6 +708,14 @@ export default function ChapterEditor() {
               className="ct-inline-toolbar is-active"
               onMouseDown={(e) => e.preventDefault()}
             >
+              <button
+                type="button"
+                className="ct-inline-btn"
+                onClick={undoInline}
+                title="还原改写前的原文"
+              >
+                撤回
+              </button>
               <button
                 type="button"
                 className={`ct-inline-btn${retrying ? ' is-busy' : ''}`}
