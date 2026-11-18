@@ -7,7 +7,6 @@ import {
   HistoryOutlined,
   DownloadOutlined,
   MoreOutlined,
-  CloseOutlined,
 } from '@ant-design/icons';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
@@ -37,6 +36,71 @@ const EDIT_ACTIONS = new Set([
   'continue',
   'colloquialize',
 ]);
+
+// 对照里的差异一次最多算多少格。超了就只并排显示原文与新版，不做逐字标色：
+// 两千字的长段再逐字对齐会明显卡顿，而这么大的改动本来也看不清细差。
+const DIFF_CELL_LIMIT = 240000;
+
+/** 逐字对照：返回原文/新版各自的片段，供上下两行分别标删改与新增。 */
+function diffInline(before, after) {
+  if (before === after) return null;
+  const n = before.length;
+  const m = after.length;
+  if (n * m > DIFF_CELL_LIMIT) return null;
+
+  const width = m + 1;
+  const dp = new Uint16Array((n + 1) * width);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i * width + j] =
+        before[i] === after[j]
+          ? dp[(i + 1) * width + j + 1] + 1
+          : Math.max(dp[(i + 1) * width + j], dp[i * width + j + 1]);
+    }
+  }
+
+  const beforeSegs = [];
+  const afterSegs = [];
+  const push = (arr, type, ch) => {
+    const last = arr[arr.length - 1];
+    if (last && last.type === type) last.text += ch;
+    else arr.push({ type, text: ch });
+  };
+
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (before[i] === after[j]) {
+      push(beforeSegs, 'same', before[i]);
+      push(afterSegs, 'same', after[j]);
+      i += 1;
+      j += 1;
+    } else if (dp[(i + 1) * width + j] >= dp[i * width + j + 1]) {
+      push(beforeSegs, 'del', before[i]);
+      i += 1;
+    } else {
+      push(afterSegs, 'add', after[j]);
+      j += 1;
+    }
+  }
+  while (i < n) {
+    push(beforeSegs, 'del', before[i]);
+    i += 1;
+  }
+  while (j < m) {
+    push(afterSegs, 'add', after[j]);
+    j += 1;
+  }
+  return { beforeSegs, afterSegs };
+}
+
+/** 把对照片段渲染出来：变化的那一侧用删/增标记，未变的保持普通文字。 */
+function renderDiff(segs, changed) {
+  return segs.map((seg, i) => {
+    if (seg.type !== changed) return <React.Fragment key={i}>{seg.text}</React.Fragment>;
+    return changed === 'del' ? <del key={i}>{seg.text}</del> : <ins key={i}>{seg.text}</ins>;
+  });
+}
 
 // 保存状态对应的提示文案。状态来自 store，与真实落库进度一致。
 const SAVE_LABEL = {
@@ -92,6 +156,8 @@ export default function ChapterEditor() {
   // 改完正文后选区已失效，若还拿旧偏移量重跑就会改错地方。
   const [lastInline, setLastInline] = useState(null);
   const [retrying, setRetrying] = useState(false);
+  // 对照默认折起，作者要看全文再展开；换一次改写就回到折起状态。
+  const [compareOpen, setCompareOpen] = useState(false);
   const [creatingChapter, setCreatingChapter] = useState(false);
   // 同一块意见被反复点击时，key 不变但作者仍然期望「再滚一次」。
   // 用递增序号触发块内的定位副作用，不把滚动逻辑塞进事件回调里。
@@ -455,6 +521,21 @@ export default function ChapterEditor() {
   const retryLabel =
     INLINE_ACTIONS.find((a) => a.key === retryable?.action)?.label || '改写';
 
+  // 对照内容：替换类逐字标出删改与新增；续写只展示新增的那一段。
+  const inlineDiff = useMemo(() => {
+    if (!retryable || retryable.mode === 'append') return null;
+    return diffInline(retryable.beforeText || '', retryable.text || '');
+  }, [retryable]);
+
+  // 一行放不下才给「展开」，短句不额外挂一个没用的按钮。
+  const compareLong =
+    !!retryable &&
+    Math.max((retryable.beforeText || '').length, (retryable.text || '').length) > 44;
+
+  useEffect(() => {
+    setCompareOpen(false);
+  }, [lastInline]);
+
   // 撤回这一步改写：按写回时记下的区间精确还原，不依赖编辑器 undo 栈
   // （跨块写回后那个栈对不上位置）。改法：
   //   replace —— 把区间换回原句；append —— 把追加的那段切掉。
@@ -702,43 +783,72 @@ export default function ChapterEditor() {
               onClose={() => dispatch({ type: 'selection/set', selection: null })}
             />
           ) : retryable ? (
-            /* 结果不满意：不用回正文重新选，原地再来一次。
-               入口只认写回后那段文字，正文一改它就自己消失。 */
-            <div
-              className="ct-inline-toolbar is-active"
-              onMouseDown={(e) => e.preventDefault()}
-            >
-              <button
-                type="button"
-                className="ct-inline-btn"
-                onClick={undoInline}
-                title="还原改写前的原文"
-              >
-                撤回
-              </button>
-              <button
-                type="button"
-                className={`ct-inline-btn${retrying ? ' is-busy' : ''}`}
-                onClick={retryInline}
-                disabled={retrying}
-                title={`再用「${retryLabel}」改一次`}
-              >
-                <span className="ct-inline-label">再来一次</span>
-                {retrying && (
-                  <span className="ct-inline-loading" aria-hidden="true">
-                    <Spin size="small" />
-                  </span>
+            /* 改写对照：新版已经落进正文，这里并排留一份原文供比对。
+               默认原文/新版各折一行（共两行），长文可展开；
+               入口只认写回后那段文字，正文一改或换章就自己消失。 */
+            <div className="ct-compare" role="group" aria-label="改写对照">
+              <div className="ct-compare-body">
+                {retryable.mode !== 'append' && (
+                  <div className="ct-compare-row">
+                    <span className="ct-compare-tag">原文</span>
+                    <span className={`ct-compare-text${compareOpen ? ' is-open' : ''}`}>
+                      {inlineDiff
+                        ? renderDiff(inlineDiff.beforeSegs, 'del')
+                        : retryable.beforeText}
+                    </span>
+                  </div>
                 )}
-              </button>
-              <button
-                type="button"
-                className="ct-inline-btn is-close"
-                onClick={() => setLastInline(null)}
-                title="关闭"
-                aria-label="关闭「再来一次」"
-              >
-                <CloseOutlined style={{ fontSize: 11 }} />
-              </button>
+                <div className="ct-compare-row">
+                  <span className="ct-compare-tag is-new">
+                    {retryable.mode === 'append' ? '新增' : '新版'}
+                  </span>
+                  <span className={`ct-compare-text${compareOpen ? ' is-open' : ''}`}>
+                    {inlineDiff ? renderDiff(inlineDiff.afterSegs, 'add') : retryable.text}
+                  </span>
+                </div>
+              </div>
+
+              <div className="ct-compare-acts">
+                {compareLong && (
+                  <button
+                    type="button"
+                    className="ct-inline-btn is-quiet"
+                    onClick={() => setCompareOpen((v) => !v)}
+                  >
+                    {compareOpen ? '收起' : '展开'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="ct-inline-btn"
+                  onClick={undoInline}
+                  title="还原改写前的原文"
+                >
+                  还原原文
+                </button>
+                <button
+                  type="button"
+                  className={`ct-inline-btn${retrying ? ' is-busy' : ''}`}
+                  onClick={retryInline}
+                  disabled={retrying}
+                  title={`再用「${retryLabel}」改一次`}
+                >
+                  <span className="ct-inline-label">再来一次</span>
+                  {retrying && (
+                    <span className="ct-inline-loading" aria-hidden="true">
+                      <Spin size="small" />
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="ct-inline-btn"
+                  onClick={() => setLastInline(null)}
+                  title="保留新版，收起对照"
+                >
+                  用新版
+                </button>
+              </div>
             </div>
           ) : null}
         </div>

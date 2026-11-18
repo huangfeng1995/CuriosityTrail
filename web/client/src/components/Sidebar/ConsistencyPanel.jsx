@@ -251,8 +251,6 @@ export default function ConsistencyPanel({ workId, chapterId, onOpenChapter }) {
         </Button>
       </div>
 
-      <p className="ct-hint">规则检查不花钱；AI 深度检查读完整本，需要稍等。</p>
-
       {running && (
         <div className="ct-ai-progress">
           <Spin size="small" />

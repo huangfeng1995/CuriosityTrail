@@ -118,12 +118,6 @@ export default function WorkTree({ currentWorkId, currentChapterId }) {
                 menu={{
                   items: [
                     {
-                      key: 'chapter',
-                      icon: <PlusOutlined />,
-                      label: '新建章节',
-                      onClick: () => createChapter(work.id),
-                    },
-                    {
                       key: 'delete',
                       icon: <DeleteOutlined />,
                       label: '删除作品',

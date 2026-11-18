@@ -1637,6 +1637,89 @@ body.ct-resizing * {
      出现/消失时章节头不伸缩，正文第一行不会上下跳。 */
   min-height: 31px;
 }
+
+/* 改写对照：新版已经落进正文，这里留原文做上下比对。
+   默认原文/新版各折一行（共两行），不撑高正文；长文点「展开」看全文。
+   放在章节头动作槽里，不压正文、不跟着块滚走。 */
+.ct-compare {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px 16px;
+  width: 100%;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+}
+.ct-compare-body {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ct-compare-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.ct-compare-tag {
+  flex: none;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-quaternary);
+  line-height: 1.7;
+}
+.ct-compare-tag.is-new {
+  color: var(--gold);
+}
+.ct-compare-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.ct-compare-text.is-open {
+  white-space: pre-wrap;
+  overflow-y: auto;
+  max-height: 168px;
+  word-break: break-word;
+}
+/* 差异只标两处：新版里新增的字用朱砂淡染，原文里被替掉的字压灰划掉。 */
+.ct-compare-text ins {
+  background: var(--cinnabar-dim);
+  color: var(--text-primary);
+  text-decoration: none;
+  border-radius: 2px;
+}
+.ct-compare-text del {
+  background: var(--gold-dim);
+  color: var(--text-quaternary);
+}
+.ct-compare-acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.ct-inline-btn.is-quiet {
+  color: var(--text-quaternary);
+}
+@media (max-width: 768px) {
+  .ct-compare {
+    padding: 6px 6px 6px 8px;
+  }
+  .ct-compare-acts {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
 .ct-wordcount {
   font-size: 12.5px;
   color: var(--text-tertiary);
