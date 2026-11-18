@@ -3003,6 +3003,51 @@ body.ct-resizing * {
   color: var(--gold);
 }
 
+/* 没有正文编号的意见（未定位 / 失效）：不占号，圆位留空只做对齐 */
+.ct-finding-no.is-blank {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+.ct-finding.is-stale .ct-finding-text {
+  color: var(--text-tertiary);
+}
+.ct-finding-tag.is-stale {
+  color: var(--amber);
+}
+.ct-finding-clear {
+  border: none;
+  background: transparent;
+  color: var(--text-quaternary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+.ct-finding-clear:hover {
+  color: var(--accent);
+}
+
+/* 全章 · 未定位：接在编号意见后面，从视觉上另起一组 */
+.ct-finding-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 8px 2px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.ct-finding-group-title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+.ct-finding-group-count {
+  font-size: 11.5px;
+  color: var(--text-quaternary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 多选：每条意见右侧一个勾选框，未定位的全章建议同样可选 */
 .ct-finding-check {
   flex: none;

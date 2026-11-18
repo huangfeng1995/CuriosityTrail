@@ -99,10 +99,42 @@ export default function ActionCard({
   const [selectedKeys, setSelectedKeys] = useState([]);
   const [adopting, setAdopting] = useState(false);
 
+  // 失效意见由作者手动清除，不自动删；清除后记在本地，
+  // 刷新再进来也不会又冒出来。只影响这一份意见的展示。
+  const [clearedKeys, setClearedKeys] = useState(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('ct:cleared-findings') || '[]');
+      return new Set(Array.isArray(raw) ? raw : []);
+    } catch {
+      return new Set();
+    }
+  });
+
+  const clearFinding = (key) => {
+    setClearedKeys((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      try {
+        localStorage.setItem('ct:cleared-findings', JSON.stringify([...next]));
+      } catch {
+        /* 本地存储不可用时只丢「刷新后不再出现」这一点 */
+      }
+      return next;
+    });
+    setSelectedKeys((prev) => prev.filter((k) => k !== key));
+  };
+
   const adopted = useMemo(() => {
     if (adoptedFindingKeys instanceof Set) return adoptedFindingKeys;
     return new Set(Array.isArray(adoptedFindingKeys) ? adoptedFindingKeys : []);
   }, [adoptedFindingKeys]);
+
+  // 已清除的不再参与对账、勾选与采纳。
+  const visibleFindings = findings.filter((finding) => !clearedKeys.has(finding.key));
+  const locatedFindings = visibleFindings.filter((finding) => finding.status === 'located');
+  const otherFindings = visibleFindings.filter((finding) => finding.status !== 'located');
+  const staleCount = otherFindings.filter((finding) => finding.status === 'stale').length;
+  const unlocatedCount = otherFindings.length - staleCount;
 
   const toggle = (key) => {
     setSelectedKeys((prev) =>
@@ -110,7 +142,9 @@ export default function ActionCard({
     );
   };
 
-  const selected = findings.filter((f) => selectedKeys.includes(f.key) && !adopted.has(f.key));
+  const selected = visibleFindings.filter(
+    (f) => selectedKeys.includes(f.key) && !adopted.has(f.key)
+  );
 
   const adoptSelected = async () => {
     if (!selected.length || adopting) return;
@@ -119,6 +153,81 @@ export default function ActionCard({
     setAdopting(false);
     // 只有整批成功才清空选择；失败时保留勾选，作者可以直接重试。
     if (result?.ok) setSelectedKeys([]);
+  };
+
+  const renderFinding = (finding) => {
+    const located = finding.status === 'located';
+    const stale = finding.status === 'stale';
+    const isAdopted = adopted.has(finding.key);
+    const isSelected = selectedKeys.includes(finding.key);
+    const isBlockLevel = located && finding.precision === 'block';
+
+    return (
+      <div
+        key={finding.key}
+        data-finding-key={finding.key}
+        className={`ct-finding${located ? '' : ' is-unlocated'}${stale ? ' is-stale' : ''}${
+          isBlockLevel ? ' is-block-level' : ''
+        }${finding.key === activeFindingKey ? ' is-active' : ''}${
+          isAdopted ? ' is-adopted' : ''
+        }${isSelected ? ' is-selected' : ''}`}
+        onClick={located ? () => onJumpToFinding?.(finding) : undefined}
+        title={
+          located
+            ? isBlockLevel
+              ? '跳到正文对应段落（整段级意见）'
+              : '跳到正文对应原句'
+            : undefined
+        }
+      >
+        {located ? (
+          <span className="ct-finding-no">{finding.marker}</span>
+        ) : (
+          <span className="ct-finding-no is-blank" aria-hidden="true">
+            ·
+          </span>
+        )}
+        <div className="ct-finding-main">
+          <div className="ct-finding-text">{finding.text}</div>
+          {finding.quote && <div className="ct-finding-quote">原文：{finding.quote}</div>}
+          {stale && (
+            <span className="ct-finding-tag is-stale">
+              失效 · {REASON_LABEL[finding.reason] || '原文已改动'}
+            </span>
+          )}
+          {!located && !stale && (
+            <span className="ct-finding-tag">
+              全章建议 · {REASON_LABEL[finding.reason] || '未定位'}
+            </span>
+          )}
+          {isBlockLevel && (
+            <span className="ct-finding-tag is-block-level">
+              整段级意见 · {REASON_LABEL[finding.reason] || '原文未命中'}
+            </span>
+          )}
+        </div>
+        <span className="ct-finding-check" onClick={(e) => e.stopPropagation()}>
+          {stale ? (
+            <button
+              type="button"
+              className="ct-finding-clear"
+              onClick={() => clearFinding(finding.key)}
+              title="从面板清除这条失效意见，正文不受影响"
+            >
+              清除
+            </button>
+          ) : isAdopted ? (
+            <span className="ct-finding-tag">已采纳</span>
+          ) : (
+            <Checkbox
+              checked={isSelected}
+              onChange={() => toggle(finding.key)}
+              aria-label={`选择这条意见：${finding.text.slice(0, 12)}`}
+            />
+          )}
+        </span>
+      </div>
+    );
   };
 
   return (
@@ -193,88 +302,39 @@ export default function ActionCard({
 
       {body && <div className="ct-action-body">{body}</div>}
 
-      {findings.length > 0 && (
+      {visibleFindings.length > 0 && (
         <div className="ct-finding-list">
           {/* 两侧对账：列表有几条、真正进了正文沟槽几处。
-              不相等时把差数写在明面上，作者不用靠数数去猜。 */}
-          {(() => {
-            const locatedCount = findings.filter((f) => f.status === 'located').length;
-            const diff = findings.length - locatedCount;
-            return (
-              <div className={`ct-finding-audit${diff ? ' is-mismatch' : ''}`}>
-                <span>
-                  意见 {findings.length} 条 · 正文沟槽 {locatedCount} 个
-                </span>
-                {diff > 0 ? (
-                  <span className="ct-finding-audit-warn">
-                    正文少 {diff} 条（未定位，只在面板）
-                  </span>
-                ) : diff < 0 ? (
-                  <span className="ct-finding-audit-warn">正文多 {-diff} 条</span>
-                ) : (
-                  <span className="ct-finding-audit-ok">两侧编号一一对应</span>
-                )}
-              </div>
-            );
-          })()}
+              未编号的（失效/未定位）单独报，和正文编号口径一致。 */}
+          <div className={`ct-finding-audit${otherFindings.length ? ' is-mismatch' : ''}`}>
+            <span>
+              意见 {visibleFindings.length} 条 · 正文沟槽 {locatedFindings.length} 个
+            </span>
+            {otherFindings.length > 0 ? (
+              <span className="ct-finding-audit-warn">
+                未编号 {otherFindings.length} 条（
+                {[
+                  staleCount ? `失效 ${staleCount}` : '',
+                  unlocatedCount ? `未定位 ${unlocatedCount}` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+                ），只在面板
+              </span>
+            ) : (
+              <span className="ct-finding-audit-ok">两侧编号一一对应</span>
+            )}
+          </div>
 
-          {findings.map((finding) => {
-            const located = finding.status === 'located';
-            const isAdopted = adopted.has(finding.key);
-            const isSelected = selectedKeys.includes(finding.key);
-            const isBlockLevel = located && finding.precision === 'block';
-            return (
-              <div
-                key={finding.key}
-                data-finding-key={finding.key}
-                className={`ct-finding${located ? '' : ' is-unlocated'}${
-                  isBlockLevel ? ' is-block-level' : ''
-                }${finding.key === activeFindingKey ? ' is-active' : ''}${
-                  isAdopted ? ' is-adopted' : ''
-                }${isSelected ? ' is-selected' : ''}`}
-                onClick={located ? () => onJumpToFinding?.(finding) : undefined}
-                title={
-                  located
-                    ? isBlockLevel
-                      ? '跳到正文对应段落（整段级意见）'
-                      : '跳到正文对应原句'
-                    : undefined
-                }
-              >
-                <span className="ct-finding-no">{finding.marker}</span>
-                <div className="ct-finding-main">
-                  <div className="ct-finding-text">{finding.text}</div>
-                  {finding.quote && (
-                    <div className="ct-finding-quote">原文：{finding.quote}</div>
-                  )}
-                  {!located && (
-                    <span className="ct-finding-tag">
-                      全章建议 · {REASON_LABEL[finding.reason] || '未定位'}
-                    </span>
-                  )}
-                  {isBlockLevel && (
-                    <span className="ct-finding-tag is-block-level">
-                      整段级意见 · {REASON_LABEL[finding.reason] || '原文未命中'}
-                    </span>
-                  )}
-                </div>
-                <span
-                  className="ct-finding-check"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {isAdopted ? (
-                    <span className="ct-finding-tag">已采纳</span>
-                  ) : (
-                    <Checkbox
-                      checked={isSelected}
-                      onChange={() => toggle(finding.key)}
-                      aria-label={`选择第 ${finding.marker} 条意见`}
-                    />
-                  )}
-                </span>
-              </div>
-            );
-          })}
+          {locatedFindings.map((finding) => renderFinding(finding))}
+
+          {otherFindings.length > 0 && (
+            <div className="ct-finding-group">
+              <span className="ct-finding-group-title">全章 · 未定位</span>
+              <span className="ct-finding-group-count">{otherFindings.length} 条</span>
+            </div>
+          )}
+          {otherFindings.map((finding) => renderFinding(finding))}
 
           <div className="ct-finding-batch">
             <Button

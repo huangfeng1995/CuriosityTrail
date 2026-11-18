@@ -145,26 +145,25 @@ test('locateFindings: 即使指定了块 ID，全文多处命中也不强行挂'
 });
 
 // ---------------------------------------------------------------------------
-// ④ 零命中 → 未定位
+// ④ 零命中 → 失效（引文已不在正文里，不再当待办）
 // ---------------------------------------------------------------------------
 
-test('locateFindings: 全文找不到 → 未定位（未找到）', () => {
+test('locateFindings: 全文找不到 → 失效（未找到）', () => {
   const [found] = locateFindings(blocks, [
     { id: 'f1', quote: '完全不相干的一段话在这里', text: '需要补一段过渡。' },
   ]);
-  assert.equal(found.status, 'unlocated');
+  assert.equal(found.status, 'stale');
   assert.equal(found.reason, 'not_found');
 });
 
-test('locateFindings: 指定的块还在但原文已改 → 退化为整段级意见', () => {
+test('locateFindings: 指定的块还在但原文已改 → 失效', () => {
   const edited = [{ id: 'b2', content: '陈默把伞收进包里，雨水顺着包带往下淌。' }];
   const [found] = locateFindings(edited, [
     { id: 'f1', blockId: 'b2', quote: '陈默把伞收了', text: '动作交代太急。' },
   ]);
-  assert.equal(found.status, 'located');
-  assert.equal(found.precision, 'block');
+  assert.equal(found.status, 'stale');
   assert.equal(found.reason, 'changed');
-  assert.equal(found.blockId, 'b2');
+  assert.equal(found.blockId, undefined);
   assert.equal(found.range, undefined);
 });
 
@@ -200,11 +199,11 @@ test('locateFindings: 省略号前缀多处命中 → 未定位', () => {
   assert.equal(found.reason, 'ambiguous');
 });
 
-test('locateFindings: 省略号前缀找不到 → 未找到', () => {
+test('locateFindings: 省略号前缀找不到 → 失效', () => {
   const [found] = locateFindings(blocks, [
     { id: 'f1', quote: '他推门走进雨里，街上一个人也…', text: '缺少收束。' },
   ]);
-  assert.equal(found.status, 'unlocated');
+  assert.equal(found.status, 'stale');
   assert.equal(found.reason, 'not_found');
 });
 
@@ -212,7 +211,7 @@ test('locateFindings: 空 findings / 空 blocks 不报错', () => {
   assert.deepEqual(locateFindings(blocks, []), []);
   assert.deepEqual(locateFindings(blocks, null), []);
   const [found] = locateFindings([], [{ id: 'f1', quote: '雨落下来，他把窗关上', text: '问题。' }]);
-  assert.equal(found.status, 'unlocated');
+  assert.equal(found.status, 'stale');
 });
 
 // ---------------------------------------------------------------------------
@@ -256,7 +255,8 @@ test('collectCriticFindings: 只收 critic 的 comment，按正文出现顺序�
 
   const list = collectCriticFindings(messages, blocks);
   assert.equal(list.length, 3);
-  assert.deepEqual(list.map((f) => f.marker), [1, 2, 3]);
+  // 未定位的不占号：只有两条落到正文的意见拿到 1、2
+  assert.deepEqual(list.map((f) => f.marker), [1, 2, 0]);
   // 按块序：b1（a1 的第一条）→ b2（a2 的第一条）→ 未定位（a1 的第二条）
   assert.equal(list[0].messageId, 'a1');
   assert.equal(list[0].status, 'located');
@@ -265,7 +265,7 @@ test('collectCriticFindings: 只收 critic 的 comment，按正文出现顺序�
   assert.equal(list[1].status, 'located');
   assert.equal(list[1].blockId, 'b2');
   assert.equal(list[2].messageId, 'a1');
-  assert.equal(list[2].status, 'unlocated');
+  assert.equal(list[2].status, 'stale');
 });
 
 test('collectCriticFindings: 同一段多条意见拿到相邻号码，不重号不跳号', () => {
@@ -298,6 +298,31 @@ test('collectCriticFindings: 旧消息没有 findings 时返回空数组', () =>
     { id: 'a1', role: 'assistant', roleKey: 'critic', action: 'comment', content: '纯文本建议' },
   ];
   assert.deepEqual(collectCriticFindings(messages, blocks), []);
+});
+
+test('collectCriticFindings: 失效意见不占正文编号', () => {
+  const messages = [
+    {
+      id: 'a1',
+      role: 'assistant',
+      roleKey: 'critic',
+      action: 'comment',
+      findings: [
+        { id: 'f1', blockId: 'b2', quote: '这句已经被删掉了', text: '旧意见。' },
+        { id: 'f2', blockId: 'b1', quote: '林叙把灯芯挑亮', text: '细节多余。' },
+      ],
+    },
+  ];
+
+  const list = collectCriticFindings(messages, blocks);
+  assert.deepEqual(
+    list.map((f) => f.status),
+    ['located', 'stale']
+  );
+  assert.deepEqual(
+    list.map((f) => f.marker),
+    [1, 0]
+  );
 });
 
 // ---------------------------------------------------------------------------

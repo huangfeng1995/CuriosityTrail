@@ -5,8 +5,9 @@
  * ① blockId 命中且该块确实包含 quote → 用这个块，并算出段内字符区间；
  * ② 否则按 quote 归一化后在全文找，唯一命中才用，同样算字符区间；
  * ③ 命中多个块 → 视为未定位（宁可标成全章建议，不许乱挂）；
- * ④ 零命中但模型指过具体块 → 退化为整段级意见（块内整段高亮）；
- *    连块都没指过 → 未定位。
+ * ④ 零命中（块内原文被改、或全章都找不到）→ 标成失效：
+ *    旧的引文已经不在正文里，继续当待办会让作者反复找不存在的原句；
+ *    引文过短（invalid）但模型指过具体块 → 退化为整段级意见。
  *
  * 归一化：去掉全部空白、全角标点转半角、省略号统一为「…」。
  * 以省略号结尾的截断片段按「…」之前的唯一前缀匹配。
@@ -178,9 +179,10 @@ function hitsOf(blocks, needle) {
  *
  * 定位精度分三级：
  *   quote —— 块内找到原文，range 给出段内字符区间，正文只标这一句；
- *   block —— 模型指过具体块，但原文对不上（被改过/片段过短），
- *            退化为整段标黄，前端明确标「整段级意见」；
- *   unlocated —— 连块都指不出来，只能作为全章建议留在面板。
+ *   block —— 模型指过具体块，但引文片段过短（invalid），只能整段标黄；
+ *   stale —— 引文在正文里已经找不到了（原文被改/被删），标成失效：
+ *            不再进正文编号，也不继续当待办催作者处理；
+ *   unlocated —— 多处命中，或连块都指不出来，只能作为全章建议留在面板。
  */
 export function locateFindings(blocks, findings) {
   const list = Array.isArray(blocks) ? blocks : [];
@@ -197,6 +199,11 @@ export function locateFindings(blocks, findings) {
     const claimedId = String(item.blockId || '').trim();
     const claimedIndex = claimedId ? list.findIndex((b) => b && b.id === claimedId) : -1;
     const degradeToBlock = (reason) => {
+      // 原文改了 / 全章都找不到引文：这条意见锚点已经失效。
+      // 标成 stale 而不是继续当待办——作者改过稿后再看到「原文：……」会以为还没处理。
+      if (reason === 'changed' || reason === 'not_found') {
+        return { ...base, status: 'stale', reason };
+      }
       if (!text || claimedIndex < 0) {
         return { ...base, status: 'unlocated', reason };
       }
@@ -259,11 +266,11 @@ export function locateFindings(blocks, findings) {
  *
  * 只收 roleKey='critic' 且 action='comment' 的消息；其他角色照旧走纯文本。
  *
- * 编号规则（2026-11-12 按作者反馈调整）：
+ * 编号规则（2026-11-18 按线上数据修正）：
  *   - 先按块在正文里的先后排序，同块内再按原文起始字符排序；
  *     同一段上的多条意见因此拿到相邻号码，沟槽可以并列显示成「1·2」。
- *   - 定位不到的条目排在有位条目之后，但仍占一个号——
- *     列表是 1..N 的完整序列，不跳号、不重号。
+ *   - 只有真正落到正文的意见才占号；未定位与失效（引文已被删改）
+ *     不占号，单独归入「全章 · 未定位」，号码序列不跳号、不掺水。
  *   - 侧栏列表与正文沟槽读的是同一份 marker，不再各编各的。
  */
 export function collectCriticFindings(messages, blocks) {
@@ -295,11 +302,12 @@ export function collectCriticFindings(messages, blocks) {
         a.msgOrder - b.msgOrder ||
         a.findingOrder - b.findingOrder
     );
-  const unlocated = raw.filter((finding) => finding.status !== 'located');
+  const unnumbered = raw.filter((finding) => finding.status !== 'located');
 
-  return [...located, ...unlocated].map((finding, i) => ({
+  return [...located, ...unnumbered].map((finding, i) => ({
     ...finding,
-    marker: i + 1,
+    // 0 表示「没有正文编号」：面板把它归到全章组，沟槽也不会画它。
+    marker: i < located.length ? i + 1 : 0,
   }));
 }
 

@@ -200,8 +200,12 @@ export default function ChapterEditor() {
 
   // 当前正在核对的那条意见。章节头的定位条靠它常驻显示，
   // 这样正文滚走以后，作者仍然知道刚才看的是哪一句。
+  // 只认定位成功的：改稿后这条可能已失效（marker=0），不能再当作「正在核对第几条」。
   const activeFinding = useMemo(
-    () => criticFindings.find((finding) => finding.key === activeFindingKey) || null,
+    () =>
+      criticFindings.find(
+        (finding) => finding.key === activeFindingKey && finding.status === 'located'
+      ) || null,
     [criticFindings, activeFindingKey]
   );
 
