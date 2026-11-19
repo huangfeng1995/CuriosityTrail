@@ -1594,6 +1594,27 @@ body.ct-resizing * {
   flex-direction: column;
 }
 
+/* 窄屏左抽屉：章节树 + 面板是同一条纵向流。
+   内容比视口高时必须能滚，否则下半截（面板导航、待确认区）被裁掉，
+   作者根本看不到，更点不到。
+   面板体不能继续 flex:1——章节树一多，它会被压成 0 高，
+   那样即使抽屉能滚，面板内部也没有可视区域。 */
+.ct-drawer-left .ct-drawer-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.ct-drawer-left .ct-tree {
+  flex: 0 0 auto;
+}
+
+.ct-drawer-left .ct-panel-body {
+  flex: 0 0 auto;
+  min-height: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
 /* ============================================================
    章节编辑器：稿纸
    ============================================================ */

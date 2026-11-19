@@ -58,6 +58,9 @@ export default function PlotCardPanel({ workId, chapters = [], proposals = [] })
 
   useEffect(() => {
     load();
+    const onCards = () => load();
+    window.addEventListener('ct:cards-changed', onCards);
+    return () => window.removeEventListener('ct:cards-changed', onCards);
   }, [load]);
 
   const openEditor = (card) => {

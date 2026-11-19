@@ -34,6 +34,13 @@ export default function PendingProposals({
     window.dispatchEvent(new CustomEvent('ct:proposals-changed'));
   };
 
+  // 卡片列表与提案是两份数据：确认后服务端已经建了卡，
+  // 但人物/设定/情节面板自己的列表不会因此重拉。
+  // 单独广播一次，只让「卡片列表」刷新，扫描/丢弃不用重拉。
+  const notifyCards = () => {
+    window.dispatchEvent(new CustomEvent('ct:cards-changed'));
+  };
+
   // 提案换了（新扫描 / 切作品）就丢掉旧的编辑中标题，避免张冠李戴
   const idsKey = useMemo(() => (proposals || []).map((p) => p.id).join(','), [proposals]);
   useEffect(() => {
@@ -54,6 +61,7 @@ export default function PendingProposals({
 
         await api.post('/card-proposals/confirm', { ids: capped, edits });
         toast.success('已加入卡片');
+        notifyCards();
         notify();
       } catch (e) {
         toast.warning(e.response?.data?.error || e.message || '确认失败，请重试');

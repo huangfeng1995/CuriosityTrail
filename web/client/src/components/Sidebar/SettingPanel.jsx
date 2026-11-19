@@ -57,6 +57,9 @@ export default function SettingPanel({ workId, proposals = [] }) {
 
   useEffect(() => {
     load();
+    const onCards = () => load();
+    window.addEventListener('ct:cards-changed', onCards);
+    return () => window.removeEventListener('ct:cards-changed', onCards);
   }, [workId]);
 
   const openEditor = (setting) => {

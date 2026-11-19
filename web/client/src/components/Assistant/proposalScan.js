@@ -259,7 +259,10 @@ export async function dismissProposalsFrom(originRef) {
 
   try {
     const res = await api.post('/card-proposals/dismiss-source', { originRef });
-    return res.data || { dismissed: 0, confirmed: 0 };
+    const data = res.data || { dismissed: 0, confirmed: 0 };
+    // 作废是服务端完成的；不广播的话左栏角标和面板会一直挂着已经不存在的提案
+    if (data.dismissed) notifyChanged(data.dismissed);
+    return data;
   } catch (e) {
     return { dismissed: 0, confirmed: 0 };
   }

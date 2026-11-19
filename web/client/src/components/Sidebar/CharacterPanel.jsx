@@ -54,6 +54,11 @@ export default function CharacterPanel({ workId, proposals = [] }) {
 
   useEffect(() => {
     load();
+    // 从左栏或右侧确认提案后，服务端已经建卡；这里重拉一次，
+    // 否则新卡要等切面板才出现。
+    const onCards = () => load();
+    window.addEventListener('ct:cards-changed', onCards);
+    return () => window.removeEventListener('ct:cards-changed', onCards);
   }, [workId]);
 
   const openEditor = (character) => {
