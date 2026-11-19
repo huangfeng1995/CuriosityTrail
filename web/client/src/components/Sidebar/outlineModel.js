@@ -57,6 +57,22 @@ export function serializeOutline(root) {
   return lines.join('\n');
 }
 
+/**
+ * 一段普通的多行文字 → 一层脑图。
+ *
+ * 第一行当中心，其余行挂成它的分支；顺手去掉行首的圆点/短横，
+ * 免得节点名字里带着「- 」。只做这一层，细分交给作者在脑图里拖。
+ */
+export function linesToOutline(text) {
+  const lines = String(text || '')
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-*·•]\s*/, '').trim())
+    .filter(Boolean);
+  if (!lines.length) return '';
+  const [head, ...rest] = lines;
+  return [head, ...rest.map((line) => `  ${line}`)].join('\n');
+}
+
 /** 多顶层节点收成一个中心节点，避免编辑时出现两棵树。 */
 export function toRoot(roots, fallbackText = '新想法') {
   if (!roots || !roots.length) return makeNode(fallbackText);

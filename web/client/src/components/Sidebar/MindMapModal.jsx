@@ -253,8 +253,9 @@ export default function MindMapModal({ item, workId, onClose, onSaved }) {
     try {
       // 先存脑图再建设定：转换完后这张图还得留在灵感里，
       // 否则作者回头看不到自己是怎么推出来的。
+      let savedId = null;
       try {
-        await persist();
+        savedId = await persist();
         onSaved?.();
       } catch (e) {
         message.error(e.response?.data?.error || '脑图没存上，暂不转设定');
@@ -291,6 +292,17 @@ export default function MindMapModal({ item, workId, onClose, onSaved }) {
         }
         message.success(`已建 ${branches.length} 条设定，在「设定」里`);
       }
+
+      // 已经变成设定的灵感不再算「待用」：在列表里归到「已用」，
+      // 也不再把同一份念头重复喂给 AI。作者随时可以点回来。
+      if (savedId) {
+        try {
+          await api.put(`/inspirations/${savedId}`, { consumed: 1 });
+        } catch (e) {
+          /* 标记失败不影响设定已经建好 */
+        }
+      }
+
       onSaved?.();
       onClose?.();
     } catch (e) {

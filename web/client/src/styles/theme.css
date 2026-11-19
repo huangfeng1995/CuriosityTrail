@@ -5165,3 +5165,16 @@ body.ct-resizing * {
     max-height: 38vh;
   }
 }
+
+/* 弹窗底部：左边放低频动作（整理成脑图），右边保持取消/保存 */
+.ct-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ct-modal-foot-right {
+  display: flex;
+  gap: 8px;
+}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Input, Modal, Form, message, Empty, Tooltip } from 'antd';
+import { Input, Modal, Form, message, Empty, Tooltip, Button } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import api from '../../api/client';
 import MindMapModal from './MindMapModal';
-import { countNodes, isOutline, parseOutline, toRoot } from './outlineModel';
+import { countNodes, isOutline, linesToOutline, parseOutline, toRoot } from './outlineModel';
 
 /**
  * 灵感速记面板。
@@ -28,6 +28,18 @@ export default function InspirationPanel({ workId }) {
   // undefined = 关着；null = 新建；对象 = 编辑这一条
   const [mindItem, setMindItem] = useState(undefined);
   const [form] = Form.useForm();
+  const textValue = Form.useWatch('text', form) || '';
+
+  // 多行灵感可以就地摊成一层脑图：第一行当中心，其余行当分支。
+  // 只在已经存在的条目上给这个入口，新写的几条走「画脑图」。
+  const canSpread = Boolean(editing?.id) &&
+    textValue.split('\n').filter((line) => line.trim()).length >= 2;
+
+  const spreadToMindMap = () => {
+    const text = String(form.getFieldValue('text') || '');
+    setEditing(null);
+    setMindItem({ ...editing, text: linesToOutline(text) });
+  };
 
   const load = async () => {
     try {
@@ -191,6 +203,23 @@ export default function InspirationPanel({ workId }) {
         width={480}
         onOk={save}
         onCancel={() => setEditing(null)}
+        footer={
+          <div className="ct-modal-foot">
+            {canSpread ? (
+              <Button type="text" icon={<PartitionOutlined />} onClick={spreadToMindMap}>
+                整理成脑图
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="ct-modal-foot-right">
+              <Button onClick={() => setEditing(null)}>取消</Button>
+              <Button type="primary" onClick={save}>
+                保存
+              </Button>
+            </div>
+          </div>
+        }
       >
         <Form form={form} layout="vertical" size="small" requiredMark={false}>
           <Form.Item name="text" label="内容" rules={[{ required: true, message: '内容不能为空' }]}>

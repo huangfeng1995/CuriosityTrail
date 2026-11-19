@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   makeNode,
   isOutline,
+  linesToOutline,
   parseOutline,
   serializeOutline,
   toRoot,
@@ -86,6 +87,15 @@ test('treeToTable: 同一格多个值用分号连接', () => {
 test('treeToTable: 只有一层时不给表，交给「每个分支一条」', () => {
   const root = makeNode('木料', [makeNode('橡木'), makeNode('胡桃木')]);
   assert.equal(treeToTable(root), null);
+});
+
+test('linesToOutline: 多行文字摊成一层，第一行当中心', () => {
+  assert.equal(
+    linesToOutline('雨夜追人\n- 巷子太窄\n· 灯笼灭了'),
+    '雨夜追人\n  巷子太窄\n  灯笼灭了'
+  );
+  assert.equal(linesToOutline('只有一行'), '只有一行');
+  assert.equal(linesToOutline('  \n '), '');
 });
 
 test('branchContent: 分支的孩子写成层级列表', () => {
