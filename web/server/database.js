@@ -39,8 +39,10 @@ let db = new sqlite3.Database(config.dbPath);
  *              按 interrupted 落库，与正常完成区分；老消息一律视为 complete。
  * 版本 14 → 15：卡片提案增加 origin_ref（来源采纳）。撤销采纳时据此作废本轮
  *              pending 提案，避免已撤销正文里的人物/设定被确认成卡。
+ * 版本 15 → 16：一致性检查问题增加持久化生命周期（open/adopted/dismissed）。
+ *              跨章总检不再只活在内存任务里，忽略过的结论重跑不再冒出来。
  */
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 
 /**
  * 版本号之前的老库遗留表。
@@ -247,6 +249,44 @@ CREATE TABLE IF NOT EXISTS card_proposals (
 );
 CREATE INDEX IF NOT EXISTS idx_card_proposals_work
   ON card_proposals(work_id, status, created_at);
+
+-- 一致性检查结论（规则层 + 跨章总检）。
+--
+-- 为什么要落库：检查是重复动作，作者忽略过的问题每次重跑又冒出来，
+-- 等于逼他反复做同一个决定。这里用 fingerprint 认同一问题，状态一旦
+-- adopted/dismissed 就保持住，重跑只更新快照、不把结论翻回 open。
+--
+-- source 区分产物来源：
+--   rule          规则层（免费、确定）
+--   cross_chapter 跨章总检（模型）
+CREATE TABLE IF NOT EXISTS consistency_findings (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  work_id       TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  -- 稳定指纹：同一问题跨多次检查保持不变（见 services/consistencyFindings.js）
+  fingerprint   TEXT NOT NULL,
+  source        TEXT NOT NULL DEFAULT 'rule'
+                  CHECK (source IN ('rule','cross_chapter')),
+  type          TEXT NOT NULL DEFAULT '',
+  severity      TEXT NOT NULL DEFAULT 'medium',
+  title         TEXT NOT NULL,
+  detail        TEXT DEFAULT '',
+  target        TEXT DEFAULT '',
+  chapter_id    TEXT,
+  chapter_seq   INTEGER DEFAULT 0,
+  chapter_title TEXT DEFAULT '',
+  block_id      TEXT DEFAULT '',
+  quote         TEXT DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'open'
+                  CHECK (status IN ('open','adopted','dismissed')),
+  first_seen_at TEXT NOT NULL,
+  last_seen_at  TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  UNIQUE (user_id, work_id, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_consistency_findings_work
+  ON consistency_findings (user_id, work_id, status, source);
 
 -- 素材库（每个用户一份）
 CREATE TABLE IF NOT EXISTS materials (

@@ -93,7 +93,7 @@ test.after(() => {
 
 test('v14 真实形态：card_proposals 补上 origin_ref，老行留空串，行数不变', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 15, '迁移后版本应为 15');
+  assert.strictEqual(version.user_version, 16, '迁移后版本应为 16');
 
   const columns = await db.all('PRAGMA table_info(card_proposals)');
   const originCol = columns.find((c) => c.name === 'origin_ref');
@@ -148,7 +148,7 @@ test('v14 真实形态：二次启动幂等，不再迁移且行数不变', asyn
   assert.ok(!logs.some((line) => line.includes('执行增量迁移')), '二次启动不应再迁移');
 
   const version = await db.all('PRAGMA user_version');
-  assert.strictEqual(version[0].user_version, 15);
+  assert.strictEqual(version[0].user_version, 16);
 
   const count = await db.get('SELECT COUNT(*) AS c FROM card_proposals');
   assert.strictEqual(count.c, LEGACY_PROPOSAL_COUNT, '二次启动后提案行数不能变化');

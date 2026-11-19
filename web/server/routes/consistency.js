@@ -3,12 +3,17 @@
 /**
  * 一致性检查路由。
  *
- *   GET  /api/consistency/:workId                规则层检查（免费、立刻出结果）
- *   POST /api/consistency/:workId/ai             启动 AI 全书检查（异步任务）
- *   GET  /api/consistency/:workId/ai/:jobId      查询进度与结果
+ *   GET  /api/consistency/:workId                         规则层检查（免费、立刻出结果）
+ *   POST /api/consistency/:workId/ai                      启动跨章总检（异步任务）
+ *   GET  /api/consistency/:workId/ai/:jobId               查询进度与结果
+ *   POST /api/consistency/:workId/findings/:id/dismiss    忽略一条结论
+ *   POST /api/consistency/:workId/findings/:id/adopt      标记一条结论已采纳
  *
- * 全书检查要逐批读完整本正文，一次几分钟很正常——同步接口会撞上
- * 网关与浏览器的超时，所以改成「起任务 + 轮询」。
+ * 规则层与跨章总检的结论都会落到 consistency_findings：
+ * 忽略过的结论重跑不再出现，已采纳的保留状态供面板标记。
+ *
+ * 跨章总检只发章节摘要，调用次数是个位数，所以仍然走「起任务 + 轮询」，
+ * 但不再逐批精读全文。
  */
 
 const crypto = require('crypto');
@@ -17,6 +22,7 @@ const aiConfig = require('../services/aiConfig');
 const { resolveProvider } = require('../services/providers');
 const roles = require('../services/roles');
 const consistency = require('../services/consistency');
+const findingsStore = require('../services/consistencyFindings');
 const { ownedWork } = require('../services/scope');
 
 const router = express.Router();
@@ -35,7 +41,23 @@ function friendlyAiError(err) {
   return `AI 检查没有跑起来：${message}`;
 }
 
-async function runJob(job, plan) {
+/**
+ * 跑规则层并把结论落库。
+ *
+ * 返回的清单已经过滤掉「已忽略」的结论；已采纳的保留并带 status，
+ * 让面板能标出来。
+ */
+async function runRuleFindings(userId, workId) {
+  const issues = await consistency.runRuleChecks(workId);
+  return findingsStore.recordFindings({
+    userId,
+    workId,
+    source: 'rule',
+    findings: issues,
+  });
+}
+
+async function runJob(job, plan, ruleIssues) {
   try {
     const cfg = aiConfig.getConfig();
     const { provider, name } = resolveProvider(cfg);
@@ -45,14 +67,25 @@ async function runJob(job, plan) {
       provider,
       providerName: name,
       role,
+      excludeIssues: ruleIssues,
       onProgress: (done, total) => {
         job.done = done;
         job.total = total;
       },
     });
 
-    job.issues = [...job.issues, ...result.issues];
+    // 结论落库后再返回：跨章问题也有 id，前端才能忽略/采纳。
+    // 已忽略过的不会出现在返回里，重跑也不会复活。
+    const aiIssues = await findingsStore.recordFindings({
+      userId: job.userId,
+      workId: job.workId,
+      source: 'cross_chapter',
+      findings: result.issues,
+    });
+
+    job.issues = [...ruleIssues, ...aiIssues];
     job.notices = [...job.notices, ...result.notices];
+    job.calls = result.calls;
     job.status = 'done';
   } catch (err) {
     job.status = 'failed';
@@ -72,7 +105,7 @@ router.get('/:workId', async (req, res) => {
     const work = await ownedWork(req.params.workId, req.userId);
     if (!work) return res.status(404).json({ error: '作品不存在' });
 
-    const issues = await consistency.runRuleChecks(req.params.workId);
+    const issues = await runRuleFindings(req.userId, req.params.workId);
     res.json({ issues });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -80,9 +113,9 @@ router.get('/:workId', async (req, res) => {
 });
 
 /**
- * 启动 AI 全书检查。
+ * 启动跨章总检。
  *
- * 规则层的结果立刻并进任务：作者不用等几分钟才看到免费的检查项。
+ * 规则层的结果立刻并进任务：作者不用等模型跑完才看到免费的检查项。
  */
 router.post('/:workId/ai', async (req, res) => {
   try {
@@ -104,11 +137,11 @@ router.post('/:workId/ai', async (req, res) => {
       });
     }
 
-    const ruleIssues = await consistency.runRuleChecks(req.params.workId);
+    const ruleIssues = await runRuleFindings(req.userId, req.params.workId);
     const plan = await consistency.planAiCheck(req.params.workId);
     const notices = plan ? [...plan.notices] : [];
 
-    if (!plan || !plan.batches.length) {
+    if (!plan || !plan.digests.length) {
       return res.json({
         jobId: '',
         total: 0,
@@ -118,7 +151,8 @@ router.post('/:workId/ai', async (req, res) => {
       });
     }
 
-    const total = plan.batches.length + (plan.batches.length > 1 ? 1 : 0);
+    // 调用次数就是个位数：分组数 + 一次跨组汇总
+    const total = plan.calls;
     const job = {
       jobId: crypto.randomUUID(),
       userId: req.userId,
@@ -126,6 +160,7 @@ router.post('/:workId/ai', async (req, res) => {
       status: 'running',
       done: 0,
       total,
+      calls: 0,
       issues: ruleIssues,
       notices,
       error: '',
@@ -133,7 +168,7 @@ router.post('/:workId/ai', async (req, res) => {
     jobs.set(job.jobId, job);
 
     // 不 await：路由立刻返回任务号，前端轮询进度
-    runJob(job, plan);
+    runJob(job, plan, ruleIssues);
 
     res.status(202).json({ jobId: job.jobId, total, done: 0 });
   } catch (err) {
@@ -154,10 +189,44 @@ router.get('/:workId/ai/:jobId', (req, res) => {
     status: job.status,
     done: job.done,
     total: job.total,
+    calls: job.calls,
     issues: job.issues,
     notices: job.notices,
     error: job.error,
   });
 });
+
+/**
+ * 修改一条结论的状态。
+ *
+ * 忽略（dismissed）后重跑不再报；采纳（adopted）后保留并带状态，
+ * 让面板显示「已处理」。
+ */
+async function changeFindingStatus(req, res, status) {
+  try {
+    const work = await ownedWork(req.params.workId, req.userId);
+    if (!work) return res.status(404).json({ error: '作品不存在' });
+
+    const finding = await findingsStore.setFindingStatus({
+      userId: req.userId,
+      workId: req.params.workId,
+      id: req.params.findingId,
+      status,
+    });
+    if (!finding) return res.status(404).json({ error: '结论不存在' });
+
+    res.json({ finding });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+}
+
+router.post('/:workId/findings/:findingId/dismiss', (req, res) =>
+  changeFindingStatus(req, res, 'dismissed')
+);
+
+router.post('/:workId/findings/:findingId/adopt', (req, res) =>
+  changeFindingStatus(req, res, 'adopted')
+);
 
 module.exports = router;

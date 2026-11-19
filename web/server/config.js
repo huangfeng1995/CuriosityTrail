@@ -152,11 +152,10 @@ const memoryRetryBaseMs = Number(process.env.MEMORY_RETRY_BASE_MS || 1000);
 // 4.2 全书审校
 // ---------------------------------------------------------------------------
 //
-// AI 层要逐段读完整本正文，不能一次全塞进去：单批太大时模型容易漏读、
-// 输出也容易被截断。按字数切批，一次检查的总字数另设上限，
-// 超出部分按章序截断并在结果里说明（不静默少读）。
-const consistencyChunkChars = Number(process.env.CONSISTENCY_CHUNK_CHARS || 12000);
-const consistencyMaxChars = Number(process.env.CONSISTENCY_MAX_CHARS || 300000);
+// AI 层只做跨章总检：每章压成「大纲 + 开头/结尾关键段」的摘要，按字数分组，
+// 多组时再做一次跨组汇总。不再把整本正文逐批喂给模型——那与审稿人重复，
+// 30 万字要 25 批以上。摘要分组的字数上限由此控制。
+const consistencyDigestChars = Number(process.env.CONSISTENCY_DIGEST_CHARS || 24000);
 
 // ---------------------------------------------------------------------------
 // 5. 运行环境
@@ -249,8 +248,7 @@ module.exports = {
   memoryExtractEnabled,
   memoryRetryBaseMs,
   // 全书审校
-  consistencyChunkChars,
-  consistencyMaxChars,
+  consistencyDigestChars,
   // 异地备份
   backupOffsiteDir,
   backupOffsiteKeep,

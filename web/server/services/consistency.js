@@ -10,9 +10,10 @@
  *     · 设定卡写了但正文从没提到（没落地的设定）
  *     · 章节标题重复、章节状态异常
  *     · 人物别名与其它人物重名（一个人两个名字，AI 会当成两个人）
- *   AI 层（需要模型）—— 把全书正文按字数分批交给审稿人逐段精读，
- *     再把各章摘要与已发现问题汇总做一次跨章总检，
- *     找规则层找不到的语义矛盾（前后时间线、性格突变、设定打架）
+ *   AI 层（需要模型）—— 只做规则层看不到的跨章总检：
+ *     把每章压成「大纲 + 开头/结尾关键段」，按字数分组，多组时再做一次
+ *     跨组汇总，找时间线、人物状态、伏笔回收等跨章矛盾。
+ *     不逐批精读全文——那是审稿人的活，重复且昂贵。
  *
  * 规则层先跑：它不花钱、结果确定，能立刻指出最刺眼的问题。
  */
@@ -228,41 +229,42 @@ function chapterText(chapter) {
 }
 
 // ---------------------------------------------------------------------------
-// AI 层：逐批精读 + 跨章总检
+// AI 层：跨章总检（只看摘要，不逐批精读全文）
 // ---------------------------------------------------------------------------
 
-/** 单批送进模型的字数上限：太大模型容易漏读、输出也容易被截断。 */
-const CHUNK_CHARS = Math.max(2000, Number(config.consistencyChunkChars) || 12000);
-/** 一次检查最多读多少字；超出按章序截断，并在结果里说明，不静默少读。 */
-const MAX_CHARS = Math.max(CHUNK_CHARS, Number(config.consistencyMaxChars) || 300000);
+/** 一组摘要的字数上限：超过就分组，多组时再做一次跨组汇总。 */
+const DIGEST_CHUNK_CHARS = Math.max(500, Number(config.consistencyDigestChars) || 24000);
+/** 每章送进摘要的开头 / 结尾字数。只给关键段，不是全文。 */
+const OPENING_CHARS = 220;
+const ENDING_CHARS = 180;
+/** 大纲只取前这么长：它是结构信息里信息密度最高的一段。 */
+const OUTLINE_CHARS = 200;
 /** quote 至少多少字才参与定位（与前端审稿意见的 6 字规则一致）。 */
 const MIN_QUOTE_LENGTH = 6;
 
-const BATCH_TASK_PROMPT = `## 本次任务：全书精读（第 {index} / {total} 批）
-你拿到的是全书中的一段连续章节。请逐段细读，只报这些章节里确实存在的问题。
-- 每条问题必须能落到某一章的某一段原文上：给出 chapterSeq 和逐字抄录的 quote。
-- 不要写"整体不错，但……"这类客套，也不要提无法执行的建议。
-- 最多 8 条；确实没问题就返回 {"issues": []}。
-- 只输出一个 JSON 对象，不要 markdown 代码块，不要额外文字。
+const CROSS_CHAPTER_RULES = `只找**跨章层面**的问题：
+- 同一事件在不同章里的时间、地点、因果冲突；
+- 人物关系、性格、能力前后不一致；
+- 前文埋下的因，后文没有结果（或结果对不上）；
+- 人物卡/设定卡与所给章节内容打架。
 
-{
-  "issues": [
-    {
-      "chapterSeq": 3,
-      "severity": "high | medium | low",
-      "title": "10–20 字的问题概括",
-      "detail": "问题是什么、读者会怎么误解、建议怎么改",
-      "quote": "该章正文里逐字抄录的片段（6–80 字）"
-    }
-  ]
-}`;
+不要报这些（它们要么不属于本次范围，要么规则层已经单独报过）：
+- 单章的节奏、措辞、对白质量、错别字；
+- 人物卡里的人物从未在正文出现、设定未落地、别名/章节重名、
+  章节状态异常、史实锚点冲突。`;
 
-const REDUCE_TASK_PROMPT = `## 本次任务：全书跨章总检
-前面已经逐批读完全书正文，下面给出各章摘要和逐批发现的问题。
-请只找**跨章层面**的矛盾：同一事件在不同章里的时间/因果冲突、人物性格或能力前后不一致、
-前文埋的因后文没有结果、设定卡与正文打架。
-不要重复下面已经列出的问题，也不要报单章的措辞好坏。
-每条必须给 chapterSeq；quote 尽量逐字抄自所给章节开头的原文，抄不到就省略。
+const GROUP_TASK_PROMPT = `## 本次任务：跨章一致性总检（第 {index} / {total} 组）
+你拿到的是若干章的**开头/结尾关键段与大纲**，不是全文。
+${CROSS_CHAPTER_RULES}
+每条问题必须给 chapterSeq（问题最明显的那一章）；quote 只能从所给
+开头/结尾原文里逐字抄录，抄不到就留空，不要自己编。
+最多 6 条；没有就返回 {"issues": []}。只输出 JSON，不要 markdown 代码块。`;
+
+const REDUCE_TASK_PROMPT = `## 本次任务：全书跨章总检（汇总）
+下面给出全书各章的摘要行，以及分组总检已经发现的问题。
+${CROSS_CHAPTER_RULES}
+请补上**跨组之间**才看得出的矛盾，并去掉与下面已知问题重复的条目。
+每条必须给 chapterSeq；quote 尽量逐字抄自所给章节摘要，抄不到就留空。
 最多 6 条；没有就返回 {"issues": []}。只输出 JSON。`;
 
 /** 人物卡的一行摘要，和单章上下文里的写法保持一致。 */
@@ -301,10 +303,53 @@ function buildSharedContext(plan) {
 }
 
 /**
- * 规划一次全书检查：读全章正文、切批、算覆盖范围。
+ * 一章节的摘要：开头关键段 + 结尾关键段 + 大纲。
  *
- * 切批只按章边界，不把一章切成两半：quote 要能落回某一章，
- * 半章上下文也容易让模型误判人物状态。
+ * 为什么不喂全文：跨章矛盾看的是「同一件事在不同章是否对齐」，
+ * 结构信息比细节更有用；而 30 万字全文要 25 次以上调用，
+ * 与审稿人逐章精读高度重合。这里只取信息密度最高的部分。
+ *
+ * @param {Object} chapter 章节行
+ * @returns {{opening: string, ending: string}}
+ */
+function chapterDigest(chapter) {
+  const blocks = blocksOf(chapter).filter(
+    (b) => b && String(b.content || '').trim()
+  );
+
+  if (blocks.length) {
+    const opening = blocks
+      .slice(0, 2)
+      .map((b) => String(b.content).trim())
+      .join('')
+      .slice(0, OPENING_CHARS);
+    const ending =
+      blocks.length > 2
+        ? blocks
+            .slice(-2)
+            .map((b) => String(b.content).trim())
+            .join('')
+            .slice(-ENDING_CHARS)
+        : '';
+    return { opening, ending };
+  }
+
+  const text = String(chapter.content || '').trim();
+  return {
+    opening: text.slice(0, OPENING_CHARS),
+    ending: text.length > OPENING_CHARS ? text.slice(-ENDING_CHARS) : '',
+  };
+}
+
+/**
+ * 规划一次跨章总检：把每章压成摘要，按字数分组。
+ *
+ * 调用次数 = 分组数 + （分组数 > 1 时的一次跨组汇总）。
+ * 30 万字约 100 章，每章摘要 400–600 字 → 2–3 组，共 3–4 次调用；
+ * 即使 300 章也能稳定在个位数。
+ *
+ * 注意：plan.chapters 里仍保留全文与 blocks，但只用于把模型给的 quote
+ * 落回章节/块，**不会**发进模型请求。
  *
  * @param {string} workId
  * @returns {Promise<Object|null>}
@@ -314,7 +359,7 @@ async function planAiCheck(workId) {
   if (!work) return null;
 
   const rows = await all(
-    `SELECT id, title, seq, volume, status, content, blocks, outline, word_count
+    `SELECT id, title, seq, volume, status, content, blocks, outline
      FROM chapters WHERE work_id = ? ORDER BY seq, created_at`,
     [workId]
   );
@@ -325,44 +370,54 @@ async function planAiCheck(workId) {
 
   const chapters = [];
   for (const row of rows) {
-    const text = chapterText(row);
-    if (!text.trim()) continue;
+    const { opening, ending } = chapterDigest(row);
+    if (!opening && !ending) continue;
     chapters.push({
       id: row.id,
       seq: row.seq,
       title: row.title,
       volume: row.volume,
-      outline: row.outline || '',
+      outline: String(row.outline || '').slice(0, OUTLINE_CHARS),
+      opening,
+      ending,
+      // 仅用于 quote → 章节/块 的定位，不进入提示词
+      text: chapterText(row),
       blocks: blocksOf(row),
-      text,
     });
   }
 
-  const batches = [];
+  const digests = [];
   let current = null;
-  let usedChars = 0;
-  let covered = 0;
 
   for (const chapter of chapters) {
-    if (usedChars + chapter.text.length > MAX_CHARS) break;
-    if (!current || (current.chapters.length && current.chars + chapter.text.length > CHUNK_CHARS)) {
+    const size = digestText(chapter).length;
+    if (!current || (current.chapters.length && current.chars + size > DIGEST_CHUNK_CHARS)) {
       current = { chapters: [], chars: 0 };
-      batches.push(current);
+      digests.push(current);
     }
     current.chapters.push(chapter);
-    current.chars += chapter.text.length;
-    usedChars += chapter.text.length;
-    covered += 1;
+    current.chars += size;
   }
 
-  const notices = [];
-  if (covered < chapters.length) {
-    notices.push(
-      `全书共 ${chapters.length} 章，本次只读了前 ${covered} 章（单次上限约 ${MAX_CHARS} 字）。其余章节请再查一次。`
-    );
-  }
+  return {
+    work,
+    characters,
+    settings,
+    chapters,
+    digests,
+    // 前端进度条和报告都可以直接用这个数
+    calls: digests.length + (digests.length > 1 ? 1 : 0),
+    notices: [],
+  };
+}
 
-  return { work, characters, settings, chapters, batches, notices };
+/** 一章在提示词里的实际文本。 */
+function digestText(chapter) {
+  const lines = [`## 第 ${chapter.seq} 章 ${chapter.title}`];
+  if (chapter.outline) lines.push(`大纲：${chapter.outline}`);
+  if (chapter.opening) lines.push(`开头：${chapter.opening}`);
+  if (chapter.ending) lines.push(`结尾：${chapter.ending}`);
+  return lines.join('\n');
 }
 
 /** 归一化：去空白、全角标点转半角，便于 quote 匹配。 */
@@ -478,9 +533,11 @@ function resolveIssues(rawIssues, plan) {
 
     const detail = String(raw.detail || '').trim();
     const title = String(raw.title || '').trim() || detail.slice(0, 40);
+    const blockId = chapter ? findBlockId(chapter, quote) : '';
 
     return {
       type: 'ai',
+      source: 'cross_chapter',
       severity: raw.severity || 'medium',
       title,
       detail,
@@ -489,7 +546,9 @@ function resolveIssues(rawIssues, plan) {
       chapterSeq: chapter ? chapter.seq : 0,
       chapterTitle: chapter ? chapter.title : '',
       quote,
-      blockId: chapter ? findBlockId(chapter, quote) : '',
+      blockId,
+      // 只有章和块都定位到了才能跳正文；否则前端只标注章节
+      locatable: Boolean(chapter && blockId),
     };
   });
 }
@@ -527,7 +586,60 @@ function chatOptions(role, providerName, maxTokens) {
 }
 
 /**
- * 执行全书检查。
+ * 规则层已经能确定的问题类型 → 判定关键词。
+ *
+ * 跨章总检的提示词已经明确要求不要报这些，但模型仍可能换个说法重复。
+ * 这里再兜一层：同一类问题只要指向同一个人物/设定/章节，就丢掉，
+ * 保证作者不会在同一个面板里看到两遍。
+ */
+const RULE_OVERLAP_PATTERNS = {
+  unused_character: /(从未|没有|未曾).{0,8}(出现|登场|出场)/,
+  unused_setting: /(未|没有|尚未).{0,8}(落地|提到|出现|写入)/,
+  duplicate_name: /(重名|同名|共用.{0,6}名字|别名冲突)/,
+  duplicate_chapter_title: /(章.{0,8}重名|都叫|标题重复)/,
+  invalid_status: /状态(值)?异常/,
+  anchor_violation: /锚点冲突|史实冲突/,
+};
+
+/**
+ * 这条 AI 结论是不是规则层已经报过的同一问题。
+ *
+ * @param {Object} issue 已解析定位的 AI 结论
+ * @param {Array<Object>} ruleIssues 本轮规则层结论
+ * @returns {boolean}
+ */
+function isRuleDuplicate(issue, ruleIssues) {
+  if (!ruleIssues || !ruleIssues.length) return false;
+
+  const title = normalizeForMatch(issue.title);
+  const text = normalizeForMatch(`${issue.title}${issue.detail}`);
+
+  return ruleIssues.some((rule) => {
+    const ruleTitle = normalizeForMatch(rule.title);
+    if (ruleTitle && title && (title === ruleTitle || title.includes(ruleTitle) || ruleTitle.includes(title))) {
+      return true;
+    }
+
+    const target = normalizeForMatch(rule.target);
+    if (!target || !text.includes(target)) return false;
+
+    const pattern = RULE_OVERLAP_PATTERNS[rule.type];
+    return Boolean(pattern && pattern.test(text));
+  });
+}
+
+/** 规则层结论清单：放进提示词，让模型从一开始就别报。 */
+function ruleExclusionBlock(ruleIssues) {
+  if (!ruleIssues || !ruleIssues.length) return '规则层已报：暂无。';
+  const lines = ruleIssues.slice(0, 40).map((issue) => `- ${issue.title}`);
+  return `规则层已报（不要重复）：\n${lines.join('\n')}`;
+}
+
+/**
+ * 执行跨章总检。
+ *
+ * 只发摘要：每组若干章的「标题 + 大纲 + 开头/结尾关键段」。
+ * 调用次数 = 分组数 + 汇总（分组 > 1 时）。
  *
  * @param {Object} plan planAiCheck 的结果
  * @param {Object} params
@@ -535,63 +647,68 @@ function chatOptions(role, providerName, maxTokens) {
  * @param {string} [params.providerName]
  * @param {Object} [params.role]
  * @param {Function} [params.onProgress] (done, total) => void
- * @returns {Promise<{issues: Array<Object>, notices: Array<string>}>}
+ * @param {Array<Object>} [params.excludeIssues] 规则层结论，用于去重
+ * @returns {Promise<{issues: Array<Object>, notices: Array<string>, calls: number}>}
  */
 async function executeAiCheck(plan, params = {}) {
-  const { provider, providerName, role, onProgress } = params;
+  const { provider, providerName, role, onProgress, excludeIssues = [] } = params;
   const shared = buildSharedContext(plan);
   const baseSystem = `${role?.systemPrompt || ''}\n\n${shared}`;
-  const total = plan.batches.length + (plan.batches.length > 1 ? 1 : 0);
-  const notices = [...plan.notices];
+  const groups = plan.digests || [];
+  const total = groups.length + (groups.length > 1 ? 1 : 0);
+  const notices = [...(plan.notices || [])];
   const rawIssues = [];
+  const exclusion = ruleExclusionBlock(excludeIssues);
   let done = 0;
 
-  for (let i = 0; i < plan.batches.length; i += 1) {
-    const batch = plan.batches[i];
-    const first = batch.chapters[0];
-    const last = batch.chapters[batch.chapters.length - 1];
+  for (let i = 0; i < groups.length; i += 1) {
+    const group = groups[i];
+    const first = group.chapters[0];
+    const last = group.chapters[group.chapters.length - 1];
     const rangeLabel =
       first.seq === last.seq ? `第 ${first.seq} 章` : `第 ${first.seq}–${last.seq} 章`;
-    const fallbackSeq = batch.chapters.length === 1 ? first.seq : 0;
-
-    const body = batch.chapters
-      .map((c) => `## 第 ${c.seq} 章 ${c.title}\n${c.text}`)
-      .join('\n\n');
+    const fallbackSeq = group.chapters.length === 1 ? first.seq : 0;
+    const body = group.chapters.map(digestText).join('\n\n');
 
     try {
       const result = await provider.chat({
         messages: [
           {
             role: 'system',
-            content: `${baseSystem}\n\n${BATCH_TASK_PROMPT.replace('{index}', String(i + 1)).replace(
-              '{total}',
-              String(plan.batches.length)
-            )}`,
+            content: `${baseSystem}\n\n${GROUP_TASK_PROMPT.replace(
+              '{index}',
+              String(i + 1)
+            ).replace('{total}', String(groups.length))}\n\n${exclusion}`,
           },
           {
             role: 'user',
-            content: `以下是第 ${first.seq}–${last.seq} 章的正文，请按上面的格式输出问题清单。\n\n${body}`,
+            content: `以下是第 ${first.seq}–${last.seq} 章的结构摘要，请只报跨章矛盾。\n\n${body}`,
           },
         ],
-        ...chatOptions(role, providerName, 2000),
+        ...chatOptions(role, providerName, 1600),
       });
       rawIssues.push(...parseAiIssues(result?.content, fallbackSeq));
     } catch (err) {
-      notices.push(`${rangeLabel}没有读完（${err.message}），这部分可能漏检。`);
+      notices.push(`${rangeLabel}这组没有检查完（${err.message}），这部分可能漏检。`);
     }
 
     done += 1;
     if (onProgress) onProgress(done, total);
   }
 
-  if (plan.batches.length > 1) {
+  if (groups.length > 1) {
     try {
-      const summaries = plan.chapters
-        .map((c) => {
-          const outline = c.outline ? `\n大纲：${c.outline}` : '';
-          return `## 第 ${c.seq} 章 ${c.title}${outline}\n开头：${c.text.slice(0, 220)}`;
-        })
-        .join('\n\n');
+      // 汇总阶段只拿「章名 + 大纲 + 开头一句」，控制在 12000 字以内
+      const lines = [];
+      let used = 0;
+      for (const c of plan.chapters) {
+        const line = `第 ${c.seq} 章 ${c.title}｜大纲：${c.outline || '（无）'}｜开头：${
+          c.opening.slice(0, 60)
+        }`;
+        if (used + line.length > 12000) break;
+        lines.push(line);
+        used += line.length;
+      }
 
       const known = rawIssues.length
         ? rawIssues
@@ -602,28 +719,32 @@ async function executeAiCheck(plan, params = {}) {
 
       const result = await provider.chat({
         messages: [
-          { role: 'system', content: `${baseSystem}\n\n${REDUCE_TASK_PROMPT}` },
+          { role: 'system', content: `${baseSystem}\n\n${REDUCE_TASK_PROMPT}\n\n${exclusion}` },
           {
             role: 'user',
-            content: `## 各章摘要\n${summaries}\n\n## 已发现的问题\n${known}\n\n请补上跨章层面的矛盾。`,
+            content: `## 各章摘要\n${lines.join('\n')}\n\n## 分组已发现的问题\n${known}\n\n请补上跨组矛盾。`,
           },
         ],
         ...chatOptions(role, providerName, 1400),
       });
       rawIssues.push(...parseAiIssues(result?.content, 0));
     } catch (err) {
-      notices.push(`跨章总检没有完成（${err.message}），只保留逐批结果。`);
+      notices.push(`跨组汇总没有完成（${err.message}），只保留分组结果。`);
     }
 
     done += 1;
     if (onProgress) onProgress(done, total);
   }
 
-  return { issues: dedupeIssues(resolveIssues(rawIssues, plan)), notices };
+  const resolved = resolveIssues(rawIssues, plan).filter(
+    (issue) => !isRuleDuplicate(issue, excludeIssues)
+  );
+
+  return { issues: dedupeIssues(resolved), notices, calls: total };
 }
 
 /**
- * AI 层检查：整本正文逐批精读，再做一次跨章总检。
+ * 跨章总检入口。
  *
  * 作品不存在或全书还没有正文时返回空清单。
  *
@@ -632,11 +753,17 @@ async function executeAiCheck(plan, params = {}) {
  */
 async function runAiCheck(workId, params = {}) {
   const plan = await planAiCheck(workId);
-  if (!plan) return { issues: [], notices: [] };
-  if (!plan.batches.length) {
-    return { issues: [], notices: [...plan.notices, '全书还没有正文，没有可检查的内容。'] };
+  if (!plan) return { issues: [], notices: [], calls: 0 };
+  if (!plan.digests.length) {
+    return {
+      issues: [],
+      notices: [...plan.notices, '全书还没有正文，没有可检查的内容。'],
+      calls: 0,
+    };
   }
-  return executeAiCheck(plan, params);
+
+  const excludeIssues = params.excludeIssues || (await runRuleChecks(workId));
+  return executeAiCheck(plan, { ...params, excludeIssues });
 }
 
 module.exports = {
@@ -645,4 +772,5 @@ module.exports = {
   runRuleChecks,
   runAiCheck,
   parseAiIssues,
+  isRuleDuplicate,
 };
