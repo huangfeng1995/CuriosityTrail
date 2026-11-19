@@ -6,8 +6,10 @@ import Markdown from '../Markdown';
 import { useWorkspace } from '../../store/workspace';
 import useCardOccurrences from './useCardOccurrences';
 import { CardHitBadge, CardHitList } from './CardOccurrences';
+import SettingTable from './SettingTable';
+import { EMPTY_TABLE, mergeTable, splitContent } from './tableModel';
 
-const CATEGORIES = ['地理', '历史', '组织', '规则', '物品', '种族', '其他'];
+export const SETTING_CATEGORIES = ['地理', '历史', '组织', '规则', '物品', '种族', '其他'];
 
 /**
  * 世界观设定面板。
@@ -23,9 +25,17 @@ export default function SettingPanel({ workId }) {
   const [settings, setSettings] = useState([]);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
+  // 文字 / 表格两种填法，写的是同一个 content：表格只是它的可视化。
+  const [mode, setMode] = useState('text');
   // 预览跟着输入框实时走：作者一边写表一边就能看到表格长什么样，
   // 不用先保存再回头翻。
   const contentValue = Form.useWatch('content', form) || '';
+  const tableValue = useMemo(() => splitContent(contentValue).table, [contentValue]);
+
+  // 网格改动写回同一份 content：换成文字模式重新打开也能看到表格本身。
+  const handleTable = (next) => {
+    form.setFieldValue('content', mergeTable(contentValue, next));
+  };
 
   // 每张卡的检索词就是设定名本身
   const cards = useMemo(
@@ -50,6 +60,7 @@ export default function SettingPanel({ workId }) {
 
   const openEditor = (setting) => {
     setEditing(setting || {});
+    setMode('text');
     form.setFieldsValue(
       setting || { name: '', category: '其他', content: '', importance: 3 }
     );
@@ -245,7 +256,7 @@ export default function SettingPanel({ workId }) {
             <Input placeholder="临江城" />
           </Form.Item>
           <Form.Item name="category" label="分类">
-            <Select options={CATEGORIES.map((c) => ({ value: c, label: c }))} />
+            <Select options={SETTING_CATEGORIES.map((c) => ({ value: c, label: c }))} />
           </Form.Item>
           <Form.Item
             name="importance"
@@ -262,28 +273,56 @@ export default function SettingPanel({ workId }) {
               ]}
             />
           </Form.Item>
-          <Form.Item name="content" label="内容">
-            <Input.TextArea
-              rows={7}
-              placeholder={
-                '设定正文。写给 AI 看，不用太文学化，说清楚规则和边界即可。\n' +
-                '要表格就用 Markdown：| 名称 | 材等 | 木料 |，下一行写 | --- | --- | --- |。'
-              }
-            />
-          </Form.Item>
-          <div className="ct-md-preview">
-            <div className="ct-md-preview-head">
-              <span>预览</span>
-              <span className="ct-md-preview-hint">支持 Markdown 表格，七列也能左右滑</span>
-            </div>
-            <div className="ct-md-preview-body">
-              {contentValue.trim() ? (
-                <Markdown>{contentValue}</Markdown>
-              ) : (
-                <p className="ct-hint">内容里写的表格会在这里按表格显示。</p>
-              )}
+          <div className="ct-set-mode">
+            <span className="ct-set-mode-label">内容</span>
+            <div className="ct-set-seg" role="group" aria-label="内容的填写方式">
+              <button
+                type="button"
+                className={mode === 'text' ? 'is-on' : ''}
+                onClick={() => setMode('text')}
+              >
+                文字
+              </button>
+              <button
+                type="button"
+                className={mode === 'table' ? 'is-on' : ''}
+                onClick={() => setMode('table')}
+              >
+                表格
+              </button>
             </div>
           </div>
+
+          {/* 两个模式共用 name="content"：表格改动最终仍写回这段正文。
+              文字框保持挂载、只做视觉隐藏，切换模式时表单值不会断。 */}
+          <Form.Item
+            name="content"
+            className={mode === 'table' ? 'ct-set-hidden' : ''}
+          >
+            <Input.TextArea
+              rows={7}
+              placeholder="设定正文。写给 AI 看，不用太文学化，说清楚规则和边界即可。"
+            />
+          </Form.Item>
+
+          {mode === 'table' && (
+            <SettingTable table={tableValue || EMPTY_TABLE} onChange={handleTable} />
+          )}
+
+          {mode === 'text' && (
+            <div className="ct-md-preview">
+              <div className="ct-md-preview-head">
+                <span>预览</span>
+              </div>
+              <div className="ct-md-preview-body">
+                {contentValue.trim() ? (
+                  <Markdown>{contentValue}</Markdown>
+                ) : (
+                  <p className="ct-hint">内容里写的表格会在这里按表格显示。</p>
+                )}
+              </div>
+            </div>
+          )}
         </Form>
       </Modal>
     </div>

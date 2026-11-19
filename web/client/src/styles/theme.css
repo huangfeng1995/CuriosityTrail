@@ -4744,3 +4744,424 @@ body.ct-resizing * {
 .ct-md td {
   color: var(--text-secondary);
 }
+
+/* ============================================================
+   设定 · 表格填写
+   ------------------------------------------------------------
+   内容仍是同一段 Markdown，表格只是它的可视化写法。
+   网格自己滚，弹窗不会被宽表撑破。
+   ============================================================ */
+.ct-set-mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.ct-set-mode-label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.ct-set-seg,
+.ct-mm-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-sunken);
+}
+
+.ct-set-seg button,
+.ct-mm-seg button {
+  border: none;
+  background: transparent;
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.ct-set-seg button:hover,
+.ct-mm-seg button:hover {
+  color: var(--text-primary);
+}
+
+.ct-set-seg button.is-on,
+.ct-mm-seg button.is-on {
+  background: var(--bg-container);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(94, 82, 56, 0.08);
+}
+
+.ct-mm-seg button:disabled {
+  color: var(--text-quaternary);
+  cursor: not-allowed;
+}
+
+/* 表格模式隐藏文字框：仍挂载，只做视觉隐藏，切换时表单值不断 */
+.ct-set-hidden {
+  display: none;
+}
+
+.ct-te {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.ct-te-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-faint);
+  background: var(--bg-sunken);
+}
+
+.ct-te-count {
+  margin-right: auto;
+  font-size: 11.5px;
+  color: var(--text-quaternary);
+}
+
+.ct-te-add {
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  padding: 2px 8px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ct-te-add:hover {
+  border-color: var(--cinnabar-glow);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.ct-te-scroll {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.ct-te-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+
+.ct-te-table th,
+.ct-te-table td {
+  position: relative;
+  padding: 0;
+  border-right: 1px solid var(--border-faint);
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.ct-te-table th {
+  background: var(--bg-sunken);
+}
+
+.ct-te-table th:last-child,
+.ct-te-table td:last-child {
+  border-right: none;
+}
+
+.ct-te-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.ct-te-table input {
+  width: 100%;
+  min-width: 88px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.ct-te-table th input {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ct-te-table input:focus {
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--cinnabar-glow);
+}
+
+.ct-te-op {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-quaternary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
+}
+
+.ct-te-table th:hover .ct-te-op,
+.ct-te-table td:hover .ct-te-op,
+.ct-te-op:focus-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.ct-te-op:hover {
+  color: var(--cinnabar);
+  background: var(--cinnabar-dim);
+}
+
+.ct-te-tail {
+  width: 26px;
+  border: none !important;
+  background: transparent !important;
+}
+
+/* 有行尾操作列时，最后一列数据不该再画右边线——右侧已经是容器边框 */
+.ct-te-table th:nth-last-child(2),
+.ct-te-table td:nth-last-child(2) {
+  border-right: none;
+}
+
+.ct-te-note {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: var(--text-quaternary);
+}
+
+/* ============================================================
+   灵感 · 脑图
+   ============================================================ */
+.ct-add-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ct-add-row .ct-add-btn {
+  flex: 1 1 auto;
+}
+
+.ct-add-row .ct-add-btn.is-plain {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+
+.ct-mm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ct-mm-canvas {
+  min-height: 220px;
+  max-height: 46vh;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--bg-base);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.ct-mm-item {
+  display: flex;
+  align-items: center;
+}
+
+.ct-mm-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 4px 5px 4px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg-container);
+}
+
+.ct-mm-node.is-root {
+  border-color: var(--cinnabar-glow);
+  background: var(--cinnabar-dim);
+}
+
+.ct-mm-node input {
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.ct-mm-node input::placeholder {
+  color: var(--text-quaternary);
+}
+
+.ct-mm-ops {
+  display: inline-flex;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease;
+}
+
+.ct-mm-node:hover .ct-mm-ops,
+.ct-mm-node:focus-within .ct-mm-ops {
+  opacity: 1;
+  visibility: visible;
+}
+
+.ct-mm-ops button {
+  padding: 0 3px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-quaternary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ct-mm-ops button:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.ct-mm-ops button.is-danger:hover {
+  color: var(--cinnabar);
+}
+
+.ct-mm-children {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: 20px;
+  padding-left: 20px;
+  border-left: 1px solid var(--border-strong);
+}
+
+.ct-mm-children > .ct-mm-item {
+  position: relative;
+}
+
+.ct-mm-children > .ct-mm-item::before {
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: 50%;
+  width: 20px;
+  border-top: 1px solid var(--border-strong);
+}
+
+.ct-mm-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ct-mm-seg {
+  align-self: flex-start;
+}
+
+.ct-mm-fields {
+  display: flex;
+  gap: 8px;
+}
+
+.ct-mm-name {
+  max-width: 240px;
+}
+
+.ct-mm-cat {
+  width: 110px;
+}
+
+.ct-mm-imp {
+  width: 150px;
+}
+
+.ct-mm-preview {
+  max-height: 170px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-faint);
+  border-radius: 8px;
+  background: var(--bg-base);
+}
+
+.ct-mm-preview:empty {
+  display: none;
+}
+
+.ct-mm-branch-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ct-mm-branch-list li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ct-mm-branch-list em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-quaternary);
+}
+
+.ct-mm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .ct-mm-fields {
+    flex-wrap: wrap;
+  }
+  .ct-mm-name {
+    max-width: none;
+    width: 100%;
+  }
+  .ct-mm-canvas {
+    max-height: 38vh;
+  }
+}

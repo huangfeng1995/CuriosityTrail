@@ -212,7 +212,7 @@ export default function Workspace() {
         onOpenChapter={loadChapter}
       />
     ),
-    inspirations: <InspirationPanel />,
+    inspirations: <InspirationPanel workId={work?.id} />,
   }[panelKey];
 
   const leftPanel = (

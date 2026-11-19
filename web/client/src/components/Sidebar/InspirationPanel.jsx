@@ -1,7 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { Input, Modal, Form, message, Empty, Tooltip } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined } from '@ant-design/icons';
+import {
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  CheckOutlined,
+  PartitionOutlined,
+} from '@ant-design/icons';
 import api from '../../api/client';
+import MindMapModal from './MindMapModal';
+import { countNodes, isOutline, parseOutline, toRoot } from './outlineModel';
 
 /**
  * 灵感速记面板。
@@ -10,10 +18,15 @@ import api from '../../api/client';
  * 灵感师角色会优先消费这里的内容（上下文装配器的"灵感层"）。
  *
  * 「已用」标记是作者的判断，不是 AI 的：AI 提了方向，作者采纳了才勾。
+ *
+ * 一条灵感如果写成缩进大纲，就按脑图打开：发散的念头先在树上铺开，
+ * 想清楚了可以一键转成设定（一个分支一条，或收成一张对照表）。
  */
-export default function InspirationPanel() {
+export default function InspirationPanel({ workId }) {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null);
+  // undefined = 关着；null = 新建；对象 = 编辑这一条
+  const [mindItem, setMindItem] = useState(undefined);
   const [form] = Form.useForm();
 
   const load = async () => {
@@ -78,59 +91,84 @@ export default function InspirationPanel() {
   const pending = items.filter((i) => !i.consumed);
   const used = items.filter((i) => i.consumed);
 
-  const renderItem = (item) => (
-    <div
-      key={item.id}
-      className={`ct-item${item.consumed ? ' is-consumed is-done' : ' is-pending'}`}
-    >
-      <button
-        type="button"
-        className="ct-item-main"
-        onClick={() => openEditor(item)}
-        style={{ whiteSpace: 'pre-wrap' }}
+  const renderItem = (item) => {
+    const outline = isOutline(item.text);
+    const title = outline
+      ? item.text.split('\n').find((line) => line.trim())?.trim()
+      : item.text;
+    const branchCount = outline ? countNodes(toRoot(parseOutline(item.text))) - 1 : 0;
+    const openItem = () => (outline ? setMindItem(item) : openEditor(item));
+
+    return (
+      <div
+        key={item.id}
+        className={`ct-item${item.consumed ? ' is-consumed is-done' : ' is-pending'}`}
       >
-        <span className="ct-item-title">{item.text}</span>
-        {item.tags && <span className="ct-item-meta">{item.tags}</span>}
-      </button>
-      <div className="ct-item-actions">
-        <Tooltip title={item.consumed ? '标记为未用' : '标记为已用'}>
+        <button
+          type="button"
+          className="ct-item-main"
+          onClick={openItem}
+          style={outline ? undefined : { whiteSpace: 'pre-wrap' }}
+          title={outline ? '打开脑图' : undefined}
+        >
+          <span className="ct-item-title">{title}</span>
+          {outline ? (
+            <span className="ct-item-meta">脑图 · {branchCount} 项</span>
+          ) : (
+            item.tags && <span className="ct-item-meta">{item.tags}</span>
+          )}
+        </button>
+        <div className="ct-item-actions">
+          <Tooltip title={item.consumed ? '标记为未用' : '标记为已用'}>
+            <button
+              type="button"
+              className={`ct-item-act${item.consumed ? ' is-on' : ''}`}
+              aria-label={item.consumed ? '标记为未用' : '标记为已用'}
+              onClick={() => toggleConsumed(item)}
+            >
+              <CheckOutlined />
+            </button>
+          </Tooltip>
           <button
             type="button"
-            className={`ct-item-act${item.consumed ? ' is-on' : ''}`}
-            aria-label={item.consumed ? '标记为未用' : '标记为已用'}
-            onClick={() => toggleConsumed(item)}
+            className="ct-item-act"
+            title={outline ? '编辑脑图' : '编辑'}
+            aria-label={outline ? '编辑脑图' : '编辑灵感'}
+            onClick={openItem}
           >
-            <CheckOutlined />
+            {outline ? <PartitionOutlined /> : <EditOutlined />}
           </button>
-        </Tooltip>
-        <button
-          type="button"
-          className="ct-item-act"
-          title="编辑"
-          aria-label="编辑灵感"
-          onClick={() => openEditor(item)}
-        >
-          <EditOutlined />
-        </button>
-        <button
-          type="button"
-          className="ct-item-act is-danger"
-          title="删除"
-          aria-label="删除灵感"
-          onClick={() => remove(item)}
-        >
-          <DeleteOutlined />
-        </button>
+          <button
+            type="button"
+            className="ct-item-act is-danger"
+            title="删除"
+            aria-label="删除灵感"
+            onClick={() => remove(item)}
+          >
+            <DeleteOutlined />
+          </button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="ct-panel">
-      <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
-        <PlusOutlined />
-        记一条灵感
-      </button>
+      <div className="ct-add-row">
+        <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
+          <PlusOutlined />
+          记一条灵感
+        </button>
+        <button
+          type="button"
+          className="ct-add-btn is-plain"
+          onClick={() => setMindItem(null)}
+          title="用脑图铺开一个想法，想清楚后可以直接转成设定"
+        >
+          <PartitionOutlined />
+          画脑图
+        </button>
+      </div>
 
       {pending.map(renderItem)}
 
@@ -166,6 +204,13 @@ export default function InspirationPanel() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <MindMapModal
+        item={mindItem}
+        workId={workId}
+        onClose={() => setMindItem(undefined)}
+        onSaved={load}
+      />
     </div>
   );
 }
