@@ -226,7 +226,8 @@ function 只能取以下六类，且全章六类必须各出现至少一次（�
 - departure：上车出城/启程离场。
 function 按事件语义判，不许按关键词猜：判断依据写进 functionReason，一句话说明「谁在场、发生什么、改变了什么」。
 错误示例：把雪地猎鹿的开场拍写成 departure、把门前告别写成 departure、把回城身世并进过渡拍。
-单章是 5000 字量级的长章：按内容需要给每拍估段数，长章大致 35–65 段即可，不必凑固定段数。
+单章是 5000 字量级的长章：每拍 3–12 段，且全章合计必须落在 20–80 段之间（长章大致 35–65 段即可，
+不必凑固定段数）；单拍上限与全章总区间同时生效，不能只满足其中一个。
 paragraphs 是这一拍的段落数，硬上限 12；targetChars 是这一拍的目标纯汉字数（不含标点），
 wordShare 是这一拍占全章正文的百分比。范文实测配比（纯汉字）：
 opening 9%、discussion 25%、identity 16%、father 25%、farewell 18%、departure 7%，允许 ±5pp。
@@ -252,9 +253,12 @@ const COVERAGE_PROMPT = `你是节拍覆盖检查器。只输出一个 JSON 对�
 - weak：写了事件，但没有写出变量变化（元素为 {id, reason}）。
 - missing：完全不满足 covered 的条件，或整拍被「总之/后来/从此」类总结句替代。
 段数多少不是判断标准：某拍只写了两段，只要事件和变化都在，也照常算 covered。
+- repeatViolations：逐条核对节拍表的 avoidRepeat（上一章已经写过、本章不得重演的旧事件）。
+  正文若重演了其中某条，把重演的那句原文放进来；没有重演就输出空数组。
 另需判断 hookPresent（章末最后一段是否留下未解问题或作出后果未定的决定）与
 chapterGoalMet（正文是否回答了 chapterGoal 的人物+动作+结果）。
-输出字段：covered（数组）、missing（数组）、weak（数组）、hookPresent（布尔）、chapterGoalMet（布尔）。
+输出字段：covered（数组）、missing（数组）、weak（数组）、hookPresent（布尔）、chapterGoalMet（布尔）、
+repeatViolations（字符串数组）。
 只使用节拍表里出现过的 id，不要编造。`;
 
 function text(value) {
@@ -568,7 +572,7 @@ function buildFunctionReplanInstruction(plan, missing, reasonMissing = []) {
     '给每拍补 function（opening|discussion|identity|father|farewell|departure）与 functionReason（谁在场、发生什么、改变了什么）。',
     '按事件语义判，不许按关键词猜：opening=外部对手施压/被叫走；discussion=同行议论且信息交换；',
     'identity=交代身世旧日；father=长辈到场并带符传；farewell=交割托付；departure=上车出城。',
-    '六类必须各至少一拍，全章 6–8 拍；其余已经合格的拍保留原目标与事件，不要重写成新剧情。',
+    '六类必须各至少一拍，全章 6–8 拍；每拍 3–12 段，全章合计 20–80 段；其余已经合格的拍保留原目标与事件，不要重写成新剧情。',
     '只输出完整节拍表 JSON，不要解释。',
   ]
     .filter(Boolean)
@@ -594,20 +598,37 @@ function formatBeatPlan(plan) {
 }
 
 /**
+ * 证据核对前的归一化：只忽略空白。
+ *
+ * 模型抄原句时常把换行改成空格、多打一个空行；逐字比会把真证据判丢。
+ * 除了空白之外不做任何宽松处理——标点、字词都要对得上。
+ */
+function normalizeEvidence(value) {
+  return String(value || '').replace(/\s+/g, '');
+}
+
+/**
  * 校验自检结果。
  *
  * 以节拍表为准重新计算 missing：模型有时会给出自相矛盾的
  * covered / missing 列表，照抄会把已覆盖的拍报成缺拍，触发无意义重写。
  *
+ * 证据必须真的出现在正文里（归一化空白后做包含判断）：
+ * 只校验「evidence 非空」挡不住模型自己编一句原句——那样的 covered
+ * 等于自评分，缺拍重写永远不会触发，作者看到的是全绿徽标和一篇没覆盖
+ * 计划的稿子。正文拿不到时按未覆盖处理：宁可贵一点重写，不可放过。
+ *
  * @param {Object|string} candidate 自检输出
  * @param {Object} plan 已校验的节拍表
+ * @param {string} body 正文纯文本
  * @returns {Object|null} 合法返回覆盖报告，否则 null
  */
-function validateCoverage(candidate, plan) {
+function validateCoverage(candidate, plan, body) {
   const data = typeof candidate === 'string' ? parseModelJson(candidate) : candidate;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   if (!plan || !Array.isArray(plan.beats)) return null;
 
+  const haystack = normalizeEvidence(body);
   const ids = plan.beats.map((b) => b.id);
   const toIds = (value, keyed) =>
     Array.isArray(value)
@@ -621,13 +642,17 @@ function validateCoverage(candidate, plan) {
 
   // covered 每项必须带 evidence：只有「覆盖了」三个字、没有原句，
   // 等于模型自己给自己打分，missing 会永远算不准。
-  // 没有证据的条目按未覆盖处理，交给 missing 重算。
+  // 没有证据、或证据在正文里找不到的条目，一律按未覆盖处理，交给 missing 重算。
   const evidenceById = new Map();
   const claimed = [];
   for (const item of Array.isArray(data.covered) ? data.covered : []) {
     const id = text(item && typeof item === 'object' ? item.id : item);
     const evidence = text(item && typeof item === 'object' ? item.evidence : '');
     if (!ids.includes(id) || !evidence) continue;
+
+    const probe = normalizeEvidence(evidence);
+    if (!probe || !haystack.includes(probe)) continue;
+
     claimed.push(id);
     if (!evidenceById.has(id)) {
       evidenceById.set(id, Array.from(evidence).slice(0, MAX_EVIDENCE_CHARS).join(''));
@@ -651,6 +676,16 @@ function validateCoverage(candidate, plan) {
         .map((w) => ({ id: text(w.id), reason: text(w.reason) }))
     : [];
 
+  // 自检同时核对 avoidRepeat：规划器给出的「本章不要重演上一章的旧事件」
+  // 不能只停在计划表里。违规片段随报告一起下发，作者能看到它被真的用上了。
+  const repeatViolations = Array.isArray(data.repeatViolations)
+    ? data.repeatViolations
+        .map((x) => text(x))
+        .filter(Boolean)
+        .slice(0, 5)
+    : [];
+  const avoidRepeat = Array.isArray(plan.avoidRepeat) ? plan.avoidRepeat : [];
+
   return {
     covered,
     missing,
@@ -658,6 +693,8 @@ function validateCoverage(candidate, plan) {
     evidence,
     hookPresent: data.hookPresent === true,
     chapterGoalMet: data.chapterGoalMet === true,
+    avoidRepeat,
+    repeatViolations,
   };
 }
 
@@ -678,6 +715,17 @@ function buildRewriteInstruction(plan, coverage, mustReveal = [], handover = {})
     `（覆盖自检结果：正文没有完整覆盖节拍表。缺失：${(coverage.missing || []).join('、') || '无'}。）`,
     '请重写全文，按 B1→Bn 顺序补足下面这些节拍，不要局部插入，不要解释：',
   ];
+
+  // 重写是整组/全文重来，最容易把上一章写过的旧事件再讲一遍。
+  const avoidRepeat = Array.isArray(plan && plan.avoidRepeat)
+    ? plan.avoidRepeat.filter(Boolean)
+    : [];
+  if (avoidRepeat.length) {
+    lines.push(
+      `本章不要重演上一章已经写过的事件：${avoidRepeat.join('；')}。` +
+        '这些事件只能一句话交代后果，不得换个说法再讲一遍。'
+    );
+  }
 
   const handoverBeat = handover && handover.handoverBeat ? `第 ${handover.handoverBeat} 拍` : '';
   const dupIds = (coverage && coverage.handoverDuplicated) || [];
@@ -867,7 +915,7 @@ async function checkBeatCoverage({ provider, plan, body, options = {} }) {
       maxTokens: 800,
     });
 
-    const coverage = validateCoverage(result.content, plan);
+    const coverage = validateCoverage(result.content, plan, body);
     return {
       coverage,
       reason: coverage ? '' : 'invalid',

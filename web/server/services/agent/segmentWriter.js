@@ -598,6 +598,25 @@ function handoverOnceRule(brief, group) {
 }
 
 /**
+ * 本章不要重复的旧事件。
+ *
+ * 规划器会列出上一章已经写过的事件（plan.avoidRepeat），但那是给规划器
+ * 自己的备忘；写手不看到，就会把同样的场景再演一遍。这里把它变成写手
+ * 能执行的硬约束：只许一句话交代后果，不许换说法重讲。
+ */
+function avoidRepeatBlock(plan) {
+  const items = plan && Array.isArray(plan.avoidRepeat)
+    ? plan.avoidRepeat.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (!items.length) return '';
+  return [
+    '## 本章不要重复的旧事件（硬约束）',
+    ...items.map((item) => `- ${item}`),
+    '这些事件上一章已经写过；本章不得重演、不得换个说法再讲一遍，只能一句话交代后果。',
+  ].join('\n');
+}
+
+/**
  * 某一组的起稿指令。
  *
  * 完整节拍表已经在 system 里（每次调用都会带上），所以这里不再重贴 JSON，
@@ -611,6 +630,7 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     .filter((g) => g.index > group.index)
     .flatMap((g) => g.beatIds);
   const briefBlock = briefWriterBlock(brief);
+  const avoidBlock = avoidRepeatBlock(plan);
 
   const lines = [
     `## 分段写作任务（第 ${group.index + 1}/${groups.length} 组）`,
@@ -620,6 +640,7 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
       ? `已经写完：${completed.join('、')}。不要重复它们，也不要用一句话概括它们。`
       : '这是本章的第一组，还没有已写正文。',
     later.length ? `后面才写：${later.join('、')}。不要提前写，更不要把全章收束在这里。` : '',
+    avoidBlock || null,
     '',
     buildBoundaryBlock({ group, groups }),
     '',
@@ -684,10 +705,12 @@ function buildContinuationIsolation() {
 function buildContinuationInstruction({ plan, group, groups, tail, remainingChars, brief = null }) {
   const written = countWords(group.content);
   const briefBlock = briefWriterBlock(brief);
+  const avoidBlock = avoidRepeatBlock(plan);
   const lines = [
     `## 续写本组（第 ${group.index + 1}/${groups.length} 组）`,
     '本组提前收尾了，但还没写够。接着写，不要重开。',
     `仍然只写 ${group.beatIds.join('、')} 这几拍，不要提前写后面的节拍。`,
+    avoidBlock || null,
     '',
     buildContinuationIsolation(),
     '',
@@ -834,12 +857,14 @@ function buildBeatRewriteInstruction({
   });
 
   const hasCoverageGap = wanted.size || weak.size || dup.size || withhold.size || conflicts.size || shape.size;
+  const avoidBlock = avoidRepeatBlock(plan);
   return [
     `## 重写第 ${group.index + 1}/${groups.length} 组中的 ${ids.join('、')}（其他拍原样保留）`,
     hasCoverageGap
       ? '覆盖自检发现这些拍没有落地。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
       : '这些拍节拍齐全，只是篇幅不足。只补指定拍的细节，其他拍与其他组保持原样。',
     `完整节拍表见 system 中的「本章节拍表」，全章共 ${plan.beats.length} 拍。`,
+    avoidBlock || null,
     '',
     expand.size ? '## 扩写（只补不推进）' : null,
     expand.size

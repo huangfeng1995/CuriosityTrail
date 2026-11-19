@@ -142,10 +142,18 @@ function validPlanJson() {
  */
 function segmentBody(label, extraParagraph = '') {
   const sentence = '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
+  // 第 3/12 段固定写成自检 evidence 的真实出处：
+  // 覆盖自检现在要求「证据必须能在正文里找到」，用例不能再让 evidence 凭空出现。
+  const anchors = {
+    2: '庙门半掩，主角在门槛外停了停。他问庙祝照片上是谁，庙祝不答。',
+    11: '旧档中间缺了几页，断口很新。',
+  };
   const rows = Array.from(
-    { length: 20 },
-    (_, i) => `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
+    { length: extraParagraph ? 19 : 20 },
+    (_, i) => anchors[i] || `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
   );
+  // 末尾的额外段落（章末钩子）要占掉一个名额，而不是多出来一段：
+  // 多出来会被「按拍收段」裁掉，B4 的证据就真的不在正文里了。
   if (extraParagraph) rows.push(extraParagraph);
   return rows.join('\n\n');
 }
@@ -160,7 +168,7 @@ function planningQueue() {
     {
       content: JSON.stringify({
         action: 'append',
-        content: '庙门半掩，主角在门槛外停了停。\n\n' + segmentBody('第一组'),
+        content: segmentBody('第一组'),
         reason: '按节拍表写第一组',
         citations: [],
       }),
@@ -181,7 +189,7 @@ function planningQueue() {
           { id: 'B1', evidence: '庙门半掩，主角在门槛外停了停' },
           { id: 'B2', evidence: '他问庙祝照片上是谁，庙祝不答' },
           { id: 'B3', evidence: '旧档中间缺了几页，断口很新' },
-          { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+          { id: 'B4', evidence: '县衙后门当晚抬出一口箱子' },
         ],
         missing: [],
         weak: [],
@@ -749,7 +757,7 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
     {
       content: JSON.stringify({
         action: 'append',
-        content: '庙门半掩，主角在门槛外停了停。\n\n' + segmentBody('第一组'),
+        content: segmentBody('第一组'),
         reason: '按节拍表写第一组',
         citations: [],
       }),
@@ -772,7 +780,7 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
           { id: 'B1', evidence: '庙门半掩，主角在门槛外停了停' },
           { id: 'B2', evidence: '他问庙祝照片上是谁，庙祝不答' },
           { id: 'B3', evidence: '旧档中间缺了几页，断口很新' },
-          { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+          { id: 'B4', evidence: '县衙后门当晚抬出一口箱子' },
         ],
         missing: [],
         weak: [],
@@ -937,7 +945,7 @@ test('分场 brief 进入规划 system 与写手组指令，且不改变原有�
           { id: 'B1', evidence: '庙门半掩' },
           { id: 'B2', evidence: '庙祝不答' },
           { id: 'B3', evidence: '旧档中间缺了几页' },
-          { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+          { id: 'B4', evidence: '县衙后门当晚抬出一口箱子' },
         ],
         missing: [],
         weak: [],
@@ -1012,9 +1020,9 @@ test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二�
     {
       content: JSON.stringify({
         covered: [
-          { id: 'B1', evidence: '第一组：进庙' },
-          { id: 'B2', evidence: '第一组：冲突' },
-          { id: 'B3', evidence: '第二组：旧档缺页' },
+          { id: 'B1', evidence: '庙门半掩' },
+          { id: 'B2', evidence: '庙祝不答' },
+          { id: 'B3', evidence: '旧档中间缺了几页' },
         ],
         missing: ['B4'],
         weak: [],
@@ -1037,9 +1045,9 @@ test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二�
     {
       content: JSON.stringify({
         covered: [
-          { id: 'B1', evidence: '第一组：进庙' },
-          { id: 'B2', evidence: '第一组：冲突' },
-          { id: 'B3', evidence: '重写版：旧档缺页' },
+          { id: 'B1', evidence: '庙门半掩' },
+          { id: 'B2', evidence: '庙祝不答' },
+          { id: 'B3', evidence: '旧档中间缺了几页' },
         ],
         missing: ['B4'],
         weak: [],
@@ -1466,7 +1474,7 @@ test('没有任何背景事实：首次出场章 beatCheck 标出尚未入库，
       { id: 'B1', evidence: '庙门半掩' },
       { id: 'B2', evidence: '庙祝不答' },
       { id: 'B3', evidence: '旧档中间缺了几页' },
-      { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+      { id: 'B4', evidence: '县衙后门当晚抬出一口箱子' },
     ],
     missing: [],
     weak: [],
@@ -1532,7 +1540,7 @@ test('首次出场缺少背景事实：beatCheck 标出、重写指令带事实�
       { id: 'B1', evidence: '庙门半掩' },
       { id: 'B2', evidence: '庙祝不答' },
       { id: 'B3', evidence: '旧档中间缺了几页' },
-      { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+      { id: 'B4', evidence: '县衙后门当晚抬出一口箱子' },
     ],
     missing: [],
     weak: [],

@@ -164,9 +164,14 @@ function validPlanJson() {
 /** 20 段 × 约 120 字，避免分段写作时触发续写。 */
 function segmentBody(label, extraParagraph = '') {
   const sentence = '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
+  // 自检 evidence 必须真的能在正文里找到，用例不能凭空写一句原句。
+  const anchors = {
+    2: '庙门半掩，主角在门槛外停了停。他问庙祝照片上是谁，庙祝不答。',
+    11: '旧档中间缺了几页，断口很新。',
+  };
   const rows = Array.from(
-    { length: 20 },
-    (_, i) => `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
+    { length: extraParagraph ? 19 : 20 },
+    (_, i) => anchors[i] || `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
   );
   if (extraParagraph) rows.push(extraParagraph);
   return rows.join('\n\n');
@@ -193,7 +198,7 @@ function planningQueue() {
         { id: 'B1', evidence: '曹操端坐堂上，众客屏息' },
         { id: 'B2', evidence: '他问庙祝照片上是谁' },
         { id: 'B3', evidence: '旧档中间缺了几页' },
-        { id: 'B4', evidence: '县衙后门抬出一口箱子' },
+        { id: 'B4', evidence: '县衙后门当晚抬出一口箱子' },
       ],
       missing: [],
       weak: [],

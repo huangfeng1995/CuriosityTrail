@@ -25,6 +25,8 @@ const {
   PLAN_PROMPT,
 } = require('../services/agent/beatPlan');
 
+const { buildSegmentInstruction } = require('../services/agent/segmentWriter');
+
 /**
  * 一份合格的四拍节拍表。段落合计 40（全章配额下限，对齐 5000 字长章）。
  */
@@ -86,6 +88,22 @@ function makePlan(overrides = {}) {
     ...overrides,
   };
 }
+
+/**
+ * 自检用例的正文：下面各条 evidence 都真的出现在这段文字里。
+ *
+ * 证据必须能在正文中找到（validateCoverage 会核对），所以用例不能只给
+ * 一句「B1 的正文原句」就断言覆盖——那正是「自证」的老毛病。
+ */
+const COVERAGE_BODY = [
+  '林砚在门槛外站了一会儿，才伸手推门。',
+  '老周不答，只说香案后头还有一箱旧档。',
+  'B1 的正文原句，写在第一段里。',
+  'B2 的正文原句，写在第二段里。',
+  'B3 的正文原句，写在第三段里。',
+  'B4 的正文原句，写在第四段里。',
+  '这是一段明显超过三十个字的证据'.repeat(3) + '。',
+].join('\n\n');
 
 /** 六拍功能表：默认覆盖六类，可替换 functions 以测缺类。 */
 function sixBeatFunctionPlan(functions = ['opening', 'discussion', 'identity', 'father', 'farewell', 'departure']) {
@@ -197,7 +215,8 @@ test('自检：模型漏报的拍要按节拍表补回 missing，并保留 30 �
       hookPresent: true,
       chapterGoalMet: false,
     },
-    plan
+    plan,
+    COVERAGE_BODY
   );
 
   assert.ok(coverage, '合法自检结果应当返回报告');
@@ -223,7 +242,8 @@ test('自检：没有证据的 covered 不算覆盖，证据超长会被截到 3
       missing: [],
       weak: [],
     },
-    plan
+    plan,
+    COVERAGE_BODY
   );
 
   assert.ok(coverage);
@@ -245,7 +265,8 @@ test('自检：covered 与 missing 自相矛盾时以 covered 为准', () => {
       missing: ['B2'],
       weak: [],
     },
-    plan
+    plan,
+    COVERAGE_BODY
   );
 
   assert.deepStrictEqual(coverage.missing, [], '已判 covered 的拍不能同时算缺失');
@@ -262,7 +283,8 @@ test('自检：weak 的拍既不算覆盖也不算缺失', () => {
       missing: [],
       weak: [{ id: 'B3', reason: '只有事件，没有写出信息变化' }],
     },
-    plan
+    plan,
+    COVERAGE_BODY
   );
 
   assert.deepStrictEqual(coverage.covered, ['B1', 'B2']);
@@ -280,14 +302,106 @@ test('自检：编造的 id 与坏输入一律忽略', () => {
       ],
       weak: [{ id: 'B9' }],
     },
-    plan
+    plan,
+    COVERAGE_BODY
   );
   assert.ok(coverage);
   assert.ok(!coverage.covered.includes('B9'), '不存在的 id 不能混进报告');
   assert.ok(!coverage.missing.includes('B9'));
 
-  assert.strictEqual(validateCoverage('不是 JSON', plan), null);
-  assert.strictEqual(validateCoverage({ covered: [] }, null), null);
+  assert.strictEqual(validateCoverage('不是 JSON', plan, COVERAGE_BODY), null);
+  assert.strictEqual(validateCoverage({ covered: [] }, null, COVERAGE_BODY), null);
+});
+
+test('自检：证据在正文里找不到时不算覆盖（模型编原句也挡得住）', () => {
+  const plan = validateBeatPlan(makePlan()).plan;
+
+  // 模型声称 B1 覆盖了，并给出一句「证据」；但这句在正文里根本不存在。
+  const coverage = validateCoverage(
+    {
+      covered: [
+        { id: 'B1', evidence: '林砚在门槛外站了一会儿，才伸手推门' },
+        { id: 'B2', evidence: '老周不答，只说香案后头还有一箱旧档' },
+      ],
+      missing: [],
+      weak: [],
+    },
+    plan,
+    '正文里只有庙门半掩，没有模型声称的那两句话。'
+  );
+
+  assert.deepStrictEqual(coverage.covered, [], '编造的证据不能算覆盖');
+  assert.deepStrictEqual(coverage.missing, ['B1', 'B2', 'B3', 'B4'], '未覆盖的拍要落回 missing');
+});
+
+test('自检：正文与证据只差空白时仍算覆盖', () => {
+  const plan = validateBeatPlan(makePlan()).plan;
+
+  const coverage = validateCoverage(
+    {
+      covered: [{ id: 'B1', evidence: '林砚在门槛外站了一会儿， 才伸手推门' }],
+      missing: [],
+      weak: [],
+    },
+    plan,
+    '林砚在门槛外站了一会儿，\n才伸手推门。'
+  );
+
+  assert.deepStrictEqual(coverage.covered, ['B1'], '换行/多空格不该把真证据判丢');
+});
+
+test('自检报告带上 avoidRepeat 与重演违规，交付时能看出它被用过', () => {
+  const plan = validateBeatPlan(
+    makePlan({ avoidRepeat: ['主角在城门口被拦下', '老周交出旧档'] })
+  ).plan;
+
+  const coverage = validateCoverage(
+    {
+      covered: [{ id: 'B1', evidence: 'B1 的正文原句' }],
+      missing: ['B2', 'B3', 'B4'],
+      weak: [],
+      repeatViolations: ['主角又在城门口被拦下'],
+    },
+    plan,
+    COVERAGE_BODY
+  );
+
+  assert.deepStrictEqual(coverage.avoidRepeat, ['主角在城门口被拦下', '老周交出旧档']);
+  assert.deepStrictEqual(coverage.repeatViolations, ['主角又在城门口被拦下']);
+});
+
+test('avoidRepeat 会写进分组起稿指令（写手真的能看到）', () => {
+  const plan = validateBeatPlan(
+    makePlan({ avoidRepeat: ['主角在城门口被拦下'] })
+  ).plan;
+  const group = {
+    index: 0,
+    isLast: false,
+    beatIds: ['B1', 'B2'],
+    beats: plan.beats.slice(0, 2),
+    targetChars: 2400,
+    targetParagraphs: 24,
+  };
+
+  const instruction = buildSegmentInstruction({ plan, group, groups: [group] });
+
+  assert.match(instruction, /本章不要重复的旧事件/, '要有独立的硬约束小节');
+  assert.match(instruction, /主角在城门口被拦下/, '具体旧事件要列出来');
+});
+
+test('规划提示词的段数区间与校验器一致（全章 20–80）', () => {
+  assert.match(PLAN_PROMPT, /每拍 3–12 段/, '单拍区间要写清楚');
+  assert.match(PLAN_PROMPT, /全章合计必须落在 20–80 段之间/, '总区间必须与校验器同口径');
+
+  // 校验器真的按 20–80 卡：8 拍 × 12 段 = 96 段要判废。
+  const tooMany = makePlan();
+  tooMany.beats = Array.from({ length: 8 }, (_, i) => ({
+    ...tooMany.beats[i % tooMany.beats.length],
+    id: `B${i + 1}`,
+    paragraphs: 12,
+  }));
+  const result = validateBeatPlan(tooMany);
+  assert.ok(result.errors.some((e) => /全章段落数必须在 20–80 之间/.test(e)), '超上限要被校验器挡下');
 });
 
 test('重写指令逐条列出缺失拍的要素，并要求重写全文', () => {
