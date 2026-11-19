@@ -1125,7 +1125,7 @@ body.ct-resizing * {
   margin-top: 3px;
 }
 
-/* 全书检查结果：按章分组，章内勾选后一次交给写手 */
+/* 全书检查结果：按章分组；每条结论自己处理，不再整章勾选 */
 .ct-issue-group {
   margin-bottom: 10px;
 }
@@ -1147,17 +1147,6 @@ body.ct-resizing * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ct-issue-group-link {
-  height: auto;
-  padding: 0 2px;
-  font-size: 12px;
-}
-.ct-issue-check {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  margin-top: 1px;
-}
 .ct-issue-quote {
   margin-top: 4px;
   padding-left: 6px;
@@ -1171,19 +1160,64 @@ body.ct-resizing * {
   overflow: hidden;
 }
 .ct-issue.is-adopted {
-  opacity: 0.72;
+  opacity: 0.62;
 }
 .ct-issue.is-adopted .ct-issue-title {
   text-decoration: line-through;
   text-decoration-color: var(--border-strong);
 }
-.ct-issue-batch {
-  position: sticky;
-  bottom: 0;
+
+/* 结论的出处 / 章节 / 定位状态。窄栏下允许换行，不横向溢出。 */
+.ct-issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-quaternary);
+}
+.ct-issue-source {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10.5px;
+  line-height: 16px;
+  color: var(--text-tertiary);
+}
+.ct-issue-source.is-cross_chapter {
+  border-color: var(--cinnabar-glow);
+  color: var(--cinnabar);
+}
+.ct-issue-where {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-issue-unlocatable {
+  flex: none;
+  color: var(--text-quaternary);
+}
+.ct-issue-jump {
+  height: auto !important;
+  padding: 0 2px !important;
+  font-size: 11px !important;
+  line-height: 1.5;
+}
+.ct-issue-ops {
   display: flex;
   justify-content: flex-end;
-  padding: 8px 0 2px;
-  background: var(--bg-container);
+  gap: 2px;
+  margin-top: 2px;
+}
+.ct-issue-ops .ant-btn {
+  height: var(--btn-h-xs) !important;
+  padding: 0 var(--btn-px-xs) !important;
+  font-size: 11.5px !important;
 }
 .ct-ai-progress {
   display: flex;
