@@ -19,6 +19,7 @@ import InspirationPanel from '../components/Sidebar/InspirationPanel';
 import PlotCardPanel from '../components/Sidebar/PlotCardPanel';
 import ConsistencyPanel from '../components/Sidebar/ConsistencyPanel';
 import PanelNav from '../components/Sidebar/PanelNav';
+import usePendingProposals from '../components/Sidebar/usePendingProposals';
 import api from '../api/client';
 
 /**
@@ -200,11 +201,22 @@ export default function Workspace() {
     };
   }, [work?.id, work?.template, chapter?.id]);
 
+  // 左栏三个卡片面板的「待确认」共用这一份数据：
+  // 角标、面板顶部列表、确认/丢弃后的刷新必须同源，否则会出现
+  // 「角标还有、点进去是空的」。
+  const { counts: proposalCounts, byKind: proposalsByKind } = usePendingProposals(work?.id);
+
   // 当前面板内容。key 变化时用 key 强制重挂载，配合 CSS 做淡入过渡。
   const panelContent = {
-    characters: <CharacterPanel workId={work?.id} />,
-    settings: <SettingPanel workId={work?.id} />,
-    plot: <PlotCardPanel workId={work?.id} chapters={chapters} />,
+    characters: <CharacterPanel workId={work?.id} proposals={proposalsByKind('character')} />,
+    settings: <SettingPanel workId={work?.id} proposals={proposalsByKind('setting')} />,
+    plot: (
+      <PlotCardPanel
+        workId={work?.id}
+        chapters={chapters}
+        proposals={proposalsByKind('plot')}
+      />
+    ),
     check: (
       <ConsistencyPanel
         workId={work?.id}
@@ -219,7 +231,15 @@ export default function Workspace() {
     <div className="ct-left-inner">
       <WorkTree currentWorkId={work?.id} currentChapterId={chapter?.id} />
       <div className="ct-divider" />
-      <PanelNav activeKey={panelKey} onChange={setPanelKey} />
+      <PanelNav
+        activeKey={panelKey}
+        onChange={setPanelKey}
+        badges={{
+          characters: proposalCounts.character,
+          settings: proposalCounts.setting,
+          plot: proposalCounts.plot,
+        }}
+      />
       <div className="ct-panel-body ct-panel-enter" key={panelKey}>
         {panelContent}
       </div>

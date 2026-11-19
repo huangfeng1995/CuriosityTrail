@@ -55,6 +55,7 @@ function toProposal(row) {
     sourceQuote: row.source_quote || '',
     status: row.status,
     cardId: row.card_id || '',
+    originRef: row.origin_ref || '',
     createdAt: row.created_at,
   };
 }
@@ -104,10 +105,29 @@ router.get('/', async (req, res) => {
 // POST /api/card-proposals/scan
 // ---------------------------------------------------------------------------
 router.post('/scan', async (req, res) => {
-  const workId = String((req.body || {}).workId || '').trim();
-  const chapterId = String((req.body || {}).chapterId || '').trim();
-  const blockId = String((req.body || {}).blockId || '').trim();
-  const text = String((req.body || {}).text || '');
+  const body = req.body || {};
+  const workId = String(body.workId || '').trim();
+  const chapterId = String(body.chapterId || '').trim();
+  const blockId = String(body.blockId || '').trim();
+  // 来源采纳：保存触发的扫描为空，采纳触发的扫描带消息 id。
+  // 撤销时按它作废这一轮 pending 提案。
+  const originRef = String(body.originRef || '').trim().slice(0, 200);
+
+  // 批量扫描：保存后可能一次改动多个 block。合并成一次识别，
+  // 再按 source_quote 回落到具体 block，避免一条请求一个模型调用。
+  const segments = Array.isArray(body.blocks)
+    ? body.blocks
+        .filter((b) => b && typeof b === 'object')
+        .map((b) => ({
+          blockId: String(b.blockId || '').trim(),
+          text: String(b.text || ''),
+        }))
+        .filter((b) => b.text.trim())
+        .slice(0, 20)
+    : [];
+  const text = segments.length
+    ? segments.map((s) => s.text).join('\n\n')
+    : String(body.text || '');
 
   // 识别失败必须静默：从这里开始，任何出口都返回 200
   const skip = (reason) => res.json({ proposals: [], skipped: true, reason });
@@ -136,25 +156,38 @@ router.post('/scan', async (req, res) => {
     );
     const pendingKeys = new Set(pending.map((p) => `${p.kind}:${p.title}`));
 
+    // 批量扫描时把提案落回真正含有证据的那个 block；找不到证据就归到首个 block。
+    const blockFor = (proposal) => {
+      if (!segments.length) return blockId || null;
+      const quote = String(proposal.source_quote || '').trim();
+      if (quote) {
+        const hit = segments.find((s) => s.text.includes(quote));
+        if (hit) return hit.blockId || null;
+      }
+      return segments[0].blockId || null;
+    };
+
     const inserted = [];
     for (const proposal of proposals) {
       const key = `${proposal.kind}:${proposal.title}`;
       if (pendingKeys.has(key)) continue;
       pendingKeys.add(key);
 
+      const proposalBlockId = blockFor(proposal);
       const id = crypto.randomUUID();
       const ts = now();
       await run(
         `INSERT INTO card_proposals
-           (id, user_id, work_id, chapter_id, block_id, kind, title, content,
+           (id, user_id, work_id, chapter_id, block_id, origin_ref, kind, title, content,
             payload, source_quote, status, card_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?)`,
         [
           id,
           req.userId,
           workId,
           chapterId || null,
-          blockId || null,
+          proposalBlockId,
+          originRef,
           proposal.kind,
           proposal.title,
           proposal.content,
@@ -168,7 +201,8 @@ router.post('/scan', async (req, res) => {
         id,
         workId,
         chapterId,
-        blockId,
+        blockId: proposalBlockId || '',
+        originRef,
         kind: proposal.kind,
         title: proposal.title,
         content: proposal.content,
@@ -385,6 +419,38 @@ router.post('/dismiss', async (req, res) => {
       [now(), ...ids, req.userId]
     );
     res.json({ dismissed: result.changes || 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/card-proposals/dismiss-source
+//
+// 作者撤销一次采纳时调用：把这次采纳产生的 pending 提案一并作废。
+// 已确认成卡的不回滚——作者是看着原句点的确认，撤销正文不代表那条设定不成立；
+// 返回 confirmed 数量，让前端能如实提示「已确认的 N 条保留」。
+// ---------------------------------------------------------------------------
+router.post('/dismiss-source', async (req, res) => {
+  const originRef = String((req.body || {}).originRef || '').trim();
+  if (!originRef) return res.status(400).json({ error: '缺少 originRef' });
+
+  try {
+    const kept = await get(
+      `SELECT COUNT(*) AS n FROM card_proposals
+       WHERE user_id = ? AND origin_ref = ? AND status = 'confirmed'`,
+      [req.userId, originRef]
+    );
+    const result = await run(
+      `UPDATE card_proposals
+       SET status = 'dismissed', updated_at = ?
+       WHERE user_id = ? AND origin_ref = ? AND status = 'pending'`,
+      [now(), req.userId, originRef]
+    );
+    res.json({
+      dismissed: result.changes || 0,
+      confirmed: (kept && kept.n) || 0,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

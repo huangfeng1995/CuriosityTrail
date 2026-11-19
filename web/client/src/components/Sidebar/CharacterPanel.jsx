@@ -5,6 +5,7 @@ import api from '../../api/client';
 import { useWorkspace } from '../../store/workspace';
 import useCardOccurrences from './useCardOccurrences';
 import { CardHitBadge, CardHitList } from './CardOccurrences';
+import PendingProposals from '../Assistant/PendingProposals';
 
 /** 别名串按作者常用的中英文标点拆开，与服务端匹配规则保持一致。 */
 function splitAliases(raw) {
@@ -23,7 +24,7 @@ function splitAliases(raw) {
  * 每张卡还显示本名和别名在正文里出现的章节：这是「这个角色到底写了多少」
  * 最直接的度量，也是改名时判断影响面的依据。
  */
-export default function CharacterPanel({ workId }) {
+export default function CharacterPanel({ workId, proposals = [] }) {
   const { chapter, loadChapter, dispatch } = useWorkspace();
   const [characters, setCharacters] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -188,6 +189,13 @@ export default function CharacterPanel({ workId }) {
 
   return (
     <div className="ct-panel">
+      <PendingProposals
+        proposals={proposals}
+        heading="待确认人物"
+        showKind={false}
+        variant="panel"
+      />
+
       <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
         <PlusOutlined />
         新建人物卡

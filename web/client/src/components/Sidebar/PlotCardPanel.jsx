@@ -12,6 +12,7 @@ import {
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import api from '../../api/client';
+import PendingProposals from '../Assistant/PendingProposals';
 
 /**
  * 情节卡。
@@ -39,7 +40,7 @@ const STATUS_OPTIONS = [
   { value: 'done', label: '已完成' },
 ];
 
-export default function PlotCardPanel({ workId, chapters = [] }) {
+export default function PlotCardPanel({ workId, chapters = [], proposals = [] }) {
   const [cards, setCards] = useState([]);
   const [scope, setScope] = useState('chapter');
   const [editing, setEditing] = useState(null);
@@ -131,6 +132,13 @@ export default function PlotCardPanel({ workId, chapters = [] }) {
 
   return (
     <div className="ct-panel">
+      <PendingProposals
+        proposals={proposals}
+        heading="待确认情节"
+        showKind={false}
+        variant="panel"
+      />
+
       <Segmented
         size="small"
         className="ct-scope-seg"

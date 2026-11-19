@@ -103,6 +103,16 @@ async function scan(workId, chapterId, text = APPLIED_TEXT, blockId = 'b1') {
   return res.json();
 }
 
+/** 批量扫描：一次带多个 block，带来源采纳。 */
+async function scanBlocks(body) {
+  const res = await server.request('/api/card-proposals/scan', {
+    method: 'POST',
+    body,
+  });
+  assert.strictEqual(res.status, 200, '识别接口无论成败都应返回 200');
+  return res.json();
+}
+
 test.before(async () => {
   await ready;
   fakeModel = await startFakeModel();
@@ -290,4 +300,100 @@ test('批量确认超过 5 条时拒绝', async () => {
   assert.strictEqual(res.status, 400);
   const data = await res.json();
   assert.match(data.error, /5/);
+});
+
+// ---------------------------------------------------------------------------
+// 6. 保存触发的批量扫描：多 block 合并识别，提案落回证据所在 block
+// ---------------------------------------------------------------------------
+
+test('批量扫描：多个 block 合并成一次识别，提案按证据落回各自 block 并带 originRef', async () => {
+  fakeModel.setDefault({ content: proposalJson() });
+
+  const { workId, chapterId } = await seedChapter();
+
+  const data = await scanBlocks({
+    workId,
+    chapterId,
+    originRef: 'msg-batch-1',
+    blocks: [
+      { blockId: 'b1', text: '林砚把伞靠在门边，抬头看见城隍庙的门槛上积着水。' },
+      { blockId: 'b2', text: '他在供桌下翻出一卷旧案，封皮上的字被潮气洇开了。' },
+    ],
+  });
+
+  assert.strictEqual(data.proposals.length, 3, '三个实体都应有提案');
+  for (const p of data.proposals) {
+    assert.strictEqual(p.originRef, 'msg-batch-1', '提案应记录来源采纳');
+  }
+
+  const byKind = Object.fromEntries(data.proposals.map((p) => [p.kind, p]));
+  assert.strictEqual(byKind.character.blockId, 'b1', '人物证据在 b1');
+  assert.strictEqual(byKind.setting.blockId, 'b1', '设定证据在 b1');
+  assert.strictEqual(byKind.plot.blockId, 'b2', '情节证据在 b2');
+});
+
+// ---------------------------------------------------------------------------
+// 7. 撤销连带作废：只作废本轮 pending，已确认的卡片不回滚
+// ---------------------------------------------------------------------------
+
+test('撤销采纳：本轮 pending 提案一并作废，已确认的卡片保留', async () => {
+  fakeModel.setDefault({ content: proposalJson() });
+
+  const { workId, chapterId } = await seedChapter();
+  const data = await scanBlocks({
+    workId,
+    chapterId,
+    originRef: 'msg-revert-1',
+    blocks: [
+      { blockId: 'b1', text: '林砚把伞靠在门边，抬头看见城隍庙的门槛上积着水。' },
+      { blockId: 'b2', text: '他在供桌下翻出一卷旧案，封皮上的字被潮气洇开了。' },
+    ],
+  });
+
+  const character = data.proposals.find((p) => p.kind === 'character');
+  const setting = data.proposals.find((p) => p.kind === 'setting');
+  const plot = data.proposals.find((p) => p.kind === 'plot');
+
+  // 作者已经确认了人物卡：撤稿不回滚这条已经点过的确认
+  const confirmRes = await server.request('/api/card-proposals/confirm', {
+    method: 'POST',
+    body: { ids: [character.id] },
+  });
+  assert.strictEqual(confirmRes.status, 200);
+
+  const res = await server.request('/api/card-proposals/dismiss-source', {
+    method: 'POST',
+    body: { originRef: 'msg-revert-1' },
+  });
+  assert.strictEqual(res.status, 200);
+  const result = await res.json();
+  assert.strictEqual(result.dismissed, 2, '两条 pending 应被作废');
+  assert.strictEqual(result.confirmed, 1, '已确认的应被保留并单独计数');
+
+  const rows = await all(
+    'SELECT id, status FROM card_proposals WHERE work_id = ?',
+    [workId]
+  );
+  const status = Object.fromEntries(rows.map((r) => [r.id, r.status]));
+  assert.strictEqual(status[character.id], 'confirmed', '已确认的提案状态不变');
+  assert.strictEqual(status[setting.id], 'dismissed');
+  assert.strictEqual(status[plot.id], 'dismissed');
+
+  const characterRow = await get(
+    'SELECT id FROM characters WHERE work_id = ? AND name = ?',
+    [workId, '林砚']
+  );
+  assert.ok(characterRow, '已确认的人物卡不能被撤稿回滚');
+
+  // 被作废的提案不能再被确认成卡
+  const lateConfirm = await server.request('/api/card-proposals/confirm', {
+    method: 'POST',
+    body: { ids: [setting.id] },
+  });
+  assert.strictEqual(lateConfirm.status, 200);
+  const late = await lateConfirm.json();
+  assert.ok(late.results[0].error, '被作废的提案应拒绝确认');
+
+  const settings = await all('SELECT id FROM settings WHERE work_id = ?', [workId]);
+  assert.strictEqual(settings.length, 0, '作废后不能留下设定卡');
 });

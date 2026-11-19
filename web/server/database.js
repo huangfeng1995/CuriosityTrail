@@ -37,8 +37,10 @@ let db = new sqlite3.Database(config.dbPath);
  *              知情待确认增加 source（candidate/model_only/rule），区分来路与低可信条目。
  * 版本 13 → 14：消息增加 status（complete/interrupted）。客户端断开时保留的半截正文
  *              按 interrupted 落库，与正常完成区分；老消息一律视为 complete。
+ * 版本 14 → 15：卡片提案增加 origin_ref（来源采纳）。撤销采纳时据此作废本轮
+ *              pending 提案，避免已撤销正文里的人物/设定被确认成卡。
  */
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 
 /**
  * 版本号之前的老库遗留表。
@@ -228,6 +230,10 @@ CREATE TABLE IF NOT EXISTS card_proposals (
   work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
   chapter_id   TEXT REFERENCES chapters(id) ON DELETE CASCADE,
   block_id     TEXT,
+  -- 哪一次「采纳」产生了这批提案（目前是消息 id）。
+  -- 作者撤销那段正文时按它把这一轮 pending 提案一并作废；
+  -- 已经确认成卡的不回滚——作者是看着原句点的确认，撤稿不代表那条设定不成立。
+  origin_ref   TEXT DEFAULT '',
   kind         TEXT NOT NULL CHECK (kind IN ('character','setting','plot')),
   title        TEXT NOT NULL,
   content      TEXT,
@@ -637,6 +643,9 @@ CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, upda
 const LATE_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_work_anchors_material
   ON work_anchors (work_id, source_material_id);
+-- v15：按来源采纳作废提案。老库这一列由 ensureColumn 补，索引必须在其后建。
+CREATE INDEX IF NOT EXISTS idx_card_proposals_origin
+  ON card_proposals (user_id, origin_ref, status);
 `;
 
 /** 需要 user_id 的业务表。 */
@@ -783,6 +792,8 @@ async function migrate(fromVersion) {
     await ensureColumn('settings', 'source_chapter_id', 'TEXT');
     await ensureColumn('settings', 'source_block_id', 'TEXT');
     await ensureColumn('plot_cards', 'source_block_id', 'TEXT');
+    // 14 → 15：提案记录来源采纳。老库补列后再建依赖它的索引（LATE_INDEXES）。
+    await ensureColumn('card_proposals', 'origin_ref', "TEXT NOT NULL DEFAULT ''");
     // 7 → 8：模板开关。SCHEMA 已含该列，老库必须单独补。
     await ensureColumn('works', 'template', "TEXT NOT NULL DEFAULT ''");
     // 8 → 9：人物卡四列。老行保持 NULL，formatCharacter 不会输出空标签。

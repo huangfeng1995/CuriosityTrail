@@ -7,6 +7,12 @@ import { streamPost } from '../../api/sse';
 import { createBlock } from '../Editor/blocks';
 import { assessRewrite } from '../Editor/writebackGuard';
 import { planApply } from './applyPlan';
+import {
+  scanAdoptedBlock,
+  dismissProposalsFrom,
+  markBlockScanned,
+  dropBlockScan,
+} from './proposalScan';
 import { collectCriticFindings, sendAdoptionBatch } from './findings';
 import {
   saveChapterConversation,
@@ -705,23 +711,17 @@ export default function AssistantSidebar() {
 
       // 卡片沉淀：正文落地后异步识别这一段里的新人物/新设定/新情节。
       // 不 await、不报错——识别失败绝不能打断写作。
+      // originRef 记下这条消息：撤销时按它把这一轮还没确认的提案一起作废。
       if (work?.id && chapter?.id && plan.text) {
-        fetch('/api/card-proposals/scan', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            workId: work.id,
-            chapterId: chapter.id,
-            blockId: appliedBlockId,
-            text: plan.text,
-          }),
-        })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((data) => {
-            if (data?.proposals?.length) setProposalRefresh((n) => n + 1);
-          })
-          .catch(() => {});
+        scanAdoptedBlock({
+          workId: work.id,
+          chapterId: chapter.id,
+          blockId: appliedBlockId,
+          text: plan.text,
+          originRef: msg.id,
+        }).then((data) => {
+          if (data?.proposals?.length) setProposalRefresh((n) => n + 1);
+        });
       }
     },
     [blocks, updateBlock, insertBlock, dispatch, toast, work, chapter]
@@ -743,11 +743,25 @@ export default function AssistantSidebar() {
 
       if (msg.snapshot.inserted) {
         removeBlock(msg.snapshot.id);
+        // 整块删掉，扫描基线也一并丢掉
+        dropBlockScan(chapter?.id, msg.snapshot.id);
       } else {
         updateBlock(msg.snapshot.id, { content: msg.snapshot.content });
+        // 正文退回原样：这段的扫描基线也退回去，保存时不会把旧文再识别一遍
+        markBlockScanned(chapter?.id, msg.snapshot.id, msg.snapshot.content);
       }
       dispatch({ type: 'message/update', id: msg.id, patch: { applied: false } });
       toast.info('已撤销');
+
+      // 撤销连带作废：这一轮采纳产生的、还没确认的提案不能再被确认成卡。
+      // 已经确认过的不回滚——作者是看着原句点的确认，撤稿不代表那条设定不成立。
+      // dismissProposalsFrom 会等这一轮识别落地再作废：识别要几秒，
+      // 直接发出去会「作废 0 条」，几秒后提案又冒出来。
+      if (msg.id) {
+        dismissProposalsFrom(msg.id).then((data) => {
+          if (data?.dismissed) setProposalRefresh((n) => n + 1);
+        });
+      }
     },
     [updateBlock, removeBlock, dispatch, toast, chapter]
   );

@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import api from '../api/client';
 import { convertBlock as convertBlockData, splitBlockForMark } from '../components/Editor/blocks';
+import { resetScanBaseline, scheduleBlockScan } from '../components/Assistant/proposalScan';
 
 /**
  * 工作区全局状态。
@@ -271,6 +272,13 @@ export function WorkspaceProvider({ children }) {
     try {
       await api.put(`/chapters/${chapterId}`, { blocks });
       dispatch({ type: 'save/status', status: 'saved' });
+
+      // 保存后增量识别：只送这次改动的 block，debounce 后异步发。
+      // 不 await——识别失败或慢都不能拖住保存状态。
+      const workId = stateRef.current.work?.id;
+      if (workId) {
+        scheduleBlockScan({ workId, chapterId, blocks });
+      }
       return true;
     } catch (e) {
       dispatch({
@@ -535,10 +543,17 @@ export function WorkspaceProvider({ children }) {
         await flushPending();
         if (seq !== loadSeqRef.current) return null;
 
+        const blocks = parseBlocks(chapter.blocks);
         dispatch({
           type: 'chapter/loaded',
           chapter,
-          blocks: parseBlocks(chapter.blocks),
+          blocks,
+        });
+        // 刚拉下来的整章记为扫描基线：不能把已有正文当成「本次改动」再识别一遍
+        resetScanBaseline({
+          workId: stateRef.current.work?.id,
+          chapterId,
+          blocks,
         });
         lastEditRef.current = null;
         return chapter;

@@ -7,6 +7,7 @@ import { useWorkspace } from '../../store/workspace';
 import useCardOccurrences from './useCardOccurrences';
 import { CardHitBadge, CardHitList } from './CardOccurrences';
 import SettingTable from './SettingTable';
+import PendingProposals from '../Assistant/PendingProposals';
 import { EMPTY_TABLE, mergeTable, splitContent } from './tableModel';
 
 export const SETTING_CATEGORIES = ['地理', '历史', '组织', '规则', '物品', '种族', '其他'];
@@ -20,7 +21,7 @@ export const SETTING_CATEGORIES = ['地理', '历史', '组织', '规则', '物�
  * 每条设定还会显示「正文里出现过几章几处」：设定不是写完就完事的东西，
  * 作者需要知道这个名字到底在稿子里扎了多深，后续改动影响面有多大。
  */
-export default function SettingPanel({ workId }) {
+export default function SettingPanel({ workId, proposals = [] }) {
   const { chapter, loadChapter, dispatch } = useWorkspace();
   const [settings, setSettings] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -179,6 +180,13 @@ export default function SettingPanel({ workId }) {
 
   return (
     <div className="ct-panel">
+      <PendingProposals
+        proposals={proposals}
+        heading="待确认设定"
+        showKind={false}
+        variant="panel"
+      />
+
       <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
         <PlusOutlined />
         新建设定

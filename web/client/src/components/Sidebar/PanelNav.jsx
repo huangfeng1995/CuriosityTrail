@@ -28,11 +28,12 @@ const PANELS = [
   { key: 'inspirations', label: '灵感', icon: <BulbOutlined /> },
 ];
 
-export default function PanelNav({ activeKey, onChange }) {
+export default function PanelNav({ activeKey, onChange, badges = {} }) {
   return (
     <nav className="ct-panel-nav" role="tablist" aria-label="作品资料面板">
       {PANELS.map((p) => {
         const active = p.key === activeKey;
+        const count = Number(badges[p.key] || 0);
         return (
           <button
             key={p.key}
@@ -40,9 +41,19 @@ export default function PanelNav({ activeKey, onChange }) {
             aria-selected={active}
             className={`ct-panel-tab${active ? ' is-active' : ''}`}
             onClick={() => onChange(p.key)}
-            title={p.label}
+            title={count > 0 ? `${p.label}（${count} 条待确认）` : p.label}
           >
-            <span className="ct-panel-tab-icon">{p.icon}</span>
+            <span className="ct-panel-tab-icon">
+              {p.icon}
+              {count > 0 && (
+                <span
+                  className="ct-panel-tab-badge"
+                  aria-label={`${count} 条待确认`}
+                >
+                  {count > 99 ? '99+' : count}
+                </span>
+              )}
+            </span>
             <span className="ct-panel-tab-label">{p.label}</span>
           </button>
         );

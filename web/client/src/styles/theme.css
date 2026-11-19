@@ -668,6 +668,24 @@ body.ct-resizing * {
   font-size: 15px;
   line-height: 1;
   display: inline-flex;
+  position: relative;
+}
+/* 待确认角标：Author 不用点开面板也知道这里有东西等他处理 */
+.ct-panel-tab-badge {
+  position: absolute;
+  top: -6px;
+  right: -9px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  font-weight: 500;
+  text-align: center;
+  pointer-events: none;
 }
 .ct-panel-tab-label {
   white-space: nowrap;
@@ -2588,6 +2606,20 @@ body.ct-resizing * {
   display: flex;
   gap: 6px;
   margin-top: 4px;
+}
+/* 左栏面板里的待确认区：和上方新建按钮、下方卡片列表分开，像一个临时收件箱 */
+.ct-card-props.is-in-panel {
+  margin: 2px 0 8px;
+  max-height: 260px;
+  border: 1px solid var(--border-faint);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+}
+.ct-card-props.is-in-panel .ct-card-props-head {
+  padding: 7px 10px 4px;
+}
+.ct-card-props.is-in-panel .ct-card-props-row {
+  padding: 6px 10px 8px;
 }
 
 /* ---------- 历史对话 ---------- */
