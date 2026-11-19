@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Popover } from 'antd';
 import { CheckOutlined, RollbackOutlined } from '@ant-design/icons';
 import { REASON_LABEL } from './findings';
@@ -142,8 +142,28 @@ export default function ActionCard({
     );
   };
 
+  // 正文改动会把已勾选的意见变成失效（引文找不到了）。
+  // 失效条目不能再被采纳，所以状态一变就把它们从勾选里剔除——
+  // 否则行上已经没有勾选框，底部还显示「采纳选中（1）」，一点就把
+  // 一条不存在的原文发给写手。
+  const staleSignature = findings
+    .filter((finding) => finding.status === 'stale')
+    .map((finding) => finding.key)
+    .join('|');
+
+  useEffect(() => {
+    if (!staleSignature) return;
+    const staleKeys = new Set(staleSignature.split('|'));
+    setSelectedKeys((prev) => {
+      const next = prev.filter((key) => !staleKeys.has(key));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [staleSignature]);
+
+  // 采纳只算仍然可定位、且未被采纳的条目。
   const selected = visibleFindings.filter(
-    (f) => selectedKeys.includes(f.key) && !adopted.has(f.key)
+    (f) =>
+      f.status !== 'stale' && selectedKeys.includes(f.key) && !adopted.has(f.key)
   );
 
   const adoptSelected = async () => {

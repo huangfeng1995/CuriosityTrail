@@ -297,6 +297,21 @@ export function WorkspaceProvider({ children }) {
     }
   }, [persist]);
 
+  /**
+   * 丢掉挂在某一章名下、还没落库的快照。
+   *
+   * 章节被删之后必须调用：防抖定时器仍会在 800ms 后把这份快照 PUT 到
+   * 已经不存在的章节 id 上，除了报「自动保存失败」，切到下一章时
+   * loadChapter 还会再 flush 一次，同一个错误重复出现。
+   */
+  const dropPending = useCallback((chapterId) => {
+    if (pendingRef.current && pendingRef.current.chapterId === chapterId) {
+      pendingRef.current = null;
+      dirtyRef.current = false;
+      clearTimeout(timerRef.current);
+    }
+  }, []);
+
   useEffect(() => {
     if (!dirtyRef.current) return;
     const { chapter, blocks } = stateRef.current;
@@ -555,6 +570,7 @@ export function WorkspaceProvider({ children }) {
       loadWork,
       loadChapter,
       renameChapter,
+      dropPending,
     }),
     [
       state,
@@ -571,6 +587,7 @@ export function WorkspaceProvider({ children }) {
       loadWork,
       loadChapter,
       renameChapter,
+      dropPending,
     ]
   );
 

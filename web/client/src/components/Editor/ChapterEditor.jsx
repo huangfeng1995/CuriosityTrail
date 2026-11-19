@@ -581,10 +581,20 @@ export default function ChapterEditor() {
   }, [chapter?.id]);
 
   // 撤销/重做快捷键。Cmd+Z 撤销，Cmd+Shift+Z 与 Cmd+Y 重做。
+  //
+  // 只接管正文里的按键：焦点在 AI 提问框、章节标题、搜索框等输入控件时
+  // 放行浏览器原生撤销，否则作者在提问框里按 ⌘Z，撤掉的是小说正文。
   useEffect(() => {
     const onKeyDown = (e) => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
+      const target = e.target;
+      const inManuscript = !!target?.closest?.('.ct-editor-blocks');
+      const isField =
+        target?.isContentEditable ||
+        /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || '');
+      if (isField && !inManuscript) return;
+
       const key = e.key.toLowerCase();
       if (key === 'z') {
         e.preventDefault();

@@ -162,9 +162,40 @@ export default function WorkTree({ currentWorkId, currentChapterId }) {
 }
 
 function ChapterList({ workId, currentChapterId }) {
-  const { chapters, loadChapter, loadWork, renameChapter } = useWorkspace();
+  const { chapters, loadChapter, loadWork, renameChapter, dispatch, dropPending } =
+    useWorkspace();
 
   const list = chapters.filter((c) => c.work_id === workId);
+
+  const deleteChapter = (chapter) => {
+    Modal.confirm({
+      title: `删除「${chapter.title}」？`,
+      content: '这一章会删除，无法恢复。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await api.delete(`/chapters/${chapter.id}`);
+        } catch (e) {
+          message.error(e.response?.data?.error || '删除章节失败');
+          return;
+        }
+        // 这一章的待存快照必须一起丢掉：防抖保存会继续 PUT 到已删除的 id。
+        dropPending(chapter.id);
+        await loadWork(workId);
+        if (chapter.id !== currentChapterId) return;
+
+        // 正在编辑的章被删掉：先清空编辑器，再切到原位置的后一章
+        // （删的是最后一章就用前一章；一章不剩就停在空态）。
+        const index = chapters.findIndex((c) => c.id === chapter.id);
+        const rest = chapters.filter((c) => c.id !== chapter.id);
+        const next = rest[index] || rest[index - 1] || null;
+        dispatch({ type: 'chapter/loaded', chapter: null, blocks: [] });
+        if (next) await loadChapter(next.id);
+      },
+    });
+  };
 
   return (
     <div className="ct-tree-children">
@@ -214,10 +245,7 @@ function ChapterList({ workId, currentChapterId }) {
                   icon: <DeleteOutlined />,
                   label: '删除',
                   danger: true,
-                  onClick: async () => {
-                    await api.delete(`/chapters/${chapter.id}`);
-                    await loadWork(workId);
-                  },
+                  onClick: () => deleteChapter(chapter),
                 },
               ],
             }}
