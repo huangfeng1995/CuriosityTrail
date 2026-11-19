@@ -150,6 +150,36 @@ html[data-theme='dark'] {
 }
 
 /* ============================================================
+   按钮体系
+   ------------------------------------------------------------
+   三档尺寸：标准 32 / 紧凑 28 / 迷你 24。
+   三档层级：主（墨实底）· 次（纸底细线）· 文字（无底无边）。
+   危险操作默认只用朱砂描边与文字，不再整块铺朱砂；
+   只有「删除」这类不可逆确认才用朱砂实底。
+   尺寸与配色都从这里取值，局部不再各写一套。
+   ============================================================ */
+:root {
+  --btn-h: 32px;
+  --btn-h-sm: 28px;
+  --btn-h-xs: 24px;
+
+  --btn-r: 7px;
+  --btn-r-sm: 6px;
+  --btn-r-xs: 5px;
+
+  --btn-px: 14px;
+  --btn-px-sm: 10px;
+  --btn-px-xs: 8px;
+
+  --btn-fs: 13px;
+  --btn-fs-sm: 12.5px;
+  --btn-fs-xs: 12px;
+
+  --btn-line: 1px solid var(--border-strong);
+  --btn-disabled-opacity: 0.45;
+}
+
+/* ============================================================
    全局基底
    ============================================================ */
 * {
@@ -407,13 +437,14 @@ body {
   width: 32px;
   height: 32px;
   padding: 0 !important;
+  border-radius: var(--btn-r-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .ct-icon-btn:hover {
-  color: var(--accent) !important;
-  background: var(--accent-dim) !important;
+  color: var(--text-primary) !important;
+  background: var(--bg-hover) !important;
 }
 
 /* 普通页面容器：居中 + 留白 */
@@ -644,11 +675,11 @@ body.ct-resizing * {
   gap: 4px;
   padding: 7px 2px 6px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--btn-r-sm);
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 1.3;
   cursor: pointer;
   transition:
@@ -662,7 +693,7 @@ body.ct-resizing * {
 .ct-panel-tab.is-active {
   background: var(--accent-dim);
   color: var(--accent);
-  font-weight: 500;
+  font-weight: 600;
 }
 .ct-panel-tab-icon {
   font-size: 15px;
@@ -765,7 +796,7 @@ body.ct-resizing * {
 }
 .ct-check-actions .ant-btn {
   flex: 1;
-  padding-inline: 8px;
+  padding-inline: var(--btn-px-xs) !important;
 }
 
 /* 面板内加载态 */
@@ -787,21 +818,22 @@ body.ct-resizing * {
 }
 
 /* 新建按钮：虚线幽灵按钮，明确是"入口"而不是普通按钮。
-   圆角、内边距与分段控件、卡片统一成 7px / 8px 10px；
-   hover 只提亮边框和文字，不整块填色。 */
+   尺寸走紧凑档（28 / 6 / 10 / 12.5），与面板里的迷你按钮区分；
+   hover 只换纸色和字色，不染朱砂。 */
 .ct-add-btn {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 8px 10px;
+  min-height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   margin-bottom: 10px;
   border: 1px dashed var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--btn-r-sm);
   background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--btn-fs-sm);
   line-height: 1.45;
   cursor: pointer;
   transition:
@@ -815,12 +847,12 @@ body.ct-resizing * {
   transition: color 0.18s ease;
 }
 .ct-add-btn:hover {
-  border-color: var(--cinnabar-glow);
-  background: var(--accent-dim);
-  color: var(--accent);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .ct-add-btn:hover .anticon {
-  color: var(--accent);
+  color: var(--text-secondary);
 }
 
 /* 分段控件（按章节 / 全部）：跟内容宽度走，不再拉满整栏。
@@ -829,7 +861,7 @@ body.ct-resizing * {
   margin-bottom: 10px;
 }
 .ct-scope-seg .ant-segmented {
-  border-radius: 7px;
+  border-radius: var(--btn-r-sm) !important;
 }
 
 /* 条目行：hover 才显出操作按钮，避免视觉噪音 */
@@ -906,15 +938,15 @@ body.ct-resizing * {
   opacity: 1;
 }
 .ct-item-act {
-  width: 24px;
-  height: 24px;
+  width: var(--btn-h-xs);
+  height: var(--btn-h-xs);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
   background: transparent;
   color: var(--text-quaternary);
-  border-radius: 5px;
+  border-radius: var(--btn-r-xs);
   font-size: 12px;
   cursor: pointer;
   padding: 0;
@@ -941,7 +973,7 @@ body.ct-resizing * {
   font-size: 11px;
   line-height: 20px;
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--btn-r-xs);
   color: var(--text-tertiary);
 }
 .ct-item-act.ct-status.status-doing {
@@ -1420,9 +1452,9 @@ body.ct-resizing * {
   gap: 10px;
 }
 .ct-citation-actions .ant-btn-link {
-  font-size: 12px;
-  padding: 0;
-  height: auto;
+  font-size: 12px !important;
+  padding: 0 !important;
+  height: auto !important;
 }
 .ct-citation-link {
   font-size: 12px;
@@ -2241,9 +2273,9 @@ body.ct-resizing * {
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-quaternary);
-  border-radius: 4px;
-  width: 26px;
-  height: 24px;
+  border-radius: var(--btn-r-xs);
+  width: var(--btn-h-xs);
+  height: var(--btn-h-xs);
   cursor: pointer;
   padding: 0;
   display: inline-flex;
@@ -2258,16 +2290,16 @@ body.ct-resizing * {
 }
 .ct-block-btn:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--border);
+  border-color: transparent;
   color: var(--text-primary);
 }
 .ct-block-btn:disabled {
-  opacity: 0.3;
+  opacity: var(--btn-disabled-opacity);
   cursor: not-allowed;
 }
 .ct-block-btn.is-danger:hover {
   background: var(--cinnabar-dim);
-  border-color: var(--cinnabar-glow);
+  border-color: transparent;
   color: var(--cinnabar);
 }
 
@@ -2432,10 +2464,11 @@ body.ct-resizing * {
   background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--btn-fs-xs);
   line-height: 1;
-  padding: 6px 9px;
-  border-radius: 5px;
+  height: var(--btn-h-xs);
+  padding: 0 var(--btn-px-xs);
+  border-radius: var(--btn-r-xs);
   cursor: pointer;
   white-space: nowrap;
   transition:
@@ -2447,7 +2480,7 @@ body.ct-resizing * {
   color: var(--text-primary);
 }
 .ct-inline-btn:disabled {
-  opacity: 0.45;
+  opacity: var(--btn-disabled-opacity);
   cursor: not-allowed;
 }
 /* 正在跑的那个动作：动作名留在原位占住宽度，加载态叠上去。
@@ -2526,31 +2559,30 @@ body.ct-resizing * {
   }
 }
 .ct-chip {
-  border: 1px solid var(--border-strong);
+  border: var(--btn-line);
   background: transparent;
   color: var(--text-tertiary);
-  border-radius: 20px;
-  padding: 3px 11px;
-  font-size: 12px;
+  border-radius: 999px;
+  height: var(--btn-h-xs);
+  padding: 0 10px;
+  font-size: var(--btn-fs-xs);
   font-family: inherit;
   cursor: pointer;
   transition:
     background-color 0.18s ease,
     color 0.18s ease,
-    border-color 0.18s ease,
-    transform 0.18s ease;
+    border-color 0.18s ease;
 }
 .ct-chip:hover:not(:disabled) {
-  background: var(--accent-dim);
-  border-color: var(--cinnabar-glow);
-  color: var(--accent);
-  transform: translateY(-1px);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
 }
 .ct-chip:active:not(:disabled) {
-  transform: translateY(0);
+  background: var(--bg-sunken);
 }
 .ct-chip:disabled {
-  opacity: 0.45;
+  opacity: var(--btn-disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -2875,13 +2907,14 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 1px 6px;
+  height: 20px;
+  padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   font-size: 11px;
   font-family: inherit;
-  line-height: 1.7;
+  line-height: 1;
   color: var(--text-quaternary);
   cursor: pointer;
   transition:
@@ -2890,17 +2923,18 @@ body.ct-resizing * {
     background-color 0.18s ease;
 }
 .ct-msg-remember:hover {
-  color: var(--accent);
-  border-color: var(--cinnabar-glow);
-  background: var(--accent-dim);
+  color: var(--text-secondary);
+  border-color: transparent;
+  background: var(--bg-hover);
 }
 .ct-msg-remember:disabled {
   cursor: default;
-  opacity: 0.6;
+  opacity: var(--btn-disabled-opacity);
 }
 .ct-msg-remember.is-on {
   color: var(--accent);
   border-color: var(--cinnabar-glow);
+  background: var(--accent-dim);
   cursor: default;
 }
 
@@ -3191,22 +3225,25 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  height: 20px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-quaternary);
-  border-radius: 5px;
-  padding: 1px 6px;
+  border-radius: 4px;
+  padding: 0 6px;
   font-size: 11px;
   font-family: inherit;
   cursor: pointer;
   flex-shrink: 0;
   transition:
     color 0.18s ease,
-    border-color 0.18s ease;
+    border-color 0.18s ease,
+    background-color 0.18s ease;
 }
 .ct-memory-exclude:hover {
-  color: var(--accent);
-  border-color: var(--cinnabar-glow);
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
 }
 .ct-memory-preview {
   margin-top: 3px;
@@ -3223,9 +3260,9 @@ body.ct-resizing * {
   border-top: 1px solid var(--border-faint);
 }
 .ct-memory-actions .ant-btn {
-  padding-inline: 0;
-  font-size: 12px;
-  color: var(--accent);
+  padding-inline: 0 !important;
+  font-size: 12px !important;
+  color: var(--text-secondary) !important;
 }
 
 /* 工具过程条：AI 这次现查了什么，与记忆面板同视觉语言但语义不同 */
@@ -3328,12 +3365,31 @@ body.ct-resizing * {
   padding-top: 2px;
 }
 /* 这一行里的 antd 按钮（发送 / 更多）跟自绘的「停止」同高同圆角，
-   切换状态时按钮不会忽大忽小。 */
+   走紧凑档：28 / 6 / 10 / 12.5。 */
 .ct-ai-actions .ant-btn {
-  height: 28px;
-  padding-inline: 12px;
-  border-radius: 7px;
-  font-size: 12.5px;
+  height: var(--btn-h-sm) !important;
+  padding-inline: var(--btn-px-sm) !important;
+  border-radius: var(--btn-r-sm) !important;
+  font-size: var(--btn-fs-sm) !important;
+}
+/* 发送/更多在模板里是 size="small"，这里要压过迷你档，才和「停止」同高 */
+.ct-ai-actions .ant-btn.ant-btn-sm {
+  height: var(--btn-h-sm) !important;
+  padding: 0 var(--btn-px-sm) !important;
+  border-radius: var(--btn-r-sm) !important;
+  font-size: var(--btn-fs-sm) !important;
+}
+/* 主按钮带图标时 antd 会再加一层内边距，这里把左右拉回紧凑档 */
+.ct-ai-actions .ant-btn.ant-btn-sm.ant-btn-primary {
+  padding-inline: var(--btn-px-sm) !important;
+}
+.ct-ai-actions .ant-btn.ant-btn-icon-only {
+  width: var(--btn-h-sm) !important;
+}
+/* antd 给 icon-only 的通用宽度优先级更高，这里再压一次，保持 28×28 */
+.ct-ai-actions .ant-btn.ant-btn-sm.ant-btn-icon-only {
+  width: var(--btn-h-sm) !important;
+  padding: 0 !important;
 }
 
 /* 生成中的「停止」。
@@ -3345,14 +3401,14 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  border: var(--btn-line);
+  border-radius: var(--btn-r-sm);
   background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--btn-fs-sm);
   line-height: 1;
   cursor: pointer;
   transition:
@@ -3362,21 +3418,17 @@ body.ct-resizing * {
 }
 .ct-ai-stop:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--text-quaternary);
+  border-color: var(--border-strong);
   color: var(--text-primary);
 }
 /* 按下只压底色，不做位移/缩放，按钮不会"跳"一下 */
 .ct-ai-stop:active:not(:disabled) {
   background: var(--bg-sunken);
-  border-color: var(--text-tertiary);
-}
-.ct-ai-stop:focus-visible {
-  outline: 2px solid var(--cinnabar-glow);
-  outline-offset: 1px;
+  border-color: var(--border-strong);
 }
 .ct-ai-stop:disabled {
   cursor: default;
-  color: var(--text-tertiary);
+  opacity: var(--btn-disabled-opacity);
 }
 .ct-ai-stop-glyph {
   width: 7px;
@@ -3395,12 +3447,12 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
-  padding: 0 12px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border: 1px dashed var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--btn-r-sm);
   color: var(--text-tertiary);
-  font-size: 12.5px;
+  font-size: var(--btn-fs-sm);
   line-height: 1;
   animation: ct-fade-in 0.2s ease both;
 }
@@ -3668,46 +3720,171 @@ body.ct-resizing * {
   font-weight: 600;
 }
 
-/* 按钮：主按钮朱砂 */
-.ant-btn-primary {
-  background: var(--cinnabar) !important;
-  border-color: var(--cinnabar) !important;
+/* ============================================================
+   按钮：antd 与自绘共用一套尺寸和层级
+   ------------------------------------------------------------
+   标准 32 / 紧凑 28 / 迷你 24；圆角 7 / 6 / 5。
+   主按钮是墨实底（夜间自动反转为纸色底），朱砂只留给
+   危险确认与焦点环，不再让每个「保存/发送」都抢视线。
+   ============================================================ */
+.ant-btn {
+  height: var(--btn-h) !important;
+  padding: 0 var(--btn-px) !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--btn-r) !important;
+  font-family: inherit;
+  font-size: var(--btn-fs) !important;
+  font-weight: 500 !important;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   box-shadow: none !important;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
 }
-.ant-btn-primary:hover:not(:disabled) {
-  background: var(--cinnabar-bright) !important;
-  border-color: var(--cinnabar-bright) !important;
+.ant-btn.ant-btn-sm {
+  height: var(--btn-h-xs) !important;
+  padding: 0 var(--btn-px-xs) !important;
+  border-radius: var(--btn-r-xs) !important;
+  font-size: var(--btn-fs-xs) !important;
 }
-.ant-btn-primary:disabled {
-  background: var(--cinnabar) !important;
-  border-color: var(--cinnabar) !important;
-  opacity: 0.45;
+.ant-btn.ant-btn-icon-only {
+  width: var(--btn-h) !important;
+  padding-inline: 0 !important;
 }
+.ant-btn.ant-btn-sm.ant-btn-icon-only {
+  width: var(--btn-h-xs) !important;
+}
+
+/* 主按钮：墨实底，纸白字。比朱砂安静，仍是页面上最重的一档。 */
+.ant-btn-primary {
+  background: var(--ink-0) !important;
+  border-color: var(--ink-0) !important;
+  color: var(--paper-0) !important;
+}
+.ant-btn-primary:not(:disabled):hover {
+  background: var(--ink-1) !important;
+  border-color: var(--ink-1) !important;
+  color: var(--paper-0) !important;
+}
+.ant-btn-primary:not(:disabled):active {
+  background: var(--ink-2) !important;
+  border-color: var(--ink-2) !important;
+  color: var(--paper-0) !important;
+}
+
+/* 次按钮：纸底 + 一道细线，悬停只换纸色，不染朱砂。 */
 .ant-btn-default {
   background: transparent !important;
   border-color: var(--border-strong) !important;
   color: var(--text-secondary) !important;
 }
-.ant-btn-default:hover:not(:disabled) {
-  border-color: var(--accent) !important;
-  color: var(--accent) !important;
-  background: var(--cinnabar-dim) !important;
+.ant-btn-default:not(:disabled):hover {
+  background: var(--bg-hover) !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text-primary) !important;
 }
+.ant-btn-default:not(:disabled):active {
+  background: var(--bg-sunken) !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text-primary) !important;
+}
+
+/* 文字按钮：没有底也没有边，层级最低。 */
 .ant-btn-text {
+  background: transparent !important;
+  border-color: transparent !important;
   color: var(--text-tertiary) !important;
 }
-.ant-btn-text:hover:not(:disabled) {
-  color: var(--accent) !important;
-  background: var(--cinnabar-dim) !important;
+.ant-btn-text:not(:disabled):hover {
+  background: var(--bg-hover) !important;
+  border-color: transparent !important;
+  color: var(--text-primary) !important;
 }
+.ant-btn-text:not(:disabled):active {
+  background: var(--bg-sunken) !important;
+  color: var(--text-primary) !important;
+}
+
+/* 链接按钮：只用于「全部确认」这类行内入口。 */
 .ant-btn-link {
+  background: transparent !important;
+  border-color: transparent !important;
   color: var(--accent) !important;
 }
-.ant-btn-link:hover:not(:disabled) {
-  color: var(--cinnabar-bright) !important;
+.ant-btn-link:not(:disabled):hover {
+  background: transparent !important;
+  color: var(--accent-bright) !important;
+  text-decoration: underline;
+}
+
+/* 危险：默认描边 + 朱砂字；只有确认删除才允许实底。 */
+.ant-btn-dangerous {
+  background: transparent !important;
+  border-color: var(--cinnabar-glow) !important;
+  color: var(--cinnabar) !important;
+}
+.ant-btn-dangerous:not(:disabled):hover {
+  background: var(--cinnabar-dim) !important;
+  border-color: var(--cinnabar) !important;
+  color: var(--cinnabar) !important;
+}
+.ant-btn-dangerous:not(:disabled):active {
+  background: var(--cinnabar-glow) !important;
+  border-color: var(--cinnabar) !important;
+  color: var(--cinnabar) !important;
 }
 .ant-btn-dangerous.ant-btn-primary {
   background: var(--cinnabar) !important;
+  border-color: var(--cinnabar) !important;
+  color: var(--paper-0) !important;
+}
+.ant-btn-dangerous.ant-btn-primary:not(:disabled):hover {
+  background: var(--cinnabar-bright) !important;
+  border-color: var(--cinnabar-bright) !important;
+  color: var(--paper-0) !important;
+}
+
+/* 禁用：统一压成纸灰，不保留主/危险的原色。 */
+.ant-btn:disabled,
+.ant-btn.ant-btn-disabled,
+.ant-btn-primary:disabled,
+.ant-btn-dangerous:disabled {
+  background: var(--bg-sunken) !important;
+  border-color: var(--border) !important;
+  color: var(--text-quaternary) !important;
+  opacity: 1 !important;
+  cursor: not-allowed;
+}
+/* 文字/链接按钮没有底，禁用时也只淡下去，不凭空多出一个方框 */
+.ant-btn-text:disabled,
+.ant-btn-link:disabled {
+  background: transparent !important;
+  border-color: transparent !important;
+  opacity: var(--btn-disabled-opacity) !important;
+}
+
+/* 键盘焦点只留一种：朱砂细环，不再叠加 antd 的粗描边。 */
+.ant-btn:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
+}
+
+/* 弹窗底部：右对齐、等距；按钮本身走上面的标准档。 */
+.ant-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ant-modal-footer .ant-btn + .ant-btn {
+  margin-inline-start: 0 !important;
+}
+.ant-modal-footer .ant-btn {
+  min-width: 64px;
 }
 
 /* 消息浮层 */
@@ -4822,7 +4999,7 @@ body.ct-resizing * {
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--btn-r-sm);
   background: var(--bg-sunken);
 }
 
@@ -4830,10 +5007,11 @@ body.ct-resizing * {
 .ct-mm-seg button {
   border: none;
   background: transparent;
-  padding: 3px 10px;
-  border-radius: 5px;
+  height: 22px;
+  padding: 0 var(--btn-px-sm);
+  border-radius: 4px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--btn-fs-xs);
   color: var(--text-tertiary);
   cursor: pointer;
   transition:
@@ -4850,11 +5028,13 @@ body.ct-resizing * {
 .ct-mm-seg button.is-on {
   background: var(--bg-container);
   color: var(--text-primary);
+  font-weight: 500;
   box-shadow: 0 1px 2px rgba(94, 82, 56, 0.08);
 }
 
 .ct-mm-seg button:disabled {
   color: var(--text-quaternary);
+  opacity: var(--btn-disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -4887,19 +5067,20 @@ body.ct-resizing * {
 
 .ct-te-add {
   border: 1px dashed var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--btn-r-xs);
   background: transparent;
-  padding: 2px 8px;
+  height: var(--btn-h-xs);
+  padding: 0 var(--btn-px-xs);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--btn-fs-xs);
   color: var(--text-secondary);
   cursor: pointer;
 }
 
 .ct-te-add:hover {
-  border-color: var(--cinnabar-glow);
-  background: var(--accent-dim);
-  color: var(--accent);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .ct-te-scroll {
@@ -4962,19 +5143,25 @@ body.ct-resizing * {
   right: 2px;
   top: 50%;
   transform: translateY(-50%);
-  padding: 2px 4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   border: none;
   border-radius: 4px;
   background: transparent;
   color: var(--text-quaternary);
   font-size: 12px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   opacity: 0;
   visibility: hidden;
   transition:
     opacity 0.15s ease,
-    color 0.15s ease;
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .ct-te-table th:hover .ct-te-op,
@@ -5092,23 +5279,29 @@ body.ct-resizing * {
 }
 
 .ct-mm-ops button {
-  padding: 0 3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   border: none;
   border-radius: 4px;
   background: transparent;
   color: var(--text-quaternary);
   font-size: 13px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
 
 .ct-mm-ops button:hover {
-  color: var(--accent);
-  background: var(--accent-dim);
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 .ct-mm-ops button.is-danger:hover {
   color: var(--cinnabar);
+  background: var(--cinnabar-dim);
 }
 
 .ct-mm-children {
@@ -5225,6 +5418,7 @@ body.ct-resizing * {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  width: 100%;
 }
 
 .ct-modal-foot-right {
