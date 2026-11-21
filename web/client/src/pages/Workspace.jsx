@@ -224,7 +224,13 @@ export default function Workspace() {
         onOpenChapter={loadChapter}
       />
     ),
-    inspirations: <InspirationPanel workId={work?.id} />,
+    inspirations: (
+      <InspirationPanel
+        workId={work?.id}
+        chapterId={chapter?.id}
+        chapters={chapters}
+      />
+    ),
   }[panelKey];
 
   const leftPanel = (

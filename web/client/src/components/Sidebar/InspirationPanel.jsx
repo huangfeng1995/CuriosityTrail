@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import api from '../../api/client';
 import MindMapModal from './MindMapModal';
+import InspirationSuggestions from './InspirationSuggestions';
 import { countNodes, isOutline, linesToOutline, parseOutline, toRoot } from './outlineModel';
 
 /**
@@ -22,7 +23,7 @@ import { countNodes, isOutline, linesToOutline, parseOutline, toRoot } from './o
  * 一条灵感如果写成缩进大纲，就按脑图打开：发散的念头先在树上铺开，
  * 想清楚了可以一键转成设定（一个分支一条，或收成一张对照表）。
  */
-export default function InspirationPanel({ workId }) {
+export default function InspirationPanel({ workId, chapterId, chapters = [] }) {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null);
   // undefined = 关着；null = 新建；对象 = 编辑这一条
@@ -166,6 +167,13 @@ export default function InspirationPanel({ workId }) {
 
   return (
     <div className="ct-panel">
+      <InspirationSuggestions
+        workId={workId}
+        chapterId={chapterId}
+        chapters={chapters}
+        onSaved={load}
+      />
+
       <div className="ct-add-row">
         <button type="button" className="ct-add-btn" onClick={() => openEditor(null)}>
           <PlusOutlined />

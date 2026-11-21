@@ -9,6 +9,7 @@ import {
   Alert,
   Typography,
   Switch,
+  Checkbox,
   Descriptions,
   Modal,
   Select,
@@ -28,6 +29,8 @@ import { useSearchParams } from 'react-router-dom';
 import HistorySettings from '../components/Pipeline/HistorySettings';
 import WorkInfoPanel from '../components/Sidebar/WorkInfoPanel';
 import ProgressPanel from '../components/Sidebar/ProgressPanel';
+import useInspirationPromptPrefs from '../hooks/useInspirationPromptPrefs';
+import { DEFAULT_PREFS } from '../components/Sidebar/inspirationPromptModel';
 
 const { Text, Paragraph } = Typography;
 
@@ -42,7 +45,7 @@ const { Text, Paragraph } = Typography;
 export default function SettingsPage() {
   const { user } = useAuth();
   const [params] = useSearchParams();
-  const initialTab = ['prompts', 'memory', 'history', 'anchor', 'work', 'backup'].includes(
+  const initialTab = ['prompts', 'inspiration', 'memory', 'history', 'anchor', 'work', 'backup'].includes(
     params.get('tab')
   )
     ? params.get('tab')
@@ -52,6 +55,7 @@ export default function SettingsPage() {
 
   const items = [
     { key: 'prompts', label: '角色提示词', children: <PromptConfig /> },
+    { key: 'inspiration', label: '灵感提示', children: <InspirationPromptConfig /> },
     { key: 'memory', label: '长期记忆', children: <MemoryConfig /> },
     { key: 'work', label: '作品', children: <WorkConfig initialWorkId={workParam} /> },
     {
@@ -530,6 +534,167 @@ function PromptConfig() {
         <Button icon={<UndoOutlined />} onClick={restore}>
           恢复默认
         </Button>
+      </Space>
+    </Card>
+  );
+}
+
+/**
+ * 灵感方向配置。
+ *
+ * 写作页只留一个提示块，维度和自动生成这些「配置一次」的东西放这里。
+ * 偏好存在 localStorage，与长期记忆开关一致。
+ */
+function InspirationPromptConfig() {
+  const { prefs, save, reset } = useInspirationPromptPrefs();
+  const [options, setOptions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState(prefs);
+
+  useEffect(() => {
+    setDraft(prefs);
+  }, [prefs]);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .get('/inspirations/suggestions/options')
+      .then((res) => {
+        if (alive) setOptions(res.data?.dimensions || []);
+      })
+      .catch(() => {
+        message.error('灵感维度加载失败');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const allKeys = options.map((dimension) => dimension.key);
+  const checked = draft.dimensions || allKeys;
+
+  const toggleDimensions = (next) => {
+    if (!next.length) {
+      message.warning('至少保留一个维度');
+      return;
+    }
+    setDraft((prev) => ({ ...prev, dimensions: next }));
+  };
+
+  const onSave = () => {
+    const dimensions = (draft.dimensions || allKeys).filter(
+      (key) => !allKeys.length || allKeys.includes(key)
+    );
+    if (!dimensions.length) {
+      message.warning('至少保留一个维度');
+      return;
+    }
+    save({ ...draft, dimensions });
+    message.success('已保存');
+  };
+
+  const onReset = () => {
+    const next = { ...DEFAULT_PREFS };
+    setDraft(next);
+    reset();
+    message.success('已恢复默认');
+  };
+
+  return (
+    <Card size="small">
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <div>
+          <Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 10 }}>
+            写作页「灵感」面板顶部的方向提示。关掉后只保留原来的灵感列表与脑图。
+          </Paragraph>
+          <Space>
+            <Switch
+              checked={draft.enabled}
+              onChange={(enabled) => setDraft((prev) => ({ ...prev, enabled }))}
+            />
+            <Text>在灵感面板显示方向提示</Text>
+          </Space>
+        </div>
+
+        <div>
+          <Text strong>启用维度</Text>
+          {loading ? (
+            <div className="ct-loading">
+              <Spin />
+            </div>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              <Checkbox.Group
+                value={checked}
+                onChange={toggleDimensions}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                  gap: 10,
+                }}
+              >
+                {options.map((dimension) => (
+                  <Checkbox key={dimension.key} value={dimension.key}>
+                    <span>{dimension.label}</span>
+                    <span
+                      style={{
+                        display: 'block',
+                        color: 'var(--text-tertiary)',
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {dimension.description}
+                    </span>
+                  </Checkbox>
+                ))}
+              </Checkbox.Group>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <Text strong>每个维度给几条</Text>
+          <div style={{ marginTop: 8 }}>
+            <Select
+              value={draft.count}
+              onChange={(count) => setDraft((prev) => ({ ...prev, count }))}
+              style={{ width: 120 }}
+              options={[
+                { value: 1, label: '1 条' },
+                { value: 2, label: '2 条' },
+                { value: 3, label: '3 条' },
+              ]}
+            />
+          </div>
+        </div>
+
+        <div>
+          <Space>
+            <Switch
+              checked={draft.auto}
+              onChange={(auto) => setDraft((prev) => ({ ...prev, auto }))}
+            />
+            <Text>打开灵感面板时自动生成一组</Text>
+          </Space>
+        </div>
+
+        <Space>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            onClick={onSave}
+            disabled={loading}
+          >
+            保存
+          </Button>
+          <Button icon={<UndoOutlined />} onClick={onReset}>
+            恢复默认
+          </Button>
+        </Space>
       </Space>
     </Card>
   );

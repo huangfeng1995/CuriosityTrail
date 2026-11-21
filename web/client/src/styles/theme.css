@@ -5229,6 +5229,279 @@ body.ct-resizing * {
 }
 
 /* ============================================================
+   灵感 · 方向提示
+   ============================================================ */
+.ct-insp-hint {
+  margin-bottom: 12px;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-container);
+}
+
+.ct-insp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ct-insp-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.ct-insp-title .anticon {
+  color: var(--gold);
+}
+
+.ct-insp-meta {
+  color: var(--text-quaternary);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.ct-insp-head-acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ct-insp-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.ct-insp-refresh:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ct-insp-refresh:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.ct-insp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ct-insp-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ct-insp-dims {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 2px;
+}
+
+.ct-insp-dim {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    color 0.18s ease,
+    background-color 0.18s ease;
+}
+
+.ct-insp-dim:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.ct-insp-dim.is-on {
+  border-color: var(--cinnabar-glow);
+  background: var(--cinnabar-dim);
+  color: var(--cinnabar);
+}
+
+.ct-insp-dim:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.ct-insp-group {
+  margin-top: 10px;
+}
+
+.ct-insp-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+  color: var(--text-quaternary);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.ct-insp-card {
+  padding: 8px 9px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-faint);
+  border-radius: 7px;
+  background: var(--bg-base);
+}
+
+.ct-insp-text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.72;
+  white-space: pre-wrap;
+}
+
+.ct-insp-why {
+  margin: 5px 0 0;
+  color: var(--text-quaternary);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.ct-insp-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.ct-insp-act {
+  padding: 1px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ct-insp-act:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ct-insp-act.is-primary {
+  color: var(--cinnabar);
+}
+
+.ct-insp-act:disabled {
+  background: transparent;
+  color: var(--text-quaternary);
+  cursor: default;
+}
+
+.ct-insp-notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 6px 7px;
+  border-radius: 6px;
+  background: var(--amber-dim);
+  color: var(--amber);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.ct-insp-notice button {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 11.5px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.ct-insp-loading {
+  padding: 10px 2px;
+  color: var(--text-quaternary);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.ct-insp-empty {
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ct-insp-empty:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ct-insp-foot {
+  margin-top: 8px;
+  color: var(--text-quaternary);
+  font-size: 10.5px;
+  text-align: right;
+}
+
+.ct-insp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ct-insp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ct-insp-field > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ============================================================
    灵感 · 脑图
    ============================================================ */
 .ct-add-row {
