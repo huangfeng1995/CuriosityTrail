@@ -524,7 +524,7 @@ function PromptConfig() {
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         rows={20}
-        style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12.5, lineHeight: 1.7 }}
+        style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, lineHeight: 1.7 }}
       />
 
       <Space style={{ marginTop: 12 }}>

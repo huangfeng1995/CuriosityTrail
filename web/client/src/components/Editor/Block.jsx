@@ -394,7 +394,7 @@ export default function Block({
           })),
         }}
       >
-        <button title="转为其他块类型" className="ct-block-btn" style={{ width: 32, fontSize: 11 }}>
+        <button title="转为其他块类型" className="ct-block-btn" style={{ width: 32 }}>
           {BLOCK_TYPE_MAP.get(block.type)?.label || '?'}
         </button>
       </Dropdown>

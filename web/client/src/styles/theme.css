@@ -177,6 +177,21 @@ html[data-theme='dark'] {
 
   --btn-line: 1px solid var(--border-strong);
   --btn-disabled-opacity: 0.45;
+
+  /* 全站字体：控件与正文用同一套中文无衬线；标题单独走宋体。 */
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-serif: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  --font-kai: 'LXGW WenKai Screen', 'Kaiti SC', 'KaiTi', 'Noto Serif SC', serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* 字号阶梯：正文 14 · 控件 13 · 紧凑 12.5 · 迷你 12 · 注脚 11 */
+  --fs-body: 14px;
+  --fs-ui: 13px;
+  --fs-ui-sm: 12.5px;
+  --fs-mini: 12px;
+  --fs-micro: 11px;
 }
 
 /* ============================================================
@@ -197,9 +212,7 @@ body,
 body {
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  font-family: var(--font-ui);
   font-size: 14px;
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
@@ -211,6 +224,28 @@ body {
     color 0.3s ease;
 }
 
+/* 原生控件默认会退回 UA 的 Arial；统一继承页面字体。 */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* antd 浮层挂到 body 下，也会各自带一套默认字体，统一收口。 */
+.ant-app,
+.ant-modal-root,
+.ant-drawer-root,
+.ant-message,
+.ant-notification,
+.ant-dropdown,
+.ant-popover,
+.ant-tooltip,
+.ant-select-dropdown,
+.ant-picker-dropdown {
+  font-family: var(--font-ui);
+}
+
 ::selection {
   background: var(--cinnabar-dim);
   color: var(--text-primary);
@@ -218,13 +253,13 @@ body {
 
 /* ---------- 字体工具类 ---------- */
 .font-serif {
-  font-family: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  font-family: var(--font-serif);
 }
 .font-kai {
-  font-family: 'LXGW WenKai Screen', 'Kaiti SC', 'KaiTi', 'Noto Serif SC', serif;
+  font-family: var(--font-kai);
 }
 .font-mono {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 /* ---------- 滚动条：细、低存在感 ---------- */
@@ -404,7 +439,7 @@ body {
   border: none;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   font-family: inherit;
   padding: 6px 12px;
   border-radius: 6px;
@@ -679,7 +714,7 @@ body.ct-resizing * {
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   line-height: 1.3;
   cursor: pointer;
   transition:
@@ -765,7 +800,7 @@ body.ct-resizing * {
 .ct-empty-text {
   margin: 0;
   color: var(--text-tertiary);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   line-height: 1.8;
 }
 /* 旧版空状态容器（加载中用），保留结构 */
@@ -834,7 +869,8 @@ body.ct-resizing * {
   color: var(--text-secondary);
   font-family: inherit;
   font-size: var(--btn-fs-sm);
-  line-height: 1.45;
+  font-weight: 500;
+  line-height: 1;
   cursor: pointer;
   transition:
     border-color 0.18s ease,
@@ -856,12 +892,10 @@ body.ct-resizing * {
 }
 
 /* 分段控件（按章节 / 全部）：跟内容宽度走，不再拉满整栏。
-   antd 默认的 block 模式会把 303px 全撑成一条实心长条。 */
+   antd 默认的 block 模式会把 303px 全撑成一条实心长条。
+   控件本身的尺寸在全局 .ant-segmented 里统一。 */
 .ct-scope-seg {
   margin-bottom: 10px;
-}
-.ct-scope-seg .ant-segmented {
-  border-radius: var(--btn-r-sm) !important;
 }
 
 /* 条目行：hover 才显出操作按钮，避免视觉噪音 */
@@ -917,7 +951,7 @@ body.ct-resizing * {
   white-space: nowrap;
 }
 .ct-item-note {
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   line-height: 1.7;
   color: var(--text-tertiary);
   margin-top: 2px;
@@ -947,7 +981,8 @@ body.ct-resizing * {
   background: transparent;
   color: var(--text-quaternary);
   border-radius: var(--btn-r-xs);
-  font-size: 12px;
+  font-size: var(--btn-fs-xs);
+  line-height: 1;
   cursor: pointer;
   padding: 0;
   transition:
@@ -969,9 +1004,9 @@ body.ct-resizing * {
 /* 状态切换按钮：替代原来的彩色 Tag，宽度自适应不与相邻按钮重叠 */
 .ct-item-act.ct-status {
   width: auto;
-  padding: 0 8px;
-  font-size: 11px;
-  line-height: 20px;
+  padding: 0 var(--btn-px-xs);
+  font-size: var(--btn-fs-xs);
+  line-height: 1;
   border: 1px solid var(--border-strong);
   border-radius: var(--btn-r-xs);
   color: var(--text-tertiary);
@@ -1007,7 +1042,7 @@ body.ct-resizing * {
   border-radius: 999px;
   background: var(--amber-dim);
   color: var(--text-tertiary);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   line-height: 18px;
   white-space: nowrap;
   vertical-align: middle;
@@ -1049,7 +1084,7 @@ body.ct-resizing * {
   white-space: nowrap;
 }
 .ct-hit-snippet {
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1063,22 +1098,9 @@ body.ct-resizing * {
   letter-spacing: 0.04em;
 }
 
-/* 小徽标：常驻 / 类型标记 */
-.ct-badge {
-  display: inline-block;
-  font-size: 10px;
-  line-height: 15px;
-  margin-left: 6px;
-  padding: 0 5px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  color: var(--text-quaternary);
-  vertical-align: 1px;
-}
-
 /* 面板内的说明/空态文案 */
 .ct-hint {
-  font-size: 12px;
+  font-size: var(--fs-ui-sm);
   line-height: 1.8;
   color: var(--text-tertiary);
   padding: 8px;
@@ -1088,7 +1110,7 @@ body.ct-resizing * {
 .ct-panel > .ct-hint {
   margin: 2px 0 0;
   padding: 10px 2px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui-sm);
   line-height: 1.85;
   color: var(--text-tertiary);
   line-break: strict;
@@ -1119,7 +1141,7 @@ body.ct-resizing * {
   color: var(--text-primary);
 }
 .ct-issue-detail {
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   line-height: 1.7;
   color: var(--text-tertiary);
   margin-top: 3px;
@@ -1151,7 +1173,7 @@ body.ct-resizing * {
   margin-top: 4px;
   padding-left: 6px;
   border-left: 2px solid var(--border);
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   line-height: 1.6;
   color: var(--text-tertiary);
   display: -webkit-box;
@@ -1174,7 +1196,7 @@ body.ct-resizing * {
   align-items: center;
   gap: 6px;
   margin-top: 6px;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   line-height: 1.5;
   color: var(--text-quaternary);
 }
@@ -1182,8 +1204,8 @@ body.ct-resizing * {
   flex: none;
   padding: 0 5px;
   border: 1px solid var(--border);
-  border-radius: 3px;
-  font-size: 10.5px;
+  border-radius: 4px;
+  font-size: var(--fs-micro);
   line-height: 16px;
   color: var(--text-tertiary);
 }
@@ -1205,7 +1227,7 @@ body.ct-resizing * {
 .ct-issue-jump {
   height: auto !important;
   padding: 0 2px !important;
-  font-size: 11px !important;
+  font-size: var(--btn-fs-xs) !important;
   line-height: 1.5;
 }
 .ct-issue-ops {
@@ -1217,7 +1239,7 @@ body.ct-resizing * {
 .ct-issue-ops .ant-btn {
   height: var(--btn-h-xs) !important;
   padding: 0 var(--btn-px-xs) !important;
-  font-size: 11.5px !important;
+  font-size: var(--btn-fs-xs) !important;
 }
 .ct-ai-progress {
   display: flex;
@@ -1225,9 +1247,9 @@ body.ct-resizing * {
   gap: 8px;
   padding: 8px 10px;
   margin-bottom: 8px;
-  border-radius: 7px;
+  border-radius: var(--btn-r);
   background: var(--bg-sunken);
-  font-size: 12.5px;
+  font-size: var(--fs-ui-sm);
   color: var(--text-tertiary);
 }
 
@@ -1250,7 +1272,7 @@ body.ct-resizing * {
   margin-bottom: 4px;
 }
 .ct-stat-sub {
-  font-size: 11.5px;
+  font-size: var(--fs-micro);
   color: var(--text-tertiary);
   margin-top: 6px;
   line-height: 1.7;
@@ -1351,23 +1373,26 @@ body.ct-resizing * {
   align-items: center;
   gap: 5px;
   width: 100%;
+  height: var(--btn-h-sm);
   margin-top: 2px;
-  padding: 5px 8px;
+  padding: 0 var(--btn-px-xs);
   border: none;
   background: none;
   color: var(--text-quaternary);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--btn-fs-sm);
+  font-weight: 500;
+  line-height: 1;
   text-align: left;
-  border-radius: 6px;
+  border-radius: var(--btn-r-sm);
   cursor: pointer;
   transition:
     color 0.16s ease,
     background-color 0.16s ease;
 }
 .ct-tree-add:hover {
-  color: var(--accent);
-  background: var(--accent-dim);
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 /* ---------- 素材库 ---------- */
@@ -1408,7 +1433,7 @@ body.ct-resizing * {
   background: var(--bg-hover);
   font-size: 14px;
   line-height: 1.9;
-  font-family: 'Noto Serif SC', serif;
+  font-family: var(--font-serif);
   color: var(--text-primary);
 }
 
@@ -1424,13 +1449,15 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px 8px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--btn-r-sm);
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--btn-fs-sm);
+  line-height: 1;
   cursor: pointer;
   transition:
     color 0.2s ease,
@@ -1448,7 +1475,7 @@ body.ct-resizing * {
   font-weight: 600;
 }
 .ct-role-pick-icon {
-  font-size: 13px;
+  font-size: var(--btn-fs-sm);
   line-height: 1;
 }
 .ct-role-pick-dot {
@@ -1522,7 +1549,7 @@ body.ct-resizing * {
   line-height: 1.9;
   max-height: 520px;
   overflow: auto;
-  font-family: 'Noto Serif SC', serif;
+  font-family: var(--font-serif);
   color: var(--text-primary);
 }
 
@@ -1533,14 +1560,17 @@ body.ct-resizing * {
   justify-content: center;
   gap: 6px;
   width: 100%;
+  height: var(--btn-h-sm);
   margin-top: 14px;
-  padding: 9px;
+  padding: 0 var(--btn-px-sm);
   border: 1px dashed var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--btn-r-sm);
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--btn-fs-sm);
+  font-weight: 500;
+  line-height: 1;
   cursor: pointer;
   transition:
     border-color 0.18s ease,
@@ -1559,7 +1589,7 @@ body.ct-resizing * {
   margin-top: 14px;
   padding: 12px;
   border: 1px dashed var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--btn-r);
   animation: ct-fade-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -1710,7 +1740,7 @@ body.ct-resizing * {
   margin: 0 auto;
 }
 .ct-chapter-title {
-  font-family: 'Noto Serif SC', 'Songti SC', serif !important;
+  font-family: var(--font-serif) !important;
   font-size: 21px !important;
   font-weight: 600 !important;
   color: var(--text-primary) !important;
@@ -2033,7 +2063,7 @@ body.ct-resizing * {
   overflow: hidden;
   min-height: var(--ruled-size);
   padding: 0;
-  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-family: var(--font-serif);
   font-size: 16.5px;
   line-height: var(--ruled-size);
   letter-spacing: 0.01em;
@@ -2091,7 +2121,7 @@ body.ct-resizing * {
   margin: 0;
 }
 .ct-block-caption {
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   line-height: 1.8;
   color: var(--text-tertiary);
   font-family: inherit;
@@ -2109,7 +2139,7 @@ body.ct-resizing * {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 6px 9px;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   background: var(--bg-sunken);
   color: var(--text-secondary);
   outline: none;
@@ -2150,7 +2180,7 @@ body.ct-resizing * {
   /* letter-spacing 会在末尾多留一格，补回来才是视觉居中 */
   padding-left: 0.5em;
   font-size: 12px;
-  font-family: 'Noto Serif SC', serif;
+  font-family: var(--font-serif);
 }
 
 /* 插图 */
@@ -2184,7 +2214,7 @@ body.ct-resizing * {
   padding: 0 12px;
   border-radius: 20px;
   border: 1px dashed var(--border-strong);
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   background: var(--bg-sunken);
   max-width: 100%;
 }
@@ -2254,7 +2284,7 @@ body.ct-resizing * {
   border-radius: 999px;
   background: var(--bg-container);
   color: var(--gold);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   line-height: 16px;
   font-family: inherit;
   white-space: nowrap;
@@ -2315,8 +2345,9 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--btn-fs-xs);
   font-family: inherit;
+  line-height: 1;
   transition:
     background-color 0.16s ease,
     color 0.16s ease,
@@ -2404,15 +2435,17 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 2px;
   border: none;
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
   /* 五个标签平分栏宽，右栏默认宽度只有三百出头：
-     字号再大一点，「审稿人」就会先被截成「审…」。 */
-  font-size: 11.5px;
-  padding: 7px 2px 8px;
+     12px 下把图标间距与左右内边距各收 1px，「审稿人」才不会被截成「审…」。 */
+  font-size: var(--fs-mini);
+  height: var(--btn-h);
+  padding: 0 1px;
+  line-height: 1;
   border-radius: 6px 6px 0 0;
   min-width: 0;
   cursor: pointer;
@@ -2478,7 +2511,7 @@ body.ct-resizing * {
 }
 /* 作用范围：已选的那一段。作者一眼能看出这一下改的是哪里。 */
 .ct-scope-chip {
-  font-size: 11.5px;
+  font-size: var(--btn-fs-xs);
   line-height: 1;
   color: var(--text-tertiary);
   padding: 4px 6px 4px 2px;
@@ -2494,11 +2527,16 @@ body.ct-resizing * {
 }
 .ct-inline-btn {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
   font-size: var(--btn-fs-xs);
+  font-weight: 500;
   line-height: 1;
   height: var(--btn-h-xs);
   padding: 0 var(--btn-px-xs);
@@ -2593,6 +2631,9 @@ body.ct-resizing * {
   }
 }
 .ct-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: var(--btn-line);
   background: transparent;
   color: var(--text-tertiary);
@@ -2600,7 +2641,9 @@ body.ct-resizing * {
   height: var(--btn-h-xs);
   padding: 0 10px;
   font-size: var(--btn-fs-xs);
+  font-weight: 500;
   font-family: inherit;
+  line-height: 1;
   cursor: pointer;
   transition:
     background-color 0.18s ease,
@@ -2849,7 +2892,7 @@ body.ct-resizing * {
   border-radius: 5px;
   background: var(--bg-sunken);
   border: 1px dashed var(--border-strong);
-  font-size: 11.5px;
+  font-size: var(--fs-micro);
   color: var(--text-tertiary);
 }
 @keyframes ct-msg-in {
@@ -2877,7 +2920,7 @@ body.ct-resizing * {
 }
 
 .ct-msg-bubble {
-  font-size: 13.5px;
+  font-size: var(--fs-body);
   line-height: 1.85;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2895,7 +2938,7 @@ body.ct-resizing * {
   background: var(--bg-container);
   border: 1px solid var(--border);
   border-bottom-left-radius: 3px;
-  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-family: var(--font-serif);
 }
 .ct-msg-bubble.is-thinking {
   display: inline-flex;
@@ -3021,7 +3064,7 @@ body.ct-resizing * {
   white-space: pre-wrap;
   max-height: 320;
   overflow-y: auto;
-  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-family: var(--font-serif);
   color: var(--text-primary);
 }
 
@@ -3041,7 +3084,7 @@ body.ct-resizing * {
   justify-content: space-between;
   gap: 3px 10px;
   padding: 0 8px 2px;
-  font-size: 11.5px;
+  font-size: var(--fs-micro);
   color: var(--text-quaternary);
   font-variant-numeric: tabular-nums;
 }
@@ -3164,7 +3207,7 @@ body.ct-resizing * {
   color: var(--text-tertiary);
 }
 .ct-finding-group-count {
-  font-size: 11.5px;
+  font-size: var(--fs-micro);
   color: var(--text-quaternary);
   font-variant-numeric: tabular-nums;
 }
@@ -3353,7 +3396,7 @@ body.ct-resizing * {
 }
 .ct-tool-degraded {
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   color: var(--amber);
   background: var(--amber-dim);
   padding: 3px 8px;
@@ -3363,7 +3406,7 @@ body.ct-resizing * {
   margin-top: 5px;
   display: flex;
   gap: 8px;
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   line-height: 1.6;
 }
 .ct-tool-detail-label {
@@ -3389,7 +3432,7 @@ body.ct-resizing * {
 }
 .ct-ai-textarea {
   font-family: inherit !important;
-  font-size: 13.5px !important;
+  font-size: var(--fs-ui) !important;
   line-height: 1.8 !important;
 }
 .ct-ai-actions {
@@ -3671,11 +3714,17 @@ body.ct-resizing * {
 .ant-modal-title,
 .ant-drawer-title {
   color: var(--text-primary) !important;
-  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-family: var(--font-serif);
 }
 .ant-modal-close,
 .ant-drawer-close {
   color: var(--text-tertiary) !important;
+}
+.ant-modal-close {
+  width: var(--btn-h) !important;
+  height: var(--btn-h) !important;
+  border-radius: var(--btn-r) !important;
+  font-size: var(--fs-body) !important;
 }
 .ant-modal-close:hover,
 .ant-drawer-close:hover {
@@ -3694,7 +3743,7 @@ body.ct-resizing * {
 .ant-card-head {
   border-bottom-color: var(--border) !important;
   color: var(--text-primary);
-  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-family: var(--font-serif);
 }
 .ant-card-head-title {
   font-size: 14px;
@@ -3921,13 +3970,141 @@ body.ct-resizing * {
   min-width: 64px;
 }
 
+/* ============================================================
+   分段控件：与自绘 .ct-set-seg 同尺寸
+   ------------------------------------------------------------
+   情节面板的「按章节 / 全部」、资料库分类、统计维度都走这里，
+   不再保留 antd 默认的白底、14px 和大圆角。
+   ============================================================ */
+.ant-segmented {
+  height: var(--btn-h-sm) !important;
+  padding: 2px !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--btn-r-sm) !important;
+  background: var(--bg-sunken) !important;
+  color: var(--text-tertiary) !important;
+  font-family: var(--font-ui) !important;
+  font-size: var(--btn-fs-xs) !important;
+  line-height: 1 !important;
+}
+.ant-segmented .ant-segmented-group {
+  height: 22px;
+}
+.ant-segmented .ant-segmented-item {
+  min-height: 22px;
+  border-radius: 4px !important;
+  color: var(--text-tertiary) !important;
+  font-size: var(--btn-fs-xs) !important;
+  line-height: 22px !important;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+.ant-segmented .ant-segmented-item-label {
+  min-height: 22px !important;
+  padding: 0 var(--btn-px-sm) !important;
+  font-size: var(--btn-fs-xs) !important;
+  font-weight: 500;
+  line-height: 22px !important;
+}
+.ant-segmented .ant-segmented-item:not(.ant-segmented-item-selected):hover {
+  color: var(--text-primary) !important;
+  background: var(--bg-hover) !important;
+}
+.ant-segmented .ant-segmented-item-selected,
+.ant-segmented .ant-segmented-thumb {
+  background: var(--bg-container) !important;
+  color: var(--text-primary) !important;
+  border-radius: 4px !important;
+  box-shadow: var(--shadow-lift) !important;
+}
+.ant-segmented .ant-segmented-item-selected .ant-segmented-item-label {
+  font-weight: 500;
+}
+.ant-segmented .ant-segmented-item-disabled {
+  color: var(--text-quaternary) !important;
+  opacity: var(--btn-disabled-opacity);
+}
+
+/* ============================================================
+   表单控件：字号 13、圆角随按钮；弹窗内的小号控件升到标准 32
+   ============================================================ */
+.ant-form-item-label > label {
+  font-family: var(--font-ui) !important;
+  font-size: var(--fs-ui) !important;
+}
+.ant-input:not(textarea),
+.ant-input-number-input,
+.ant-select-selection-item,
+.ant-select-selection-placeholder,
+.ant-picker-input > input {
+  font-family: var(--font-ui) !important;
+  font-size: var(--fs-ui) !important;
+}
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-number,
+.ant-select .ant-select-selector,
+.ant-picker {
+  border-radius: var(--btn-r) !important;
+}
+.ant-input-sm,
+.ant-input-affix-wrapper-sm,
+.ant-input-number-sm,
+.ant-select-sm .ant-select-selector,
+.ant-picker-sm {
+  border-radius: var(--btn-r-xs) !important;
+}
+.ant-input-lg,
+.ant-input-affix-wrapper-lg {
+  height: var(--btn-h) !important;
+  padding-block: 4px !important;
+  font-size: var(--fs-ui) !important;
+}
+.ant-select-item {
+  font-size: var(--fs-ui) !important;
+}
+.ant-modal .ant-input:not(textarea),
+.ant-modal .ant-input-affix-wrapper,
+.ant-modal .ant-input-number,
+.ant-modal .ant-select-sm .ant-select-selector {
+  height: var(--btn-h) !important;
+  border-radius: var(--btn-r) !important;
+}
+.ant-modal textarea.ant-input {
+  border-radius: var(--btn-r) !important;
+  font-size: var(--fs-ui) !important;
+  padding: 6px 11px !important;
+}
+.ant-tabs-tab {
+  font-size: var(--fs-ui) !important;
+}
+.ant-descriptions-item-label,
+.ant-descriptions-item-content {
+  font-size: var(--fs-ui) !important;
+}
+.ant-dropdown-menu-item {
+  font-size: var(--fs-ui) !important;
+}
+.ant-tag {
+  font-size: var(--fs-mini) !important;
+  border-radius: 4px !important;
+}
+
 /* 消息浮层 */
 .ant-message-notice-content,
 .ant-notification-notice {
   background: var(--bg-elevated) !important;
   border: 1px solid var(--border);
+  border-radius: var(--btn-r) !important;
   box-shadow: var(--shadow-float) !important;
   color: var(--text-primary) !important;
+  font-family: var(--font-ui);
+  font-size: var(--fs-ui) !important;
+  line-height: 1.5;
+}
+.ant-message-notice-content {
+  padding: 8px 12px !important;
 }
 
 /* Tooltip */
@@ -3944,6 +4121,7 @@ body.ct-resizing * {
 /* 弱态 */
 .ant-empty-description {
   color: var(--text-tertiary) !important;
+  font-size: var(--fs-ui) !important;
 }
 .ant-spin-dot-item {
   background: var(--accent) !important;
@@ -3985,7 +4163,7 @@ body.ct-resizing * {
   border-color: var(--accent);
 }
 .ant-form-item-label > label {
-  color: var(--text-secondary);
+  color: var(--text-secondary) !important;
 }
 .ant-form-item-explain-error {
   color: var(--cinnabar);
@@ -4143,7 +4321,7 @@ body.ct-resizing * {
   gap: 12px;
 }
 .ct-insight-work-title {
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--text-primary);
 }
 .ct-insight-work-meta {
@@ -4203,7 +4381,7 @@ body.ct-resizing * {
 }
 .ct-feedback-item-content {
   margin: 0 0 4px !important;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--text-primary);
   white-space: pre-wrap;
 }
@@ -4357,7 +4535,7 @@ body.ct-resizing * {
 }
 
 .ct-anchor-subject {
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -4459,11 +4637,17 @@ body.ct-resizing * {
 }
 
 .ct-anchor-status-tab {
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-xs);
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 12.5px;
-  padding: 3px 10px;
+  font-family: inherit;
+  font-size: var(--btn-fs-xs);
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 var(--btn-px-sm);
   border-radius: 999px;
   cursor: pointer;
 }
@@ -4619,7 +4803,7 @@ body.ct-resizing * {
 }
 
 .ct-pending-subject {
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -4713,7 +4897,7 @@ body.ct-resizing * {
 }
 
 .ct-boundary-name {
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 6px;
@@ -4777,14 +4961,16 @@ body.ct-resizing * {
 .ct-badge {
   display: inline-flex;
   align-items: center;
-  padding: 1px 7px;
+  height: 20px;
+  padding: 0 7px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
-  font-size: 11px;
-  line-height: 1.7;
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  line-height: 1;
   white-space: nowrap;
 }
 
@@ -4838,7 +5024,7 @@ body.ct-resizing * {
 }
 
 .ct-violation-quote {
-  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-family: var(--font-serif);
   font-size: 12.5px;
   line-height: 1.7;
   color: var(--text-primary);
@@ -4874,7 +5060,7 @@ body.ct-resizing * {
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-faint);
   background: var(--bg-sunken);
-  font-size: 11.5px;
+  font-size: var(--fs-micro);
   color: var(--text-tertiary);
 }
 
@@ -4937,7 +5123,7 @@ body.ct-resizing * {
   padding: 1px 4px;
   border-radius: 4px;
   background: var(--bg-sunken);
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
 }
 
 .ct-md pre {
@@ -5023,7 +5209,7 @@ body.ct-resizing * {
 }
 
 .ct-set-mode-label {
-  font-size: 12.5px;
+  font-size: var(--fs-ui-sm);
   color: var(--text-secondary);
 }
 
@@ -5035,10 +5221,16 @@ body.ct-resizing * {
   border: 1px solid var(--border);
   border-radius: var(--btn-r-sm);
   background: var(--bg-sunken);
+  color: var(--text-tertiary);
+  font-size: var(--btn-fs-xs);
+  line-height: 1;
 }
 
 .ct-set-seg button,
 .ct-mm-seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   height: 22px;
@@ -5046,6 +5238,8 @@ body.ct-resizing * {
   border-radius: 4px;
   font-family: inherit;
   font-size: var(--btn-fs-xs);
+  font-weight: 500;
+  line-height: 1;
   color: var(--text-tertiary);
   cursor: pointer;
   transition:
@@ -5062,7 +5256,6 @@ body.ct-resizing * {
 .ct-mm-seg button.is-on {
   background: var(--bg-container);
   color: var(--text-primary);
-  font-weight: 500;
   box-shadow: 0 1px 2px rgba(94, 82, 56, 0.08);
 }
 
@@ -5079,7 +5272,7 @@ body.ct-resizing * {
 
 .ct-te {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--btn-r);
   background: var(--bg-base);
   overflow: hidden;
 }
@@ -5095,11 +5288,14 @@ body.ct-resizing * {
 
 .ct-te-count {
   margin-right: auto;
-  font-size: 11.5px;
+  font-size: var(--fs-micro);
   color: var(--text-quaternary);
 }
 
 .ct-te-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px dashed var(--border-strong);
   border-radius: var(--btn-r-xs);
   background: transparent;
@@ -5107,6 +5303,8 @@ body.ct-resizing * {
   padding: 0 var(--btn-px-xs);
   font-family: inherit;
   font-size: var(--btn-fs-xs);
+  font-weight: 500;
+  line-height: 1;
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -5126,7 +5324,9 @@ body.ct-resizing * {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-mini);
+  color: var(--text-primary);
 }
 
 .ct-te-table th,
@@ -5157,7 +5357,7 @@ body.ct-resizing * {
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-mini);
   color: var(--text-primary);
   outline: none;
 }
@@ -5276,14 +5476,18 @@ body.ct-resizing * {
 .ct-insp-refresh {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 2px 5px;
+  height: var(--btn-h-xs);
+  padding: 0 var(--btn-px-xs);
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--btn-r-xs);
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--btn-fs-xs);
+  font-weight: 500;
+  line-height: 1;
   cursor: pointer;
 }
 
@@ -5301,14 +5505,15 @@ body.ct-resizing * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--btn-h-xs);
+  height: var(--btn-h-xs);
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--btn-r-xs);
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--btn-fs-xs);
+  line-height: 1;
   cursor: pointer;
 }
 
@@ -5325,14 +5530,18 @@ body.ct-resizing * {
 }
 
 .ct-insp-dim {
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-xs);
+  padding: 0 var(--btn-px-sm);
   border: 1px solid var(--border);
   border-radius: 999px;
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
-  font-size: 11.5px;
-  line-height: 1.6;
+  font-size: var(--btn-fs-xs);
+  font-weight: 500;
+  line-height: 1;
   cursor: pointer;
   transition:
     border-color 0.18s ease,
@@ -5389,7 +5598,7 @@ body.ct-resizing * {
 .ct-insp-why {
   margin: 5px 0 0;
   color: var(--text-quaternary);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   line-height: 1.5;
 }
 
@@ -5436,7 +5645,7 @@ body.ct-resizing * {
   border-radius: 6px;
   background: var(--amber-dim);
   color: var(--amber);
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   line-height: 1.55;
 }
 
@@ -5447,7 +5656,7 @@ body.ct-resizing * {
   background: transparent;
   color: inherit;
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   text-decoration: underline;
   cursor: pointer;
 }
@@ -5455,7 +5664,7 @@ body.ct-resizing * {
 .ct-insp-loading {
   padding: 10px 2px;
   color: var(--text-quaternary);
-  font-size: 11.5px;
+  font-size: var(--fs-mini);
   line-height: 1.6;
 }
 
@@ -5480,7 +5689,7 @@ body.ct-resizing * {
 .ct-insp-foot {
   margin-top: 8px;
   color: var(--text-quaternary);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   text-align: right;
 }
 
