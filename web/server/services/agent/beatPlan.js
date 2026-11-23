@@ -215,7 +215,9 @@ const PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象�
 字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
 beats 6–8 个；每拍含 id（B1…Bn）、function、functionReason、type（行动|转折|冲突|揭示|决定|过渡）、
 goal、obstacle、cost、delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、
-targetChars、wordShare、endHook（这一拍结束时的悬念或钩子）。
+targetChars、wordShare、endHook（这一拍结束时的悬念或钩子）、entities（数组）。
+entities 列出这一拍出现的人名、物名、关键道具；只能用给定资料里出现过的人或物，
+没有出处的一律不许写，也不许用「父亲/老师/领导」这类新角色代替已有角色。
 function 只能取以下六类，且全章六类必须各出现至少一次（可以有同类多拍）：
 - opening：开场。有外部对手施加压力、主角被叫走/被传唤，外部压力先一步打断当前场景。
   这一拍的 obstacle 必须写清对手是谁、用什么方式阻碍，正文会据此校验对手是否落进开场。
@@ -237,6 +239,116 @@ targetChars 与 wordShare 要能对上：targetChars ≈ wordShare × 5000 / 100
 回城/身世这一拍不能并进过渡拍，目标份额低于 16% 会被判不合格。
 每个节拍必须让至少一个变量发生改变，必须写出代价，禁止空转抒情段。
 mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不新增未提供的人物或设定。`;
+
+/**
+ * 有本章大纲时的规划提示词。
+ *
+ * 这是 P1 的核心改动：不再套用范文的六类功能与固定份额，而是把作者
+ * 给的本章大纲按因果拆成 4–8 拍。每拍仍要求「目标 / 阻碍 / 转折 / 代价」，
+ * 保证写手拿到的是事件链，不是功能标签。
+ *
+ * 六类功能与份额只在没有本章大纲时走 PLAN_PROMPT 兜底。
+ */
+const OUTLINE_PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
+本章已有作者写好的大纲。请把大纲里的事件按因果顺序拆成 4–8 拍，不要套用任何固定功能模板。
+字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
+每拍含 id（B1…Bn）、function（自由标签，如「入场」「试探」「冲突」「决定」，不要求六类）、
+type（行动|转折|冲突|揭示|决定|过渡）、goal、obstacle、turn（这一拍的转折）、cost、
+delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、wordShare、endHook、entities（数组）。
+
+硬规则：
+1. 4–8 拍；每拍 3–12 段，全章合计 20–80 段。
+2. 每拍必须有主角的一个具体目标（他要做什么、想得到什么）、一个阻碍、一个转折、一个代价。
+   主角不能只被事件推着走：他要主动做出至少一个选择，并承担选择的后果。
+3. entities 列出这一拍出现的人名、物名、关键道具。只能用「可用实体」清单与本章大纲里
+   已经出现过的名字；清单之外的人名、物名、关键道具一律不许出现。
+   不许用「父亲/老师/领导/陌生人」这类新角色来补拍，也不许新增证明、信件、名额之类
+   大纲里没有的关键道具。
+4. 不得新增大纲没有的事件，不得改变事件结果；可以细化动作、对话与场面。
+5. 只依据给定资料，不新增人物或设定。
+6. mainType 必须与某一个 beats[].type 相同。`;
+
+/** 代词与泛称：不算「新实体」，不需要在资料里有出处。 */
+const GENERIC_ENTITIES = new Set([
+  '主角',
+  '我',
+  '他',
+  '她',
+  '他们',
+  '她们',
+  '我们',
+  '你们',
+  '自己',
+  '对方',
+  '众人',
+  '有人',
+  '人们',
+  '旁白',
+]);
+
+/** 实体归一化：去空白与书名/引号，大小写不敏感。 */
+function normalizeEntity(value) {
+  return String(value == null ? '' : value)
+    .replace(/[「」“”《》\s]/g, '')
+    .toLowerCase();
+}
+
+/**
+ * 把 grounding 资料压成一段可做包含判断的语料。
+ *
+ * 来源：本章大纲、作者本次指令、作品信息、人物卡（名/别名）、设定名、素材标题。
+ * 只做「是否出现过」的判断，不做语义匹配——宁可让模型多改一次，也不放行
+ * 一个资料里根本不存在的「父亲」。
+ */
+function groundCorpus(ground) {
+  if (!ground) return '';
+  const parts = [
+    ground.outline,
+    ground.instruction,
+    ground.workTitle,
+    ground.workOutline,
+    ground.synopsis,
+    ...(ground.characters || []).flatMap((row) => [row.name, row.aliases]),
+    ...(ground.settings || []).map((row) => row.name),
+    ...(ground.materials || []).map((row) => row.title),
+  ];
+  return normalizeEntity(parts.filter(Boolean).join('\n'));
+}
+
+function entityGrounded(entity, corpus) {
+  const probe = normalizeEntity(entity);
+  if (!probe) return true;
+  if (GENERIC_ENTITIES.has(probe)) return true;
+  return Boolean(corpus && corpus.includes(probe));
+}
+
+/**
+ * 校验一拍的实体是否有出处。
+ *
+ * @param {Object} beat
+ * @param {string} corpus
+ * @returns {string[]} 没有出处的实体
+ */
+function ungroundedEntities(beat, corpus) {
+  return (beat.entities || []).filter((entity) => !entityGrounded(entity, corpus));
+}
+
+/** 给规划提示词追加「可用实体」清单。 */
+function buildGroundBlock(ground) {
+  if (!ground) return '';
+  const names = unique([
+    ...(ground.characters || []).map((row) => row.name),
+    ...(ground.settings || []).map((row) => row.name),
+  ].filter(Boolean));
+  const materials = unique((ground.materials || []).map((row) => row.title).filter(Boolean));
+
+  const lines = ['## 可用实体（人名 / 物名 / 关键道具只能从这里取）'];
+  if (ground.outline) lines.push(`本章大纲：${ground.outline}`);
+  lines.push(`人物与设定：${names.length ? names.join('、') : '（未登记，只能使用大纲里已有的名字）'}`);
+  if (materials.length) lines.push(`素材：${materials.join('、')}`);
+  lines.push('清单与大纲之外的人名、物名、关键道具一律不得出现。');
+  return `\n\n---\n\n${lines.join('\n')}`;
+}
 
 /**
  * 自检提示词。
@@ -279,11 +391,17 @@ function unique(list) {
  * 注水的表，会让写手写成流水账，而作者只会怪「AI 写得不好」。
  *
  * @param {Object|string} candidate 模型输出（对象或 JSON 原文）
+ * @param {Object} [options]
+ * @param {'outline'|'reference'} [options.mode] outline=按本章大纲规划；reference=无大纲时用范文六类兜底
+ * @param {Object} [options.ground] 实体接地资料（本章大纲/人物卡/设定/素材）
  * @returns {{ok: boolean, plan: Object|null, errors: string[]}}
  */
-function validateBeatPlan(candidate) {
+function validateBeatPlan(candidate, options = {}) {
   const data = typeof candidate === 'string' ? parseModelJson(candidate) : candidate;
   const errors = [];
+  const outlineMode = options.mode === 'outline';
+  const ground = options.ground || null;
+  const corpus = groundCorpus(ground);
 
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return { ok: false, plan: null, errors: ['没有解析出 JSON 对象'] };
@@ -334,13 +452,23 @@ function validateBeatPlan(candidate) {
     const id = text(beat.id) || `B${index + 1}`;
     const type = text(beat.type);
     const rawFunction = text(beat.function);
-    const beatFunction = BEAT_FUNCTIONS.includes(rawFunction) ? rawFunction : '';
+    // 有大纲时 function 只是自由标签（入场/试探/冲突…），不再要求落在六类里；
+    // 没有大纲时才用六类功能与范文份额兜底。
+    const beatFunction = outlineMode
+      ? rawFunction.slice(0, 20)
+      : BEAT_FUNCTIONS.includes(rawFunction)
+        ? rawFunction
+        : '';
     const functionReason = text(beat.functionReason);
     const goal = text(beat.goal);
     const beatObstacle = text(beat.obstacle);
     const beatCost = text(beat.cost);
+    const turn = text(beat.turn);
     const infoGain = text(beat.infoGain);
     const endHook = text(beat.endHook);
+    const entities = Array.isArray(beat.entities)
+      ? beat.entities.map((x) => text(x)).filter(Boolean)
+      : null;
     const delta = beat.delta && typeof beat.delta === 'object' ? beat.delta : {};
     const variable = text(delta.variable);
     const from = text(delta.from);
@@ -351,8 +479,24 @@ function validateBeatPlan(candidate) {
     if (!BEAT_TYPES.includes(type)) errors.push(`${where}的 type 不合法：${type || '空'}`);
     // function 缺失/非法不直接判计划作废：作废会掉进整章直写，比缺分类更糟。
     // 这里只记为「未分类」，由路由重排一次；重排后仍缺才写进 plan_degraded。
-    if (!beatFunction) functionReasonMissing.push(`${id}:未分类${rawFunction ? `(${rawFunction})` : ''}`);
-    else if (functionReason.length < 8) functionReasonMissing.push(`${id}:缺判定依据`);
+    if (!outlineMode && !beatFunction) {
+      functionReasonMissing.push(`${id}:未分类${rawFunction ? `(${rawFunction})` : ''}`);
+    } else if (!outlineMode && functionReason.length < 8) {
+      functionReasonMissing.push(`${id}:缺判定依据`);
+    }
+
+    // 实体接地：有大纲时必须给 entities（可为空数组），且每一项都要有出处。
+    // 没有大纲时只记警告，不拒绝——此时作者就是让模型从零构思。
+    if (entities === null) {
+      if (outlineMode) errors.push(`${where}缺少 entities 数组`);
+    } else if (outlineMode && ground) {
+      const invented = ungroundedEntities({ entities }, corpus);
+      if (invented.length) {
+        errors.push(
+          `${where}的实体「${invented.join('、')}」在本章大纲/人物卡/设定/素材里找不到出处`
+        );
+      }
+    }
     for (const [key, value] of Object.entries({ goal, obstacle: beatObstacle, cost: beatCost })) {
       if (!value) errors.push(`${where}的 ${key} 不能为空`);
     }
@@ -372,17 +516,20 @@ function validateBeatPlan(candidate) {
     const rawShare = Number(beat.wordShare);
     beats.push({
       id,
+      planMode: outlineMode ? 'outline' : 'reference',
       function: beatFunction,
       functionReason,
       type,
       goal,
       obstacle: beatObstacle,
+      turn,
       cost: beatCost,
       delta: { variable, from, to },
       infoGain,
       paragraphs: Number.isInteger(paragraphs) ? paragraphs : 0,
       wordShare: Number.isFinite(rawShare) && rawShare > 0 && rawShare <= 100 ? rawShare : null,
       endHook,
+      entities: entities || [],
     });
   });
 
@@ -405,11 +552,12 @@ function validateBeatPlan(candidate) {
 
   // 范文配比优先：有合法 function 的拍改用实测目标；未分类的拍保留原份额，
   // 但绝不按文案关键词补猜一个功能（猜错会让整章份额错位）。
-  const shareMissing = applyReferenceShares(beats);
+  // 有大纲时完全按大纲自己的节奏，不再套范文份额。
+  const shareMissing = outlineMode ? [] : applyReferenceShares(beats);
   const fnCoverage = functionCoverage(beats);
   // 六类功能是「5000 字长章 6–8 拍」的结构要求。短章（<6 拍）本来就排不下
   // 六类，不拿它判降级；功能字段仍按拍使用，只是不做全覆盖硬校验。
-  const requireFunctions = beats.length >= MIN_BEATS_WITH_FUNCTIONS;
+  const requireFunctions = !outlineMode && beats.length >= MIN_BEATS_WITH_FUNCTIONS;
   applyTargetChars(beats);
   const adjustedParagraphs = beats.reduce((sum, beat) => sum + (beat.paragraphs || 0), 0);
   totalParagraphs = adjustedParagraphs;
@@ -423,30 +571,44 @@ function validateBeatPlan(candidate) {
 
   // 身世不能并进过渡拍：计划份额低于 20% 说明这一拍只是顺带提一句。
   // 只认身世语义，不认「回城」地点词——途中议论拍本来就发生在回城路上。
-  for (const beat of beats) {
-    const planned = Number.isFinite(beat.plannedShare) ? beat.plannedShare : beat.wordShare;
-    const identitySemantic = beat.function === 'identity' || IDENTITY_MERGE_RE.test(beatNarrative(beat));
-    if (beat.type === '过渡' && identitySemantic && planned < ARC_MIN_SHARE) {
+  // 这是范文结构规则，只在无大纲的兜底模式里生效。
+  if (!outlineMode) {
+    for (const beat of beats) {
+      const planned = Number.isFinite(beat.plannedShare) ? beat.plannedShare : beat.wordShare;
+      const identitySemantic = beat.function === 'identity' || IDENTITY_MERGE_RE.test(beatNarrative(beat));
+      if (beat.type === '过渡' && identitySemantic && planned < ARC_MIN_SHARE) {
+        errors.push(
+          `${beat.id}把身世（寄养/年龄/籍贯/旧事）并进了过渡拍（计划份额仅 ${planned}%，应 ≥${ARC_MIN_SHARE}%），` +
+            '身世必须单独成拍'
+        );
+      }
+    }
+
+    // 完整交付只能有一拍；两拍都写「把某人交给某人」就是重复交付。
+    const deliveryBeats = beats.filter((beat) => DELIVERY_FULL_RE.test(beatNarrative(beat)));
+    if (deliveryBeats.length > 1) {
       errors.push(
-        `${beat.id}把身世（寄养/年龄/籍贯/旧事）并进了过渡拍（计划份额仅 ${planned}%，应 ≥${ARC_MIN_SHARE}%），` +
-          '身世必须单独成拍'
+        `${deliveryBeats.map((b) => b.id).join('、')} 两拍都写了完整交付；交付全章只写一次`
       );
     }
   }
 
-  // 完整交付只能有一拍；两拍都写「把某人交给某人」就是重复交付。
-  const deliveryBeats = beats.filter((beat) => DELIVERY_FULL_RE.test(beatNarrative(beat)));
-  if (deliveryBeats.length > 1) {
-    errors.push(
-      `${deliveryBeats.map((b) => b.id).join('、')} 两拍都写了完整交付；交付全章只写一次`
-    );
-  }
-
   if (errors.length) return { ok: false, plan: null, errors };
+
+  // 无大纲的兜底模式不做实体硬校验（此时作者就是让模型从零构思），
+  // 但把「资料里找不到出处」的实体记成警告，方便在 plan_degraded 里看见。
+  const groundingWarnings = [];
+  if (!outlineMode && ground) {
+    for (const beat of beats) {
+      const invented = ungroundedEntities(beat, corpus);
+      if (invented.length) groundingWarnings.push(`${beat.id}:${invented.join('、')}`);
+    }
+  }
 
   return {
     ok: true,
     plan: {
+      planMode: outlineMode ? 'outline' : 'reference',
       chapterGoal,
       protagonistIntent,
       obstacle,
@@ -460,6 +622,7 @@ function validateBeatPlan(candidate) {
       functionCovered: fnCoverage.covered,
       functionMissing: requireFunctions ? fnCoverage.missing : [],
       functionReasonMissing: requireFunctions ? functionReasonMissing : [],
+      groundingWarnings,
     },
     errors: [],
   };
@@ -473,15 +636,19 @@ function validateBeatPlan(candidate) {
  * 事件链与篇幅结构，比「整章 85 段直写」更接近合格产物。
  *
  * @param {Object|string} candidate 模型最后一次输出
+ * @param {Object} [options] 同 validateBeatPlan
  * @returns {Object|null}
  */
-function salvageBeatPlan(candidate) {
+function salvageBeatPlan(candidate, options = {}) {
   const data = typeof candidate === 'string' ? parseModelJson(candidate) : candidate;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const outlineMode = options.mode === 'outline';
+  const ground = options.ground || null;
+  const corpus = groundCorpus(ground);
   const rawBeats = Array.isArray(data.beats) ? data.beats : [];
   if (!rawBeats.length) return null;
 
-  const beats = rawBeats.slice(0, MAX_BEATS).map((raw, index) => {
+  let beats = rawBeats.slice(0, MAX_BEATS).map((raw) => {
     const beat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
     const delta = beat.delta && typeof beat.delta === 'object' ? beat.delta : {};
     const rawParagraphs = Number(beat.paragraphs);
@@ -489,13 +656,22 @@ function salvageBeatPlan(candidate) {
       ? Math.min(MAX_PARAGRAPHS, Math.max(MIN_PARAGRAPHS, rawParagraphs))
       : MIN_PARAGRAPHS;
     const rawShare = Number(beat.wordShare);
+    const entities = Array.isArray(beat.entities)
+      ? beat.entities.map((x) => text(x)).filter(Boolean)
+      : [];
     return {
-      id: `B${index + 1}`,
-      function: BEAT_FUNCTIONS.includes(text(beat.function)) ? text(beat.function) : '',
+      id: '',
+      planMode: outlineMode ? 'outline' : 'reference',
+      function: outlineMode
+        ? text(beat.function).slice(0, 20)
+        : BEAT_FUNCTIONS.includes(text(beat.function))
+          ? text(beat.function)
+          : '',
       functionReason: text(beat.functionReason),
       type: BEAT_TYPES.includes(text(beat.type)) ? text(beat.type) : '过渡',
       goal: text(beat.goal) || '（原计划缺目标，按章目标推进）',
       obstacle: text(beat.obstacle) || '（原计划缺阻碍，按现有情境补写）',
+      turn: text(beat.turn),
       cost: text(beat.cost) || '（原计划缺代价，按事件结果补写）',
       delta: {
         variable: DELTA_VARIABLES.includes(text(delta.variable)) ? text(delta.variable) : '处境',
@@ -506,7 +682,18 @@ function salvageBeatPlan(candidate) {
       paragraphs,
       wordShare: Number.isFinite(rawShare) && rawShare > 0 && rawShare <= 100 ? rawShare : null,
       endHook: text(beat.endHook) || '（原计划缺钩子，按下一拍推进）',
+      entities,
     };
+  });
+
+  // 有大纲时，含无出处实体的拍直接拒绝，不交给写手去圆。
+  // 剩下的拍不足 4 个就放弃计划，宁可直写也不写一章新人物。
+  if (outlineMode && ground) {
+    beats = beats.filter((beat) => ungroundedEntities(beat, corpus).length === 0);
+    if (beats.length < 4) return null;
+  }
+  beats.forEach((beat, index) => {
+    beat.id = `B${index + 1}`;
   });
 
   const totalParagraphsForShare = beats.reduce((sum, b) => sum + (b.paragraphs || 0), 0);
@@ -523,10 +710,10 @@ function salvageBeatPlan(candidate) {
     }
     beat.plannedShare = beat.wordShare;
   }
-  const shareMissing = applyReferenceShares(beats);
+  const shareMissing = outlineMode ? [] : applyReferenceShares(beats);
   applyTargetChars(beats);
   const fnCoverage = functionCoverage(beats);
-  const requireFunctions = beats.length >= MIN_BEATS_WITH_FUNCTIONS;
+  const requireFunctions = !outlineMode && beats.length >= MIN_BEATS_WITH_FUNCTIONS;
   const functionReasonMissing = [];
   if (requireFunctions) {
     for (const beat of beats) {
@@ -538,6 +725,7 @@ function salvageBeatPlan(candidate) {
   }
 
   return {
+    planMode: outlineMode ? 'outline' : 'reference',
     chapterGoal: text(data.chapterGoal) || '（原计划缺章目标，按写作指令推进）',
     protagonistIntent: text(data.protagonistIntent) || '（原计划缺主角意图，按章目标推断）',
     obstacle: text(data.obstacle) || '（原计划缺主要阻碍）',
@@ -823,10 +1011,22 @@ function beatBadge({ coverage, checkError, rewrote, rewriteFailed, truncated } =
  * @param {string} params.systemPrompt 与写作共用的上下文快照
  * @param {string} params.instruction 作者本次的写作指令
  * @param {Object} [params.options] temperature/model/thinking/signal
+ * @param {'outline'|'reference'} [params.planMode] 有本章大纲时按大纲拆拍；否则用范文六类兜底
+ * @param {Object} [params.ground] 实体接地资料
  * @returns {Promise<{plan: Object|null, raw: string, errors: string[], reason: string}>}
  */
-async function generateBeatPlan({ provider, systemPrompt, instruction, options = {} }) {
+async function generateBeatPlan({
+  provider,
+  systemPrompt,
+  instruction,
+  options = {},
+  planMode = 'reference',
+  ground = null,
+}) {
   const signal = options.signal || null;
+  const outlineMode = planMode === 'outline';
+  const prompt = outlineMode ? OUTLINE_PLAN_PROMPT : PLAN_PROMPT;
+  const groundBlock = ground ? buildGroundBlock(ground) : '';
   let lastRaw = '';
   let lastErrors = [];
   let lastUsage = null;
@@ -836,17 +1036,22 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
       return { plan: null, raw: lastRaw, errors: lastErrors, reason: 'timeout', usage: lastUsage };
     }
 
+    const repairTail = outlineMode
+      ? '按错误清单修正，必须保留本章大纲的事件与结果；只使用可用实体里的人名、物名、关键道具，' +
+        '不得新增大纲没有的人物、证明、名额之类的东西；4–8 拍，每拍写清目标/阻碍/转折/代价。'
+      : '请在保留可用节拍的前提下按错误清单修正：格式/段数/份额错误的拍就地改，' +
+        '缺身世拍或对手拍就补一拍；只输出完整的合格 JSON，不要解释，不要省略任何一拍。';
+
     const userContent = attempt === 0
       ? `请为这一章生成节拍表。选题：${instruction}`
       : `上一次输出不合格：${lastErrors.join('；')}。` +
-        '请在保留可用节拍的前提下按错误清单修正：格式/段数/份额错误的拍就地改，' +
-        '缺身世拍或对手拍就补一拍；只输出完整的合格 JSON，不要解释，不要省略任何一拍。' +
+        repairTail +
         (lastRaw ? `\n上一次输出：\n${lastRaw}` : '');
 
     try {
       const result = await provider.chat({
         messages: [
-          { role: 'system', content: `${systemPrompt}\n\n---\n\n${PLAN_PROMPT}` },
+          { role: 'system', content: `${systemPrompt}\n\n---\n\n${prompt}${groundBlock}` },
           { role: 'user', content: userContent },
         ],
         ...options,
@@ -858,7 +1063,7 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
 
       lastRaw = String(result.content || '');
       lastUsage = result.usage || null;
-      const check = validateBeatPlan(lastRaw);
+      const check = validateBeatPlan(lastRaw, { mode: planMode, ground });
       if (check.ok) {
         return { plan: check.plan, raw: lastRaw, errors: [], reason: '', usage: lastUsage };
       }
@@ -879,7 +1084,8 @@ async function generateBeatPlan({ provider, systemPrompt, instruction, options =
 
   // R4：两次都不合格时按「最接近合法」的版本交付，不丢给写手直写。
   // 修复只夹边界与补占位，不猜剧情；缺功能拍/对手会在 plan_degraded 里写明。
-  const salvaged = salvageBeatPlan(lastRaw);
+  // 有大纲时，salvage 会再拒绝含无出处实体的拍，避免「父亲+证明」混进正文。
+  const salvaged = salvageBeatPlan(lastRaw, { mode: planMode, ground });
   if (salvaged) {
     return { plan: salvaged, raw: lastRaw, errors: lastErrors, reason: 'salvaged', usage: lastUsage };
   }
@@ -987,6 +1193,20 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
     };
   }
 
+  // 按大纲拆拍时不套范文的功能份额：function 是自由标签，没有「discussion 25%」
+  // 这种目标。份额验收只在无大纲的六类兜底模式里生效。
+  if (plan && plan.planMode === 'outline') {
+    return {
+      applicable: false,
+      reason: 'outline_mode',
+      total: 0,
+      beats: [],
+      roleShares: emptyRoleShares,
+      outOfRange: [],
+      shareMissing: [],
+    };
+  }
+
   const ranges = shareParagraphRanges(beats, paragraphs.length);
   const rows = [];
   const total = cjkCount(paragraphs.join(''));
@@ -1058,6 +1278,7 @@ module.exports = {
   SHARE_ROLES,
   SHARE_TOLERANCE,
   PLAN_PROMPT,
+  OUTLINE_PLAN_PROMPT,
   COVERAGE_PROMPT,
   validateBeatPlan,
   salvageBeatPlan,

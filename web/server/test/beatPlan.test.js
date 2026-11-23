@@ -15,6 +15,7 @@ const assert = require('node:assert');
 
 const {
   validateBeatPlan,
+  salvageBeatPlan,
   validateCoverage,
   formatBeatPlan,
   buildRewriteInstruction,
@@ -23,6 +24,7 @@ const {
   checkBeatCoverage,
   checkWordShares,
   PLAN_PROMPT,
+  OUTLINE_PLAN_PROMPT,
 } = require('../services/agent/beatPlan');
 
 const { buildSegmentInstruction } = require('../services/agent/segmentWriter');
@@ -866,3 +868,158 @@ test('规划提示词：明确 function 语义与 paragraphs/wordShare/targetCha
   assert.match(PLAN_PROMPT, /paragraphs 是这一拍的段落数，硬上限 12/);
   assert.match(PLAN_PROMPT, /targetChars 与 wordShare 要能对上/);
 });
+
+// ---------------------------------------------------------------------------
+// P1：有本章大纲时按大纲拆拍，六类功能只做无大纲兜底
+// ---------------------------------------------------------------------------
+
+const OUTLINE_GROUND = {
+  outline: '陈默在测评室遇到老周，小林在走廊等他，最后陈默签了确认单离开。',
+  instruction: '按本章大纲写这一章',
+  characters: [{ name: '陈默', aliases: '阿默' }],
+  settings: [{ name: '测评室' }],
+  materials: [{ title: '明代酒楼陈设' }],
+};
+
+/** 四拍大纲计划：function 是自由标签，不落六类。 */
+function makeOutlinePlan(overrides = {}) {
+  const plan = makePlan();
+  plan.beats = plan.beats.map((beat, index) => ({
+    ...beat,
+    function: ['入场', '试探', '冲突', '决定'][index],
+    entities: [['陈默', '测评室'], ['老周'], ['小林'], ['确认单']][index],
+    wordShare: 25,
+    turn: `第 ${index + 1} 拍的转折`,
+  }));
+  return { ...plan, ...overrides };
+}
+
+test('大纲模式：4 拍自由 function 通过，不套六类，也不改大纲的份额', () => {
+  const plan = makeOutlinePlan();
+  const check = validateBeatPlan(plan, { mode: 'outline', ground: OUTLINE_GROUND });
+
+  assert.strictEqual(check.ok, true, check.errors.join('；'));
+  assert.strictEqual(check.plan.planMode, 'outline');
+  assert.deepStrictEqual(check.plan.functionMissing, [], '大纲模式不要求六类功能');
+  assert.deepStrictEqual(check.plan.functionReasonMissing, []);
+  assert.deepStrictEqual(
+    check.plan.beats.map((beat) => beat.function),
+    ['入场', '试探', '冲突', '决定'],
+    'function 作为自由标签原样保留'
+  );
+  assert.deepStrictEqual(
+    check.plan.beats.map((beat) => beat.wordShare),
+    [25, 25, 25, 25],
+    '不再被范文份额覆盖'
+  );
+});
+
+test('大纲模式：拍里出现无出处的人名/道具时拒绝该计划', () => {
+  const plan = makeOutlinePlan();
+  plan.beats[1].entities = ['老周', '父亲', '技校证明'];
+
+  const check = validateBeatPlan(plan, { mode: 'outline', ground: OUTLINE_GROUND });
+
+  assert.strictEqual(check.ok, false);
+  const joined = check.errors.join('；');
+  assert.match(joined, /父亲/);
+  assert.match(joined, /技校证明/);
+  assert.match(joined, /找不到出处/);
+});
+
+test('大纲模式：别名、设定名、素材标题都可以作为出处', () => {
+  const plan = makeOutlinePlan();
+  plan.beats[0].entities = ['阿默', '测评室'];
+  plan.beats[1].entities = ['明代酒楼陈设'];
+
+  const check = validateBeatPlan(plan, { mode: 'outline', ground: OUTLINE_GROUND });
+  assert.strictEqual(check.ok, true, check.errors.join('；'));
+});
+
+test('大纲模式：重排后仍带无出处实体时，salvage 拒绝该拍；不足 4 拍则放弃计划', () => {
+  const five = makeOutlinePlan();
+  five.beats = [
+    ...five.beats,
+    { ...five.beats[3], id: 'B5', function: '收束', entities: ['新来的主任'], wordShare: 20 },
+  ];
+
+  const kept = salvageBeatPlan(five, { mode: 'outline', ground: OUTLINE_GROUND });
+  assert.ok(kept, '去掉一拍后仍有 4 拍，应保留');
+  assert.strictEqual(kept.beats.length, 4);
+  assert.ok(
+    !kept.beats.some((beat) => beat.entities.includes('新来的主任')),
+    '含无出处实体的拍必须被丢掉'
+  );
+
+  const three = makeOutlinePlan();
+  three.beats = three.beats.slice(0, 3).map((beat) => ({
+    ...beat,
+    entities: ['父亲'],
+  }));
+  assert.strictEqual(
+    salvageBeatPlan(three, { mode: 'outline', ground: OUTLINE_GROUND }),
+    null,
+    '剩下不足 4 拍时应放弃计划，宁可直写也不写新人物'
+  );
+});
+
+test('大纲模式：生成时提示词不要求六类，并附可用实体；发明实体触发一次重排', async () => {
+  const good = makeOutlinePlan();
+  const bad = makeOutlinePlan();
+  bad.beats[1].entities = ['父亲', '技校证明'];
+
+  const calls = [];
+  const provider = {
+    async chat(options) {
+      calls.push(options);
+      return { content: JSON.stringify(calls.length === 1 ? bad : good) };
+    },
+  };
+
+  const out = await generateBeatPlan({
+    provider,
+    systemPrompt: '## 作品上下文',
+    instruction: '按本章大纲写这一章',
+    planMode: 'outline',
+    ground: OUTLINE_GROUND,
+    options: {},
+  });
+
+  assert.strictEqual(calls.length, 2, '无出处实体会触发一次重排');
+  assert.match(calls[0].messages[0].content, /不要套用任何固定功能模板/);
+  assert.doesNotMatch(calls[0].messages[0].content, /六类必须各出现至少一次/);
+  assert.match(calls[0].messages[0].content, /可用实体（人名 \/ 物名 \/ 关键道具只能从这里取）/);
+  assert.match(calls[0].messages[0].content, /陈默/);
+  assert.match(calls[1].messages[1].content, /父亲|技校证明/, '重排指令要列出无出处实体');
+
+  assert.ok(out.plan);
+  assert.strictEqual(out.plan.planMode, 'outline');
+  for (const beat of out.plan.beats) {
+    assert.ok(
+      !beat.entities.includes('父亲') && !beat.entities.includes('技校证明'),
+      '最终计划不能保留发明出来的实体'
+    );
+  }
+});
+
+test('大纲模式：范文功能份额验收不适用', () => {
+  const raw = makeOutlinePlan();
+  const plan = validateBeatPlan(raw, { mode: 'outline', ground: OUTLINE_GROUND }).plan;
+  const body = Array.from({ length: 40 }, () => '这是正文里的一段话。').join('\n');
+  const report = checkWordShares(plan, body);
+
+  assert.strictEqual(report.applicable, false);
+  assert.strictEqual(report.reason, 'outline_mode');
+  assert.deepStrictEqual(report.outOfRange, []);
+});
+
+test('大纲提示词：要求 4–8 拍与每拍目标/阻碍/转折/代价', () => {
+  assert.match(OUTLINE_PLAN_PROMPT, /4–8 拍/);
+  assert.match(OUTLINE_PLAN_PROMPT, /目标/);
+  assert.match(OUTLINE_PLAN_PROMPT, /阻碍/);
+  assert.match(OUTLINE_PLAN_PROMPT, /转折/);
+  assert.match(OUTLINE_PLAN_PROMPT, /代价/);
+  assert.match(OUTLINE_PLAN_PROMPT, /entities/);
+  assert.doesNotMatch(OUTLINE_PLAN_PROMPT, /六类必须各出现至少一次/);
+});
+

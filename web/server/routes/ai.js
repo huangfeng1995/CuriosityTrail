@@ -1087,6 +1087,49 @@ router.post('/chat', async (req, res) => {
           includeChapterBody: false,
         });
 
+        // ---- 规划模式与实体接地（P1）----
+        //
+        // 有本章大纲时，节拍表必须服从大纲自己的场景与因果，不再套范文六类功能；
+        // 没有大纲时才退回六类兜底。无论哪种模式，都把「可用实体」交给规划器，
+        // 有大纲时还做硬校验：拍里出现的人名/物名/道具必须在资料里有出处。
+        const [planChapterRow, planWorkRow, groundCharacters, groundSettings, groundMaterials] =
+          await Promise.all([
+            chapterId
+              ? get('SELECT title, outline FROM chapters WHERE id = ? AND work_id = ?', [
+                  chapterId,
+                  workId,
+                ]).catch(() => null)
+              : null,
+            get('SELECT title, synopsis, outline FROM works WHERE id = ?', [workId]).catch(() => null),
+            all('SELECT name, aliases FROM characters WHERE work_id = ?', [workId]).catch(() => []),
+            all('SELECT name FROM settings WHERE work_id = ?', [workId]).catch(() => []),
+            all(
+              `SELECT title FROM materials
+               WHERE user_id = ? AND (work_id = ? OR work_id IS NULL OR work_id = '')
+                 AND status != 'retracted'
+               ORDER BY created_at DESC, id DESC LIMIT 20`,
+              [req.userId, workId]
+            ).catch(() => []),
+          ]);
+
+        const planGround = {
+          outline: String((planChapterRow && planChapterRow.outline) || '').trim(),
+          instruction: String(message),
+          workTitle: (planWorkRow && planWorkRow.title) || '',
+          workOutline: (planWorkRow && planWorkRow.outline) || '',
+          synopsis: (planWorkRow && planWorkRow.synopsis) || '',
+          characters: groundCharacters || [],
+          settings: groundSettings || [],
+          materials: groundMaterials || [],
+        };
+        // 只有「像大纲」的文本才按大纲拆拍：一行故事前提（例如「主角进庙查旧案」）
+        // 提供不了场景与因果，硬按大纲模式反而会退化成直写；这种短文本继续走
+        // 六类功能兜底。真实分场大纲通常远超 40 字。
+        const MIN_OUTLINE_CHARS_FOR_PLAN = 40;
+        const planMode = planGround.outline.length >= MIN_OUTLINE_CHARS_FOR_PLAN
+          ? 'outline'
+          : 'reference';
+
         // ---- 分场 brief（先于节拍规划）----
         //
         // 粗提纲只能排进提纲里已有的东西：没写「交弓/托付」，规划器就排不出。
@@ -1216,6 +1259,8 @@ router.post('/chat', async (req, res) => {
           systemPrompt: briefSystemPrompt,
           instruction: String(message),
           options: makePlanOptions(),
+          planMode,
+          ground: planGround,
         });
 
         const planMs = Date.now() - planStartedAt;
@@ -1236,7 +1281,11 @@ router.post('/chat', async (req, res) => {
               ? plan.functionReasonMissing
               : [];
             const coverage = brief ? planBrief.briefCoverage(brief, plan) : null;
-            const opp = brief ? planBrief.openingOpponentCoverage(brief, plan) : null;
+            // 开场对手检查依赖 function=opening；按大纲拆拍时 function 是自由标签，
+            // 这条规则不再适用，避免反复重排却没有结果。
+            const opp = brief && planMode !== 'outline'
+              ? planBrief.openingOpponentCoverage(brief, plan)
+              : null;
             const oppMissing = opp && opp.status === 'missing' ? opp : null;
             const score =
               fnMissing.length * 2 +
@@ -1276,6 +1325,8 @@ router.post('/chat', async (req, res) => {
               systemPrompt: briefSystemPrompt,
               instruction: `${String(message)}\n\n${parts.join('\n\n')}`,
               options: makePlanOptions(),
+              planMode,
+              ground: planGround,
             }).catch((err) => {
               console.error('按功能拍/brief 重排失败，保留第一版节拍表：', err.message);
               return { plan: null, errors: [] };
@@ -1290,7 +1341,8 @@ router.post('/chat', async (req, res) => {
           }
 
           // R2：对手没落进开场拍时，只重排开场一次，其余拍要求原样保留。
-          if (gap.oppMissing && replans < 2 && !roundSignal.aborted) {
+          // 有大纲时不套 opening 功能拍，这条重排不适用。
+          if (planMode !== 'outline' && gap.oppMissing && replans < 2 && !roundSignal.aborted) {
             send({ type: 'agent_thinking', label: '正在把外部对手落进开场拍' });
             const replanOut = await generateBeatPlan({
               provider,
@@ -1302,6 +1354,8 @@ router.post('/chat', async (req, res) => {
                   openingBeatId: gap.oppMissing.openingBeatId,
                 }),
               options: makePlanOptions(),
+              planMode,
+              ground: planGround,
             }).catch((err) => {
               console.error('开场对手重排失败，保留当前节拍表：', err.message);
               return { plan: null, errors: [] };
@@ -1335,6 +1389,13 @@ router.post('/chat', async (req, res) => {
           }
 
           const degradedParts = planNotes.slice();
+          // 无大纲兜底时，把「资料里找不到出处」的实体记成警告；有大纲时
+          // 无出处实体会在规划阶段被拒绝，不会走到这里。
+          if (Array.isArray(beatPlan.groundingWarnings) && beatPlan.groundingWarnings.length) {
+            degradedParts.push(
+              `ungrounded:${beatPlan.groundingWarnings.slice(0, 5).join('、')}`
+            );
+          }
           if (gap.fnMissing.length) {
             degradedParts.push(`function_missing:${gap.fnMissing.join('、')}`);
           }
