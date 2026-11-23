@@ -19,6 +19,7 @@ const upgrade = require('../services/pipeline/upgrade');
 const backgroundFacts = require('../services/pipeline/backgroundFacts');
 const knowledgeScan = require('../services/pipeline/knowledgeScan');
 const knowledgeView = require('../services/pipeline/knowledgeView');
+const pressureTest = require('../services/pipeline/pressureTest');
 
 const router = express.Router();
 
@@ -736,6 +737,92 @@ router.post('/:workId/violations/:id/dismiss', async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     return fail(res, err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 设定压力测试（HP9）
+// ---------------------------------------------------------------------------
+
+/**
+ * 运行一次压力测试。
+ *
+ * 失败返回 200 + 空清单 + notice：这是写作期之外的独立动作，
+ * 不该因为模型挂了就让前端弹 500。成功时整批替换 open 风险。
+ */
+router.post('/:workId/risks/test', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const result = await pressureTest.runPressureTest({ workId: work.id });
+    return res.json({
+      risks: result.risks,
+      notice: result.notice,
+      missingCategories: result.missingCategories,
+      chapterCount: result.chapterCount,
+      failed: result.failed,
+    });
+  } catch (err) {
+    console.error('[pipeline] 设定压力测试失败:', err);
+    return res.json({
+      risks: [],
+      notice: '设定压力测试失败',
+      missingCategories: [],
+      chapterCount: 0,
+      failed: true,
+    });
+  }
+});
+
+router.get('/:workId/risks', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+    const status = ['open', 'accepted', 'dismissed', 'all'].includes(String(req.query.status))
+      ? String(req.query.status)
+      : 'open';
+    const risks = await pressureTest.listRisks(work.id, status);
+    return res.json({ risks });
+  } catch (err) {
+    console.error('[pipeline] 风险清单读取失败:', err);
+    return res.status(500).json({ error: '风险清单读取失败' });
+  }
+});
+
+/** 采纳：作者显式选择写成设定卡或情节卡，压力测试本身不写任何正式卡片。 */
+router.post('/:workId/risks/:id/adopt', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+
+    const target = req.body && req.body.target === 'plot' ? 'plot' : 'setting';
+    const result = await pressureTest.adoptRisk({
+      workId: work.id,
+      riskId: req.params.id,
+      target,
+    });
+    if (result.error === 'not_found') return res.status(404).json({ error: '风险条目不存在' });
+    if (result.error === 'already_handled') {
+      return res.status(409).json({ error: '这条风险已经处理过了' });
+    }
+    return res.json(result);
+  } catch (err) {
+    console.error('[pipeline] 采纳风险失败:', err);
+    return res.status(500).json({ error: '采纳风险失败' });
+  }
+});
+
+router.post('/:workId/risks/:id/dismiss', async (req, res) => {
+  try {
+    const work = await pipelineWork(req, res);
+    if (!work) return;
+    const risk = await pressureTest.dismissRisk({ workId: work.id, riskId: req.params.id });
+    if (!risk) return res.status(404).json({ error: '风险条目不存在' });
+    return res.json({ risk });
+  } catch (err) {
+    console.error('[pipeline] 忽略风险失败:', err);
+    return res.status(500).json({ error: '忽略风险失败' });
   }
 });
 

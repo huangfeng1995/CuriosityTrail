@@ -5,6 +5,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import AnchorLibrary from '../components/Pipeline/AnchorLibrary';
 import PendingQueue from '../components/Pipeline/PendingQueue';
+import RiskList from '../components/Pipeline/RiskList';
 
 /**
  * 历史悬疑流水线的作者页。
@@ -16,7 +17,13 @@ export default function Pipeline() {
   const { workId } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [tab, setTab] = useState(searchParams.get('tab') === 'pending' ? 'pending' : 'anchors');
+  const [tab, setTab] = useState(
+    searchParams.get('tab') === 'pending'
+      ? 'pending'
+      : searchParams.get('tab') === 'risks'
+        ? 'risks'
+        : 'anchors'
+  );
   const [work, setWork] = useState(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -104,6 +111,15 @@ export default function Pipeline() {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === 'risks'}
+          className={`ct-pipeline-tab${tab === 'risks' ? ' is-active' : ''}`}
+          onClick={() => setTab('risks')}
+        >
+          风险清单
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === 'pending'}
           className={`ct-pipeline-tab${tab === 'pending' ? ' is-active' : ''}`}
           onClick={() => setTab('pending')}
@@ -112,11 +128,9 @@ export default function Pipeline() {
         </button>
       </div>
 
-      {tab === 'anchors' ? (
-        <AnchorLibrary workId={work.id} />
-      ) : (
-        <PendingQueue workId={work.id} />
-      )}
+      {tab === 'anchors' && <AnchorLibrary workId={work.id} />}
+      {tab === 'risks' && <RiskList workId={work.id} />}
+      {tab === 'pending' && <PendingQueue workId={work.id} />}
     </div>
   );
 }

@@ -47,8 +47,10 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 17 → 18：章节摘要（chapters.summary 存 JSON，另记生成时的字数与时间）。
  *              摘要只加空列，老章保持 NULL，正文与既有字段一条不动；
  *              查询走既有的 idx_chapters_work，不需要新建索引。
+ * 版本 18 → 19：设定压力测试风险清单（setting_risks）。新表只增不改，
+ *              老库建空表即可；索引放在 ensureColumn 之后统一补建。
  */
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 
 /**
  * 版本号之前的老库遗留表。
@@ -669,6 +671,27 @@ CREATE TABLE IF NOT EXISTS knowledge_pending (
 CREATE INDEX IF NOT EXISTS idx_knowledge_pending_work
   ON knowledge_pending (work_id, status, created_at);
 
+-- 设定压力测试的风险清单（HP9 / P.7）。
+--
+-- 只存「可能穿帮」的提案，不改任何设定；作者在风险清单页逐条采纳或忽略。
+-- earliest_break_chapter 必须是整数：模型写「第十章左右」这类文本时，
+-- 该条在服务层就被丢弃，不落库。
+CREATE TABLE IF NOT EXISTS setting_risks (
+  id            TEXT PRIMARY KEY,
+  work_id       TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  category      TEXT NOT NULL CHECK (category IN ('institution','evidence','time','human')),
+  title         TEXT NOT NULL,
+  detail        TEXT NOT NULL,
+  earliest_break_chapter INTEGER,
+  fix           TEXT,
+  severity      TEXT NOT NULL DEFAULT 'warn' CHECK (severity IN ('block','warn')),
+  anchor_id     TEXT REFERENCES work_anchors(id) ON DELETE SET NULL,
+  status        TEXT NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open','accepted','dismissed')),
+  created_at    TEXT NOT NULL,
+  modified_at   TEXT NOT NULL
+);
+
 `;
 
 /**
@@ -698,6 +721,9 @@ CREATE INDEX IF NOT EXISTS idx_work_anchors_material
 -- v15：按来源采纳作废提案。老库这一列由 ensureColumn 补，索引必须在其后建。
 CREATE INDEX IF NOT EXISTS idx_card_proposals_origin
   ON card_proposals (user_id, origin_ref, status);
+-- v19：设定风险清单。新表本身由 SCHEMA 建好，索引按约定统一放在补列之后。
+CREATE INDEX IF NOT EXISTS idx_setting_risks_work
+  ON setting_risks (work_id, status, created_at);
 `;
 
 /** 需要 user_id 的业务表。 */
