@@ -338,7 +338,7 @@ test('agent 抽取入库：同一内容幂等，接口可一次写入多条', as
 
 test('C 冲突事实不进 mustReveal，记入 backgroundWithheld；非冲突事实照常交代', () => {
   const facts = [
-    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北' },
+    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北,牵制' },
     { id: 'f10', fact_type: 'background', content: '杨平今年十八岁', keywords: '十八岁' },
   ];
   const brief = {
@@ -368,7 +368,7 @@ test('C 冲突事实不进 mustReveal，记入 backgroundWithheld；非冲突事
 
 test('C 自检不再把被 withhold 压住的事实报成「未交代」', () => {
   const facts = [
-    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北' },
+    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北,牵制' },
     { id: 'f10', fact_type: 'background', content: '杨平今年十八岁', keywords: '十八岁' },
   ];
   const brief = backgroundFacts.mergeIntoBrief(
@@ -395,7 +395,7 @@ test('C 自检不再把被 withhold 压住的事实报成「未交代」', () =>
 
 test('C 全部背景事实都被 withhold 压住时，不报「尚未入库」', () => {
   const facts = [
-    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北' },
+    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北,牵制' },
   ];
   const brief = backgroundFacts.mergeIntoBrief(
     {
@@ -421,4 +421,37 @@ test('C 全部背景事实都被 withhold 压住时，不报「尚未入库」',
   assert.strictEqual(check.applicable, true);
   assert.deepStrictEqual(check.missing, [], '不能报成 notIngested');
   assert.strictEqual(check.withheld.length, 1);
+});
+
+test('C 只共享同场人物/地名不算同一条信息，不能误压背景事实', () => {
+  const facts = [
+    {
+      id: 'f1',
+      fact_type: 'background',
+      content: '杨平今年十八岁，自幼寄养在温县司马防家。',
+      keywords: '十八岁,寄养,温县',
+    },
+  ];
+  const brief = {
+    items: [
+      {
+        id: 'MW1',
+        kind: 'mustWithhold',
+        text: '不得解释内室争执的内容与争执双方各是谁，只写声音断续、字句听不真切',
+        keywords: ['内室', '争执', '声音'],
+      },
+      {
+        id: 'MW3',
+        kind: 'mustWithhold',
+        text: '不得解释司马防在温县所忧的具体是哪一方势力，也不得让杨平此时明白许都的局势',
+        keywords: ['司马防', '温县', '势力'],
+      },
+    ],
+  };
+  const merged = backgroundFacts.mergeIntoBrief(brief, facts);
+  assert.ok(
+    merged.items.some((item) => item.kind === 'mustReveal' && item.text.includes('十八岁')),
+    '年龄/寄养与「所忧势力」不是同一条信息，仍要交代'
+  );
+  assert.strictEqual(merged.backgroundWithheld, undefined, '不能误判成冲突');
 });

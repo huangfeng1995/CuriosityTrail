@@ -448,19 +448,53 @@ function mustRevealBadge(missing = []) {
  *     mustReveal 自检也不再拿它报「未交代」，作者能在数据里看到这条冲突，
  *     要提前交代就去掉/放宽对应的 mustWithhold。
  *
- * 判定只做「同信息」而非「同场景」：事实正文与 withhold 正文/关键词
- * 至少共享一个 ≥2 字的词，或一方正文包含另一方。
+ * 判定只做「同一条信息」而不是「同一个场景/同一批人」：
+ *   - 去掉「不得/不要/只写」这类禁止语后，一方正文包含另一方；
+ *   - 或双方显式关键词至少共享 2 个；
+ *   - 或去掉禁止语后的最长公共子串 ≥10 字（覆盖关键词缺失、模型换写的情况）。
+ *
+ * 只用「共享一个词」会把「温县/司马防」这种同场人物误判成同一条信息：
+ * 例如「杨平寄养在温县司马防家」与「不得解释司马防在温县所忧的势力」
+ * 共享两个专名，但不是同一件事，不能因此压下年龄与寄养事实。
  */
+function stripWithholdModals(text) {
+  return String(text || '').replace(
+    /不得(?:解释|点破|写明|交代|让|把|写出)?|不要(?:解释|点破)?|不许(?:解释|点破)?|不能(?:解释|点破)?|禁止|只(?:写|可|能|要)/g,
+    ''
+  );
+}
+
+function longestCommonSubstringLength(a, b) {
+  const left = Array.from(String(a || ''));
+  const right = Array.from(String(b || ''));
+  if (!left.length || !right.length) return 0;
+  let best = 0;
+  let previous = new Array(right.length + 1).fill(0);
+  for (let i = 1; i <= left.length; i += 1) {
+    const current = new Array(right.length + 1).fill(0);
+    for (let j = 1; j <= right.length; j += 1) {
+      if (left[i - 1] === right[j - 1]) {
+        current[j] = previous[j - 1] + 1;
+        if (current[j] > best) best = current[j];
+      }
+    }
+    previous = current;
+  }
+  return best;
+}
+
 function withholdConflict(fact, item) {
   const factText = normalizeText(fact.content).replace(/\s+/g, '');
-  const itemText = normalizeText(item.text).replace(/\s+/g, '');
-  if (!factText || !itemText) return false;
-  if (factText.includes(itemText) || itemText.includes(factText)) return true;
-  const keys = [
-    ...splitKeywords(item.keywords),
-    ...deriveKeywords(itemText),
-  ];
-  return keys.some((key) => key && factText.includes(key));
+  const itemCore = stripWithholdModals(normalizeText(item.text)).replace(/\s+/g, '');
+  if (!factText || !itemCore) return false;
+  if (factText.includes(itemCore) || itemCore.includes(factText)) return true;
+
+  const factKeys = splitKeywords(fact.keywords);
+  const itemKeys = splitKeywords(item.keywords);
+  const shared = itemKeys.filter((key) => factKeys.includes(key));
+  if (shared.length >= 2) return true;
+
+  return longestCommonSubstringLength(factText, itemCore) >= 10;
 }
 
 /** brief 里被 mustWithhold 压住的背景事实（按 id 与原文两种键）。 */
