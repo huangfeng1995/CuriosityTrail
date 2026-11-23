@@ -19,7 +19,12 @@ const crypto = require('crypto');
 const { all, get, run } = require('../database');
 const aiConfig = require('../services/aiConfig');
 const { resolveProvider, checkAllProviders } = require('../services/providers');
-const { assembleContext, trimHistory } = require('../services/context');
+const {
+  assembleContext,
+  findPreviousChapterWithBody,
+  chapterBody,
+  trimHistory,
+} = require('../services/context');
 const roles = require('../services/roles');
 const localSearch = require('../services/search/local');
 const webSearch = require('../services/search/deepseekSearch');
@@ -1176,16 +1181,20 @@ router.post('/chat', async (req, res) => {
         const [planChapterRow, planWorkRow, groundCharacters, groundSettings, groundMaterials] =
           await Promise.all([
             chapterId
-              ? get('SELECT title, outline FROM chapters WHERE id = ? AND work_id = ?', [
+              ? get('SELECT title, outline, seq FROM chapters WHERE id = ? AND work_id = ?', [
                   chapterId,
                   workId,
                 ]).catch(() => null)
               : null,
             get('SELECT title, synopsis, outline, template FROM works WHERE id = ?', [workId]).catch(() => null),
-            all('SELECT name, aliases FROM characters WHERE work_id = ?', [workId]).catch(() => []),
-            all('SELECT name FROM settings WHERE work_id = ?', [workId]).catch(() => []),
             all(
-              `SELECT title FROM materials
+              `SELECT name, aliases, role, identity, personality, speech, goal, arc, relations, notes, weakness
+               FROM characters WHERE work_id = ?`,
+              [workId]
+            ).catch(() => []),
+            all('SELECT name, category, content FROM settings WHERE work_id = ?', [workId]).catch(() => []),
+            all(
+              `SELECT title, body FROM materials
                WHERE user_id = ? AND (work_id = ? OR work_id IS NULL OR work_id = '')
                  AND status != 'retracted'
                ORDER BY created_at DESC, id DESC LIMIT 20`,
@@ -1193,12 +1202,22 @@ router.post('/chat', async (req, res) => {
             ).catch(() => []),
           ]);
 
+        // 上一章结尾原文也是规划器的给定输入（「如何衔接上一章」），
+        // 必须进接地语料：否则上一章末句里的器物（如「弓」）会被判成新道具。
+        const previousChapterRow = planChapterRow && planChapterRow.seq
+          ? await findPreviousChapterWithBody(workId, planChapterRow.seq).catch(() => null)
+          : null;
+        const previousChapterText = previousChapterRow
+          ? chapterBody(previousChapterRow).slice(-800)
+          : '';
+
         const planGround = {
           outline: String((planChapterRow && planChapterRow.outline) || '').trim(),
           instruction: String(message),
           workTitle: (planWorkRow && planWorkRow.title) || '',
           workOutline: (planWorkRow && planWorkRow.outline) || '',
           synopsis: (planWorkRow && planWorkRow.synopsis) || '',
+          previousChapter: previousChapterText,
           characters: groundCharacters || [],
           settings: groundSettings || [],
           materials: groundMaterials || [],
@@ -1383,6 +1402,9 @@ router.post('/chat', async (req, res) => {
           if (brief && brief.items.length) {
             briefSystemPrompt = `${briefSystemPrompt}\n\n---\n\n${planBrief.formatPlanBrief(brief)}`;
           }
+          // brief 已经原样拼进规划提示词，里面的器物/动作就是规划器的给定输入。
+          // 接地语料必须同步包含它，否则规划器照着 brief 写出的实体反而被判「无出处」。
+          planGround.brief = brief;
 
           console.log(
             JSON.stringify({

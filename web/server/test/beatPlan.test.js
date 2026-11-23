@@ -986,6 +986,75 @@ test('大纲模式：别名、设定名、素材标题都可以作为出处', ()
   assert.strictEqual(check.ok, true, check.errors.join('；'));
 });
 
+test('大纲模式：人物卡身份/弱点/目标也是实体出处', () => {
+  const ground = {
+    ...OUTLINE_GROUND,
+    characters: [
+      {
+        name: '陈默',
+        aliases: '阿默',
+        identity: '随身带着父亲留下的犀角弓',
+        weakness: '惧水',
+        goal: '查清旧案',
+      },
+    ],
+  };
+  const plan = makeOutlinePlan();
+  plan.beats[0].entities = ['犀角弓', '惧水', '查清旧案'];
+  const check = validateBeatPlan(plan, { mode: 'outline', ground });
+  assert.strictEqual(check.ok, true, check.errors.join('；'));
+
+  const outside = makeOutlinePlan();
+  outside.beats[0].entities = ['王警官'];
+  assert.strictEqual(
+    validateBeatPlan(outside, { mode: 'outline', ground }).ok,
+    false,
+    '卡外的新人名仍必须被拒'
+  );
+});
+
+test('大纲模式：上一章结尾原文也是实体出处', () => {
+  const ground = {
+    ...OUTLINE_GROUND,
+    previousChapter: '司马防在车前把弓交回陈默手里，说别把仁心丢在路上。',
+  };
+  const plan = makeOutlinePlan();
+  plan.beats[0].entities = ['弓'];
+  const check = validateBeatPlan(plan, { mode: 'outline', ground });
+  assert.strictEqual(check.ok, true, check.errors.join('；'));
+});
+
+test('大纲模式：brief 非 inferred 条目是实体出处，inferred 条目不给自己当出处', () => {
+  const ground = {
+    ...OUTLINE_GROUND,
+    brief: {
+      items: [
+        { kind: 'mustPresent', text: '陈默向门吏递上名刺与征辟文书', keywords: ['门吏'], inferred: false },
+      ],
+    },
+  };
+  const plan = makeOutlinePlan();
+  plan.beats[0].entities = ['名刺', '征辟文书', '门吏'];
+  const check = validateBeatPlan(plan, { mode: 'outline', ground });
+  assert.strictEqual(check.ok, true, check.errors.join('；'));
+
+  const inferredGround = {
+    ...OUTLINE_GROUND,
+    brief: {
+      items: [
+        { kind: 'mustPresent', text: '有人送来王警官的密信', keywords: ['密信'], inferred: true },
+      ],
+    },
+  };
+  const inferredPlan = makeOutlinePlan();
+  inferredPlan.beats[0].entities = ['密信'];
+  assert.strictEqual(
+    validateBeatPlan(inferredPlan, { mode: 'outline', ground: inferredGround }).ok,
+    false,
+    'inferred=true 的 brief 条目是模型推断，不能作为出处'
+  );
+});
+
 test('大纲模式：情节卡标题与备注也是实体出处，卡外的仍被拒', () => {
   const ground = {
     ...OUTLINE_GROUND,

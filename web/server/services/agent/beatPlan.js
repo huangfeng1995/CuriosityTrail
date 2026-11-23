@@ -344,22 +344,57 @@ function normalizeEntity(value) {
 /**
  * 把 grounding 资料压成一段可做包含判断的语料。
  *
- * 来源：本章大纲、作者本次指令、作品信息、人物卡（名/别名）、设定名、素材标题、
- * 本章情节卡（标题/备注）。只做「是否出现过」的判断，不做语义匹配——宁可让模型
- * 多改一次，也不放行一个资料里根本不存在的「父亲」。
+ * 语料必须等于「规划器实际拿到的资料」，而不是它的一个子集：
+ *   - 本章大纲、作者本次指令、作品信息；
+ *   - 人物卡整张（名/别名/身份/性格/说话风格/目标/成长弧/关系/备注/弱点）；
+ *   - 设定名与设定正文；
+ *   - 素材标题与正文；
+ *   - 本章情节卡（标题/备注）；
+ *   - 上一章结尾原文（规划上下文里的「末句/衔接」）；
+ *   - 分场 brief 里非 inferred 的条目（brief 会原样拼进规划提示词，
+ *     其中的器物名/动作名本来就属于给定输入）。
+ *
+ * 旧实现只取人物姓名与设定名，于是人物卡身份里的「征辟」、上一章末句里的
+ * 「弓」、brief 里的「名刺/门吏」都被判成找不到出处，规划被连着拒掉后只能
+ * 降级直写——这不是「卡外可编」，是语料比提示词窄。
+ *
+ * 边界不变：以上来源之外的人名/物名/关键道具仍然找不到出处。
+ * brief 里 inferred=true 的条目是模型推断，不能给自己当出处。
  */
 function groundCorpus(ground) {
   if (!ground) return '';
+  const briefItems = ground.brief && Array.isArray(ground.brief.items)
+    ? ground.brief.items
+        .filter((item) => item && item.inferred !== true)
+        .flatMap((item) => [item.text, ...(Array.isArray(item.keywords) ? item.keywords : [])])
+    : [];
   const parts = [
     ground.outline,
     ground.instruction,
     ground.workTitle,
     ground.workOutline,
     ground.synopsis,
-    ...(ground.characters || []).flatMap((row) => [row.name, row.aliases]),
-    ...(ground.settings || []).map((row) => row.name),
-    ...(ground.materials || []).map((row) => row.title),
+    ground.previousChapter,
+    ...(ground.characters || []).flatMap((row) => [
+      row.name,
+      row.aliases,
+      row.identity,
+      row.personality,
+      row.speech,
+      row.goal,
+      row.arc,
+      row.relations,
+      row.notes,
+      row.weakness,
+      row.role,
+    ]),
+    ...(ground.settings || []).flatMap((row) => [row.name, row.category, row.content]),
+    ...(ground.materials || []).flatMap((row) => [
+      row.title,
+      String(row.body || row.content || '').slice(0, 4000),
+    ]),
     ...(ground.plotCards || []).flatMap((row) => [row.title, row.content]),
+    ...briefItems,
   ];
   return normalizeEntity(parts.filter(Boolean).join('\n'));
 }

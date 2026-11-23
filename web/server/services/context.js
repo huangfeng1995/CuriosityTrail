@@ -1614,6 +1614,8 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
 
 module.exports = {
   assembleContext,
+  findPreviousChapterWithBody,
+  chapterBody,
   parseBlocks,
   selectCharacters,
   selectSettings,
