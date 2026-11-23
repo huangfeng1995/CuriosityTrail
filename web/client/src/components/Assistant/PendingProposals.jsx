@@ -27,6 +27,7 @@ export default function PendingProposals({
   const [titles, setTitles] = useState({});
   const [busy, setBusy] = useState(false);
   const { message: toast } = AntApp.useApp();
+  const draftCount = (proposals || []).filter((p) => p.stage === 'draft').length;
 
   // 确认/丢弃后广播一次：左栏面板、角标、右侧提案条都监听这个事件，
   // 谁先点的都能同步，不会出现「一边没了、另一边还挂着」。
@@ -95,6 +96,9 @@ export default function PendingProposals({
       <div className="ct-card-props-head">
         <span>
           {heading} · {proposals.length}
+          {draftCount > 0 && (
+            <span className="ct-card-props-draft-hint"> · {draftCount} 条草稿未进正文</span>
+          )}
         </span>
         {proposals.length > 1 && (
           <Button
@@ -116,6 +120,16 @@ export default function PendingProposals({
                 {KIND_LABELS[p.kind] || p.kind}
               </span>
             )}
+            <span
+              className={`ct-card-props-stage is-${p.stage === 'draft' ? 'draft' : 'adopted'}`}
+              title={
+                p.stage === 'draft'
+                  ? '还没写进正文；采纳后会补上具体章节与段落'
+                  : '已经写进正文，出处已记录'
+              }
+            >
+              {p.stage === 'draft' ? '草稿' : '已进正文'}
+            </span>
             <Input
               size="small"
               value={titles[p.id] ?? p.title}

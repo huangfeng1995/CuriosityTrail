@@ -23,6 +23,7 @@ const { ready, all, get } = require('../database');
 const aiConfig = require('../services/aiConfig');
 const { assembleContext } = require('../services/context');
 const { recognize } = require('../services/cards/recognizer');
+const cardProposals = require('../services/cards/proposals');
 
 let server;
 let fakeModel;
@@ -396,4 +397,143 @@ test('撤销采纳：本轮 pending 提案一并作废，已确认的卡片保�
 
   const settings = await all('SELECT id FROM settings WHERE work_id = ?', [workId]);
   assert.strictEqual(settings.length, 0, '作废后不能留下设定卡');
+});
+
+// ---------------------------------------------------------------------------
+// 5. B：生成即记录 → 采纳补出处
+// ---------------------------------------------------------------------------
+
+test('B 生成即记录：草稿提案 block_id 为空，同来源重复触发不堆提案', async () => {
+  const { workId, chapterId, userId } = await seedChapter();
+  const provider = { chat: async () => ({ content: proposalJson() }) };
+
+  const first = await cardProposals.createDraftProposals({
+    userId,
+    workId,
+    chapterId,
+    originRef: 'msg-draft-1',
+    text: APPLIED_TEXT,
+    provider,
+  });
+
+  assert.strictEqual(first.length, 3, '应落三条草稿提案');
+  assert.ok(
+    first.every((row) => row.stage === 'draft' && !row.blockId && row.chapterId === chapterId),
+    '草稿没有 block_id，但已经知道是哪一章'
+  );
+
+  const again = await cardProposals.createDraftProposals({
+    userId,
+    workId,
+    chapterId,
+    originRef: 'msg-draft-1',
+    text: APPLIED_TEXT,
+    provider,
+  });
+  assert.deepStrictEqual(again, [], '同一来源重复触发直接返回空');
+
+  const rows = await all(
+    'SELECT id FROM card_proposals WHERE user_id = ? AND origin_ref = ?',
+    [userId, 'msg-draft-1']
+  );
+  assert.strictEqual(rows.length, 3, '库里不能堆出第二批');
+
+  // 重新生成：上一版草稿 pending 作废，确认过的不动。
+  const next = await cardProposals.createDraftProposals({
+    userId,
+    workId,
+    chapterId,
+    originRef: 'msg-draft-2',
+    replacedOriginRef: 'msg-draft-1',
+    text: APPLIED_TEXT,
+    provider,
+  });
+  assert.strictEqual(next.length, 3, '新版来源可以重新落提案');
+
+  const oldRows = await all(
+    "SELECT status, block_id FROM card_proposals WHERE user_id = ? AND origin_ref = 'msg-draft-1'",
+    [userId]
+  );
+  assert.ok(oldRows.every((row) => row.status === 'dismissed' && !row.block_id), '旧草稿 pending 应作废');
+});
+
+test('B 采纳后补出处：草稿变成已进正文，且不再调用识别模型', async () => {
+  const { workId, chapterId, userId } = await seedChapter();
+  const provider = { chat: async () => ({ content: proposalJson() }) };
+
+  await cardProposals.createDraftProposals({
+    userId,
+    workId,
+    chapterId,
+    originRef: 'msg-draft-3',
+    text: APPLIED_TEXT,
+    provider,
+  });
+
+  // 识别端点若被调用就会 500；promotion 命中时不该走到那里。
+  fakeModel.setDefault({ httpStatus: 500, errorMessage: '不该再识别一次' });
+
+  const res = await server.request('/api/card-proposals/scan', {
+    method: 'POST',
+    body: {
+      workId,
+      chapterId,
+      blockId: 'b9',
+      originRef: 'msg-draft-3',
+      text: APPLIED_TEXT,
+    },
+  });
+  assert.strictEqual(res.status, 200);
+  const data = await res.json();
+
+  assert.strictEqual(data.promoted, 3, '三条草稿都应补上出处');
+  assert.strictEqual(data.proposals.length, 3);
+  assert.ok(
+    data.proposals.every((row) => row.stage === 'adopted' && row.blockId === 'b9'),
+    '来源标记应变成已进正文，并落到具体段落'
+  );
+
+  const rows = await all(
+    "SELECT block_id, status FROM card_proposals WHERE user_id = ? AND origin_ref = 'msg-draft-3'",
+    [userId]
+  );
+  assert.ok(rows.every((row) => row.block_id === 'b9' && row.status === 'pending'));
+});
+
+test('B 撤销来源：草稿 pending 一并作废，已确认的保留', async () => {
+  const { workId, chapterId, userId } = await seedChapter();
+  const provider = { chat: async () => ({ content: proposalJson() }) };
+
+  const drafts = await cardProposals.createDraftProposals({
+    userId,
+    workId,
+    chapterId,
+    originRef: 'msg-draft-4',
+    text: APPLIED_TEXT,
+    provider,
+  });
+
+  const confirmRes = await server.request('/api/card-proposals/confirm', {
+    method: 'POST',
+    body: { ids: [drafts[0].id] },
+  });
+  assert.strictEqual(confirmRes.status, 200);
+
+  const res = await server.request('/api/card-proposals/dismiss-source', {
+    method: 'POST',
+    body: { originRef: 'msg-draft-4' },
+  });
+  const result = await res.json();
+
+  assert.strictEqual(result.dismissed, 2, '两条草稿 pending 应被作废');
+  assert.strictEqual(result.confirmed, 1, '已确认的应保留');
+
+  const rows = await all(
+    'SELECT id, status FROM card_proposals WHERE user_id = ? AND origin_ref = ?',
+    [userId, 'msg-draft-4']
+  );
+  const status = Object.fromEntries(rows.map((row) => [row.id, row.status]));
+  assert.strictEqual(status[drafts[0].id], 'confirmed');
+  assert.strictEqual(status[drafts[1].id], 'dismissed');
+  assert.strictEqual(status[drafts[2].id], 'dismissed');
 });

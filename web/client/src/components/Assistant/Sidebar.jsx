@@ -553,6 +553,14 @@ export default function AssistantSidebar() {
                   patch: { serverMessageId: event.userMessageId },
                 });
               }
+              // 草稿提案由服务端在 done 之后异步识别落库，这里补两次刷新，
+              // 让左栏/右侧待确认区不用等下一次操作才看见。
+              window.setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('ct:proposals-changed'));
+              }, 4000);
+              window.setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('ct:proposals-changed'));
+              }, 10000);
             } else if (event.type === 'error') {
               gotReply = true;
               failed = true;

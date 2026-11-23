@@ -31,6 +31,7 @@ const indexer = require('../services/memory/indexer');
 const memoryConv = require('../services/memory/conversation');
 const memorySources = require('../services/memory/sources');
 const plotCards = require('../services/plotCards');
+const cardProposalService = require('../services/cards/proposals');
 const { parseModelJson } = require('../services/agent/parse');
 const { runAgentLoop } = require('../services/agent/loop');
 const {
@@ -3168,6 +3169,47 @@ router.post('/chat', async (req, res) => {
       // 前端不读也不影响；存在就是为了让「命中了什么」有据可查。
       anchorViolations,
     });
+
+    // ---- 生成即记录（B）----
+    //
+    // 右栏一产出正文，就按消息 id 落「草稿」提案（block_id 为空）。
+    // 后台执行，不阻塞 done；作者采纳时 /scan 只补 block_id，不再调识别模型。
+    // 同一来源重复触发会按 origin_ref 去重，重新生成只作废上一版草稿 pending。
+    if (generatedProse && chapterId && String(payload.content || '').trim()) {
+      const draftText = payload.content;
+      const draftOriginRef = messageId;
+      const replacedOriginRef = replacedMessage ? replacedMessage.id : '';
+      setImmediate(() => {
+        const startedAt = Date.now();
+        cardProposalService
+          .createDraftProposals({
+            userId: req.userId,
+            workId,
+            chapterId,
+            originRef: draftOriginRef,
+            text: draftText,
+            replacedOriginRef,
+          })
+          .then((rows) => {
+            if (rows.length) {
+              console.log(
+                JSON.stringify({
+                  event: 'ai_card_proposals_draft',
+                  traceId,
+                  userId: req.userId,
+                  chapterId,
+                  count: rows.length,
+                  durationMs: Date.now() - startedAt,
+                })
+              );
+            }
+          })
+          .catch((err) => {
+            // 提案是增量能力，失败不能反过来影响正文交付。
+            console.error('[ai] 草稿提案识别失败（已跳过）:', errorText(err));
+          });
+      });
+    }
 
     // ---- 知情扫描（HP7）----
     //

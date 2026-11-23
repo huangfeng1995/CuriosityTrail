@@ -19,6 +19,7 @@ const crypto = require('crypto');
 const { all, get, run, transaction } = require('../database');
 const { ownedWork, ownedChapter } = require('../services/scope');
 const recognizer = require('../services/cards/recognizer');
+const proposals = require('../services/cards/proposals');
 const memory = require('../services/memory/indexer');
 
 const router = express.Router();
@@ -30,49 +31,10 @@ const MAX_DISMISS = 20;
 
 const now = () => new Date().toISOString();
 
-/** 安全解析 payload JSON。 */
-function parsePayload(row) {
-  if (!row) return {};
-  try {
-    const value = JSON.parse(row.payload || '{}');
-    return value && typeof value === 'object' ? value : {};
-  } catch (e) {
-    return {};
-  }
-}
-
-/** 提案的对外形状：前端只需要这些字段。 */
-function toProposal(row) {
-  return {
-    id: row.id,
-    workId: row.work_id,
-    chapterId: row.chapter_id || '',
-    blockId: row.block_id || '',
-    kind: row.kind,
-    title: row.title,
-    content: row.content || '',
-    payload: parsePayload(row),
-    sourceQuote: row.source_quote || '',
-    status: row.status,
-    cardId: row.card_id || '',
-    originRef: row.origin_ref || '',
-    createdAt: row.created_at,
-  };
-}
-
-/** 取作品下已有卡片的名字/标题，供识别时去重。 */
-async function existingTitles(workId) {
-  const [characters, settings, plots] = await Promise.all([
-    all('SELECT name FROM characters WHERE work_id = ?', [workId]),
-    all('SELECT name FROM settings WHERE work_id = ?', [workId]),
-    all('SELECT title FROM plot_cards WHERE work_id = ?', [workId]),
-  ]);
-  return [
-    ...characters.map((r) => r.name),
-    ...settings.map((r) => r.name),
-    ...plots.map((r) => r.title),
-  ].filter(Boolean);
-}
+/** 提案的对外形状由 service 统一维护，避免两处口径分叉。 */
+const toProposal = proposals.toProposal;
+const parsePayload = proposals.parsePayload;
+const existingTitles = proposals.existingTitles;
 
 // ---------------------------------------------------------------------------
 // GET /api/card-proposals?workId=&status=pending
@@ -144,75 +106,33 @@ router.post('/scan', async (req, res) => {
       if (!chapter || chapter.work_id !== workId) return skip('chapter');
     }
 
-    const titles = await existingTitles(workId);
-    const proposals = await recognizer.recognize({ text, existingTitles: titles });
-    if (!proposals.length) return res.json({ proposals: [], skipped: false });
-
-    // 已有 pending 的同 kind 同名提案不再重复插入
-    const pending = await all(
-      `SELECT kind, title FROM card_proposals
-       WHERE user_id = ? AND work_id = ? AND status = 'pending'`,
-      [req.userId, workId]
-    );
-    const pendingKeys = new Set(pending.map((p) => `${p.kind}:${p.title}`));
-
-    // 批量扫描时把提案落回真正含有证据的那个 block；找不到证据就归到首个 block。
-    const blockFor = (proposal) => {
-      if (!segments.length) return blockId || null;
-      const quote = String(proposal.source_quote || '').trim();
-      if (quote) {
-        const hit = segments.find((s) => s.text.includes(quote));
-        if (hit) return hit.blockId || null;
-      }
-      return segments[0].blockId || null;
-    };
-
-    const inserted = [];
-    for (const proposal of proposals) {
-      const key = `${proposal.kind}:${proposal.title}`;
-      if (pendingKeys.has(key)) continue;
-      pendingKeys.add(key);
-
-      const proposalBlockId = blockFor(proposal);
-      const id = crypto.randomUUID();
-      const ts = now();
-      await run(
-        `INSERT INTO card_proposals
-           (id, user_id, work_id, chapter_id, block_id, origin_ref, kind, title, content,
-            payload, source_quote, status, card_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?)`,
-        [
-          id,
-          req.userId,
-          workId,
-          chapterId || null,
-          proposalBlockId,
-          originRef,
-          proposal.kind,
-          proposal.title,
-          proposal.content,
-          JSON.stringify(proposal.payload || {}),
-          proposal.source_quote || '',
-          ts,
-          ts,
-        ]
-      );
-      inserted.push({
-        id,
-        workId,
-        chapterId,
-        blockId: proposalBlockId || '',
-        originRef,
-        kind: proposal.kind,
-        title: proposal.title,
-        content: proposal.content,
-        payload: proposal.payload || {},
-        sourceQuote: proposal.source_quote || '',
-        status: 'pending',
-        cardId: '',
-        createdAt: ts,
-      });
+    // B：右栏生成时已经落过「草稿」提案，采纳只需要补出处。
+    // 命中时不再调识别模型，避免同一条来源被识别两次；
+    // 没命中（草稿生成失败/旧链路）才走下面的识别兜底。
+    const promoted = await proposals.promoteDrafts({
+      userId: req.userId,
+      workId,
+      chapterId,
+      blockId,
+      originRef,
+    });
+    if (promoted.length) {
+      return res.json({ proposals: promoted, skipped: false, promoted: promoted.length });
     }
+
+    const titles = await existingTitles(workId);
+    const recognized = await recognizer.recognize({ text, existingTitles: titles });
+    if (!recognized.length) return res.json({ proposals: [], skipped: false });
+
+    const inserted = await proposals.insertProposals({
+      userId: req.userId,
+      workId,
+      chapterId,
+      originRef,
+      proposals: recognized,
+      segments,
+      blockId,
+    });
 
     res.json({ proposals: inserted, skipped: false });
   } catch (err) {

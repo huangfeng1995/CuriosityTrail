@@ -32,6 +32,9 @@ function setupTempEnv() {
   process.env.ALLOW_MULTI_INSTANCE = '1';
   // 备份不要在测试里真的写定时任务
   process.env.BACKUP_HOUR = '-1';
+  // 生成即记录的草稿提案默认关闭：后台识别会挤占假模型的响应队列。
+  // 需要测这条链路的用例显式传 provider，绕过这个开关。
+  process.env.CARD_PROPOSALS_AUTO = 'off';
 
   return {
     dataDir,

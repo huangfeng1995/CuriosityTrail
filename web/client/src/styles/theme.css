@@ -2624,6 +2624,30 @@ body.ct-resizing * {
   background: var(--gold-dim);
   color: var(--gold);
 }
+/* 草稿 / 已进正文：一眼能分清提案是在右栏还没采纳，还是已经落到正文段落。 */
+.ct-card-props-stage {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-tertiary);
+}
+.ct-card-props-stage.is-draft {
+  border-color: var(--gold);
+  background: var(--gold-dim);
+  color: var(--gold);
+}
+.ct-card-props-stage.is-adopted {
+  border-style: solid;
+  border-color: var(--bamboo);
+  background: var(--bamboo-dim);
+  color: var(--bamboo);
+}
+.ct-card-props-draft-hint {
+  font-size: 11px;
+  color: var(--gold);
+}
 .ct-card-props-note {
   margin-top: 4px;
   font-size: 11px;
