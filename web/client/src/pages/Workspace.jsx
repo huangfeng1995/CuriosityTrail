@@ -284,6 +284,7 @@ export default function Workspace() {
         workId={work?.id}
         chapterId={chapter?.id}
         chapters={chapters}
+        proposals={proposalsByKind('inspiration')}
       />
     ),
   }[activePanelKey];
@@ -304,6 +305,7 @@ export default function Workspace() {
           characters: proposalCounts.character,
           settings: proposalCounts.setting,
           plot: proposalCounts.plot,
+          inspirations: proposalCounts.inspiration,
         }}
       />
       <div className="ct-panel-body ct-panel-enter" key={activePanelKey}>

@@ -4,7 +4,7 @@
  * 正文实体识别。
  *
  * 只做一件事：读一段刚写进正文的文字，找出里面值得沉淀成卡片的新实体
- * （人物 / 情节节点 / 设定），返回**提案**，不碰数据库、不写卡片表。
+ * （人物 / 情节节点 / 设定 / 灵感），返回**提案**，不碰数据库、不写卡片表。
  *
  * 失败策略：一律静默。识别是写作的附带能力，模型超时或抽风不能
  * 让作者保存不了稿子，也不能弹错误——所以这里超时即放弃，不重试。
@@ -27,7 +27,7 @@ const MAX_QUOTE_LENGTH = 80;
 /** 单次识别的正文上限：一段应用通常远低于这个长度，超长只是防上下文失控 */
 const MAX_TEXT_LENGTH = 4000;
 
-const KINDS = new Set(['character', 'setting', 'plot']);
+const KINDS = new Set(['character', 'setting', 'plot', 'inspiration']);
 
 const SYSTEM_PROMPT = `你是小说编辑部的资料员。任务是从作者刚写好的正文里，找出值得沉淀为卡片的新实体。
 
@@ -55,6 +55,13 @@ const SYSTEM_PROMPT = `你是小说编辑部的资料员。任务是从作者刚
       "title": "情节节点的一句话概括",
       "content": "这一节点发生了什么、改变了什么",
       "source_quote": "正文原句"
+    },
+    {
+      "kind": "inspiration",
+      "title": "一句可复用的灵感（意象/对白/反转可能）",
+      "content": "为什么值得留下、以后可以用在哪",
+      "tags": "伏笔,第二卷",
+      "source_quote": "正文原句"
     }
   ]
 }
@@ -65,7 +72,9 @@ const SYSTEM_PROMPT = `你是小说编辑部的资料员。任务是从作者刚
 3. 人名用正文中的写法；不要合并两个不同的人。
 4. setting 的 category 只能是：地点、组织、物品、规则。
 5. source_quote 必须从正文原文照抄，不超过 60 字。
-6. 没有值得沉淀的实体就返回 {"proposals":[]}。`;
+6. inspiration 最多 1 条：只收可复用的意象、对白、反转可能或写法，
+   不要收已经作为情节节点的事件；宁缺毋滥。
+7. 没有值得沉淀的实体就返回 {"proposals":[]}。`;
 
 /**
  * 归一化标题：去空格、限长。
@@ -109,12 +118,15 @@ function parseProposals(raw, options = {}) {
 
   const out = [];
   const seen = new Set();
+  // 灵感宁缺毋滥：一轮最多一条，避免把正文拆成一堆碎片提案。
+  let inspirationCount = 0;
 
   for (const item of parsed.proposals) {
     if (!item || typeof item !== 'object') continue;
 
     const kind = String(item.kind || '').trim();
     if (!KINDS.has(kind)) continue;
+    if (kind === 'inspiration' && inspirationCount >= 1) continue;
 
     const title = normalizeTitle(item.title);
     if (!title) continue;
@@ -131,7 +143,7 @@ function parseProposals(raw, options = {}) {
     const quoteVerified = sourceQuote && text.includes(sourceQuote);
 
     const payload = {};
-    for (const key of ['role', 'identity', 'personality', 'speech', 'goal', 'arc', 'aliases', 'category']) {
+    for (const key of ['role', 'identity', 'personality', 'speech', 'goal', 'arc', 'aliases', 'category', 'tags']) {
       if (item[key] != null && String(item[key]).trim()) {
         payload[key] = String(item[key]).trim();
       }
@@ -144,6 +156,7 @@ function parseProposals(raw, options = {}) {
     }
 
     seen.add(`${kind}:${title}`);
+    if (kind === 'inspiration') inspirationCount += 1;
     out.push({
       kind,
       title,

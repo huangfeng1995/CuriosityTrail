@@ -222,6 +222,26 @@ async function confirmOne(row, title) {
         params: [id, title, ts, row.id],
       },
     ]);
+  } else if (row.kind === 'inspiration') {
+    // 灵感的第一个出口：留作灵感。只写 inspirations 表，不自动转情节卡/设定；
+    // 那两个出口仍然要作者在灵感面板里手动点。
+    const text = row.content && row.content !== title
+      ? `${title}\n${row.content}`
+      : title;
+    await transaction([
+      {
+        sql: `INSERT INTO inspirations
+                (id, user_id, text, tags, consumed, created_at)
+              VALUES (?, ?, ?, ?, 0, ?)`,
+        params: [id, row.user_id, text, payload.tags || 'AI提案', ts],
+      },
+      {
+        sql: `UPDATE card_proposals
+              SET status = 'confirmed', card_id = ?, title = ?, updated_at = ?
+              WHERE id = ? AND status = 'pending'`,
+        params: [id, title, ts, row.id],
+      },
+    ]);
   } else {
     // 情节节点：确认即表示「正文里已经发生」，状态直接落 done
     const maxSeq = await get(

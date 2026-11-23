@@ -22,7 +22,7 @@ const app = require('../app');
 const { ready, all, get } = require('../database');
 const aiConfig = require('../services/aiConfig');
 const { assembleContext } = require('../services/context');
-const { recognize } = require('../services/cards/recognizer');
+const { recognize, parseProposals } = require('../services/cards/recognizer');
 const cardProposals = require('../services/cards/proposals');
 
 let server;
@@ -536,4 +536,89 @@ test('B 撤销来源：草稿 pending 一并作废，已确认的保留', async 
   assert.strictEqual(status[drafts[0].id], 'confirmed');
   assert.strictEqual(status[drafts[1].id], 'dismissed');
   assert.strictEqual(status[drafts[2].id], 'dismissed');
+});
+
+// ---------------------------------------------------------------------------
+// 6. 灵感：第四种提案类型
+// ---------------------------------------------------------------------------
+
+/** 模型给出两条灵感：同一轮只该留一条。 */
+function inspirationJson() {
+  return JSON.stringify({
+    proposals: [
+      {
+        kind: 'inspiration',
+        title: '伞骨像一截旧年表',
+        content: '雨声里数伞骨，可以当第二卷的意象',
+        tags: '伏笔,第二卷',
+        source_quote: '林砚把伞靠在门边',
+      },
+      {
+        kind: 'inspiration',
+        title: '超出上限的第二条',
+        content: '这一轮不该被保留',
+        tags: '冗余',
+        source_quote: '翻出一卷旧案',
+      },
+    ],
+  });
+}
+
+test('灵感提案：一轮最多一条，标签进 payload', () => {
+  const out = parseProposals(inspirationJson(), {
+    text: APPLIED_TEXT,
+  });
+
+  assert.strictEqual(out.length, 1, '同一轮只保留一条灵感');
+  assert.strictEqual(out[0].kind, 'inspiration');
+  assert.strictEqual(out[0].title, '伞骨像一截旧年表');
+  assert.strictEqual(out[0].payload.tags, '伏笔,第二卷');
+  assert.strictEqual(out[0].source_quote, '林砚把伞靠在门边', '原文命中时保留证据');
+});
+
+test('灵感确认：只写灵感速记，不自动转情节卡或设定', async () => {
+  fakeModel.setDefault({ content: inspirationJson() });
+
+  const { workId, chapterId } = await seedChapter();
+  const data = await scan(workId, chapterId);
+
+  assert.strictEqual(data.proposals.length, 1, '识别出一条灵感提案');
+  const inspiration = data.proposals[0];
+  assert.strictEqual(inspiration.kind, 'inspiration');
+  assert.strictEqual(inspiration.stage, 'adopted', '扫描路径带 block，属于已进正文');
+
+  const before = await all('SELECT id FROM inspirations WHERE text LIKE ?', [
+    '%伞骨像一截旧年表%',
+  ]);
+  assert.strictEqual(before.length, 0, '确认前不能写灵感速记');
+
+  const res = await server.request('/api/card-proposals/confirm', {
+    method: 'POST',
+    body: { ids: [inspiration.id] },
+  });
+  assert.strictEqual(res.status, 200);
+  const confirmed = await res.json();
+  assert.strictEqual(confirmed.results.length, 1);
+
+  const rows = await all('SELECT * FROM inspirations WHERE text LIKE ?', [
+    '%伞骨像一截旧年表%',
+  ]);
+  assert.strictEqual(rows.length, 1, '确认后应写入一条灵感速记');
+  assert.ok(rows[0].text.includes('雨声里数伞骨'), '正文说明应一并带上');
+  assert.strictEqual(rows[0].tags, '伏笔,第二卷', '标签来自提案 payload');
+  assert.strictEqual(rows[0].consumed, 0, '默认未用');
+
+  const proposal = await get('SELECT status, card_id FROM card_proposals WHERE id = ?', [
+    inspiration.id,
+  ]);
+  assert.strictEqual(proposal.status, 'confirmed');
+  assert.strictEqual(proposal.card_id, rows[0].id, '提案应指向新建的灵感条目');
+
+  // 三个出口里只有「留作灵感」被执行：转情节卡/转设定仍要作者手动点
+  const plots = await all('SELECT id FROM plot_cards WHERE work_id = ?', [workId]);
+  const settings = await all('SELECT id FROM settings WHERE work_id = ?', [workId]);
+  const characters = await all('SELECT id FROM characters WHERE work_id = ?', [workId]);
+  assert.strictEqual(plots.length, 0, '不能自动转情节卡');
+  assert.strictEqual(settings.length, 0, '不能自动转设定');
+  assert.strictEqual(characters.length, 0, '不能自动建人物卡');
 });

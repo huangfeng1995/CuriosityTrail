@@ -10,6 +10,7 @@ import {
 import api from '../../api/client';
 import MindMapModal from './MindMapModal';
 import InspirationSuggestions from './InspirationSuggestions';
+import PendingProposals from '../Assistant/PendingProposals';
 import { countNodes, isOutline, linesToOutline, parseOutline, toRoot } from './outlineModel';
 
 /**
@@ -23,7 +24,7 @@ import { countNodes, isOutline, linesToOutline, parseOutline, toRoot } from './o
  * 一条灵感如果写成缩进大纲，就按脑图打开：发散的念头先在树上铺开，
  * 想清楚了可以一键转成设定（一个分支一条，或收成一张对照表）。
  */
-export default function InspirationPanel({ workId, chapterId, chapters = [] }) {
+export default function InspirationPanel({ workId, chapterId, chapters = [], proposals = [] }) {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null);
   // undefined = 关着；null = 新建；对象 = 编辑这一条
@@ -53,6 +54,11 @@ export default function InspirationPanel({ workId, chapterId, chapters = [] }) {
 
   useEffect(() => {
     load();
+    // 待确认区点「留作灵感」后服务端已经写入 inspirations，这里重拉一次，
+    // 否则新条目要等切面板才出现。
+    const onCards = () => load();
+    window.addEventListener('ct:cards-changed', onCards);
+    return () => window.removeEventListener('ct:cards-changed', onCards);
   }, []);
 
   const openEditor = (item) => {
@@ -167,6 +173,15 @@ export default function InspirationPanel({ workId, chapterId, chapters = [] }) {
 
   return (
     <div className="ct-panel">
+      {/* AI 从正文里识别出的灵感先在这里待确认：确认只写灵感速记，
+          转情节卡/设定仍要作者在下方条目上手动点。 */}
+      <PendingProposals
+        proposals={proposals}
+        heading="待确认灵感"
+        showKind={false}
+        variant="panel"
+      />
+
       <InspirationSuggestions
         workId={workId}
         chapterId={chapterId}

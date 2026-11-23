@@ -2624,6 +2624,10 @@ body.ct-resizing * {
   background: var(--gold-dim);
   color: var(--gold);
 }
+.ct-card-props-kind.is-inspiration {
+  background: var(--amber-dim);
+  color: var(--amber);
+}
 /* 草稿 / 已进正文：一眼能分清提案是在右栏还没采纳，还是已经落到正文段落。 */
 .ct-card-props-stage {
   flex-shrink: 0;

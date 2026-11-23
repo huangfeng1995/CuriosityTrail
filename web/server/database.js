@@ -41,8 +41,11 @@ let db = new sqlite3.Database(config.dbPath);
  *              pending 提案，避免已撤销正文里的人物/设定被确认成卡。
  * 版本 15 → 16：一致性检查问题增加持久化生命周期（open/adopted/dismissed）。
  *              跨章总检不再只活在内存任务里，忽略过的结论重跑不再冒出来。
+ * 版本 16 → 17：卡片提案支持第四种「灵感」（kind='inspiration'）。
+ *              SQLite 不能改 CHECK 约束，只能重建 card_proposals 并原样搬运数据；
+ *              两个索引在重建后补建，老库的提案与状态一条不动。
  */
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 17;
 
 /**
  * 版本号之前的老库遗留表。
@@ -235,8 +238,8 @@ CREATE TABLE IF NOT EXISTS card_proposals (
   -- 哪一次「采纳」产生了这批提案（目前是消息 id）。
   -- 作者撤销那段正文时按它把这一轮 pending 提案一并作废；
   -- 已经确认成卡的不回滚——作者是看着原句点的确认，撤稿不代表那条设定不成立。
-  origin_ref   TEXT DEFAULT '',
-  kind         TEXT NOT NULL CHECK (kind IN ('character','setting','plot')),
+  origin_ref   TEXT NOT NULL DEFAULT '',
+  kind         TEXT NOT NULL CHECK (kind IN ('character','setting','plot','inspiration')),
   title        TEXT NOT NULL,
   content      TEXT,
   payload      TEXT,
@@ -765,6 +768,70 @@ async function ensurePromptOverridesPk() {
 }
 
 /**
+ * v17：card_proposals.kind 增加 'inspiration'。
+ *
+ * SQLite 不支持修改 CHECK 约束，只能重建表：
+ *   1. 建带新 CHECK 的 card_proposals_v17；
+ *   2. 按列名原样搬运老数据（id/状态/card_id/来源/时间全部保留）；
+ *   3. 删除老表、改名；
+ *   4. 两个索引在重建后补建（DROP TABLE 会把旧索引一起带走）。
+ *
+ * 事务由 migrate() 的 BEGIN IMMEDIATE 统一包裹：任何一步失败都会 ROLLBACK，
+ * 老表与 user_version 保持原样，不会出现「表删了数据没搬完」的中间态。
+ * 回滚方式：迁移失败自动回滚；若已升级后要退回旧版本，需先从备份恢复数据库，
+ * 不能直接把 user_version 改回 16（新表 CHECK 已放宽，旧代码仍可读写，数据不丢）。
+ */
+async function ensureCardProposalsKinds() {
+  const row = await get(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'card_proposals'"
+  );
+  const sql = String((row && row.sql) || '');
+  // 新库/已升级过的库：CHECK 里已经有 inspiration，直接跳过。
+  if (!sql || sql.includes("'inspiration'")) return;
+
+  await run(`
+    CREATE TABLE card_proposals_v17 (
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+      chapter_id   TEXT REFERENCES chapters(id) ON DELETE CASCADE,
+      block_id     TEXT,
+      origin_ref   TEXT NOT NULL DEFAULT '',
+      kind         TEXT NOT NULL CHECK (kind IN ('character','setting','plot','inspiration')),
+      title        TEXT NOT NULL,
+      content      TEXT,
+      payload      TEXT,
+      source_quote TEXT,
+      status       TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','confirmed','dismissed')),
+      card_id      TEXT,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
+    )
+  `);
+  await run(`
+    INSERT INTO card_proposals_v17
+      (id, user_id, work_id, chapter_id, block_id, origin_ref, kind, title, content,
+       payload, source_quote, status, card_id, created_at, updated_at)
+    SELECT id, user_id, work_id, chapter_id, block_id, origin_ref, kind, title, content,
+           payload, source_quote, status, card_id, created_at, updated_at
+    FROM card_proposals
+  `);
+  await run('DROP TABLE card_proposals');
+  await run('ALTER TABLE card_proposals_v17 RENAME TO card_proposals');
+  // DROP TABLE 会带走旧索引，重建后必须补回来；放在 ensureColumn 之后也符合
+  // 「依赖补列的索引后建」的约定。
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_card_proposals_work
+      ON card_proposals(work_id, status, created_at)
+  `);
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_card_proposals_origin
+      ON card_proposals(user_id, origin_ref, status)
+  `);
+}
+
+/**
  * 增量迁移。只加表、加列、加索引，不删任何已有业务表。
  * @param {number} fromVersion 当前库的 schema 版本
  */
@@ -844,6 +911,9 @@ async function migrate(fromVersion) {
 
     // prompt_overrides 需要复合主键，老库要重建一次（数据整体保留）
     await ensurePromptOverridesPk();
+
+    // 16 → 17：card_proposals 的 CHECK 增加 inspiration（重建表，数据原样搬运）
+    await ensureCardProposalsKinds();
 
     // 依赖补列的索引必须放在 ensureColumn 之后：
     // 老库的 work_anchors 可能已有表、没有 source_material_id。

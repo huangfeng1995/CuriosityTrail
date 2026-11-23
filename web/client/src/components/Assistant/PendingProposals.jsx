@@ -16,6 +16,7 @@ const KIND_LABELS = {
   character: '人物',
   setting: '设定',
   plot: '情节',
+  inspiration: '灵感',
 };
 
 export default function PendingProposals({
@@ -147,7 +148,8 @@ export default function PendingProposals({
           )}
           <div className="ct-card-props-ops">
             <Button size="small" type="primary" disabled={busy} onClick={() => confirm([p.id])}>
-              确认
+              {/* 灵感的确认只落到灵感速记，不自动转情节卡/设定 */}
+              {p.kind === 'inspiration' ? '留作灵感' : '确认'}
             </Button>
             <Button size="small" type="text" disabled={busy} onClick={() => dismiss(p.id)}>
               丢弃
