@@ -221,7 +221,7 @@ export default function ChapterEditor() {
     return () => window.removeEventListener('ct:focus-block', onFocusBlock);
   }, []);
 
-  // 采纳回执：侧栏（对话卡片、检查面板）改完正文后会广播这一批的 key。
+  // 采纳回执：侧栏对话卡片改完正文后会广播这一批的 key。
   // 只有成功才收，失败那批保持待办模样。
   useEffect(() => {
     const onAdoptResult = (e) => {

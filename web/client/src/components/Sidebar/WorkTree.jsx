@@ -15,7 +15,12 @@ import { useWorkspace } from '../../store/workspace';
 /**
  * 作品与章节的导航树。
  */
-export default function WorkTree({ currentWorkId, currentChapterId }) {
+export default function WorkTree({
+  currentWorkId,
+  currentChapterId,
+  issueCounts,
+  onShowIssues,
+}) {
   const { loadWork, loadChapter, dispatch } = useWorkspace();
   const navigate = useNavigate();
   const [works, setWorks] = useState([]);
@@ -134,7 +139,14 @@ export default function WorkTree({ currentWorkId, currentChapterId }) {
               </Dropdown>
             </div>
 
-            {expanded && <ChapterList workId={work.id} currentChapterId={currentChapterId} />}
+            {expanded && (
+              <ChapterList
+                workId={work.id}
+                currentChapterId={currentChapterId}
+                issueCounts={issueCounts}
+                onShowIssues={onShowIssues}
+              />
+            )}
           </div>
         );
       })}
@@ -161,7 +173,7 @@ export default function WorkTree({ currentWorkId, currentChapterId }) {
   );
 }
 
-function ChapterList({ workId, currentChapterId }) {
+function ChapterList({ workId, currentChapterId, issueCounts, onShowIssues }) {
   const { chapters, loadChapter, loadWork, renameChapter, dispatch, dropPending } =
     useWorkspace();
 
@@ -199,7 +211,9 @@ function ChapterList({ workId, currentChapterId }) {
 
   return (
     <div className="ct-tree-children">
-      {list.map((chapter) => (
+      {list.map((chapter) => {
+        const issueCount = issueCounts?.get(chapter.id)?.length || 0;
+        return (
         <div
           key={chapter.id}
           className={`ct-tree-row${chapter.id === currentChapterId ? ' is-active' : ''}`}
@@ -213,6 +227,22 @@ function ChapterList({ workId, currentChapterId }) {
           >
             {chapter.title}
           </button>
+          {/* 高优先级规则问题：没有问题时什么都不显示，不做常驻提示。 */}
+          {issueCount > 0 && (
+            <button
+              type="button"
+              className="ct-tree-issue"
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowIssues?.(chapter.id);
+              }}
+              title={`${issueCount} 条高优先级问题，点击在右侧查看`}
+              aria-label={`查看「${chapter.title}」的 ${issueCount} 条高优先级问题`}
+            >
+              <span className="ct-tree-issue-dot" aria-hidden="true" />
+              <span className="ct-tree-issue-count">{issueCount}</span>
+            </button>
+          )}
           <Dropdown
             menu={{
               items: [
@@ -256,7 +286,8 @@ function ChapterList({ workId, currentChapterId }) {
             </button>
           </Dropdown>
         </div>
-      ))}
+        );
+      })}
 
       <button
         type="button"

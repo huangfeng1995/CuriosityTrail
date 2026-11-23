@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Spin, Tooltip, App as AntApp } from 'antd';
 import { Menu, PanelLeft, PanelRight } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -17,15 +17,15 @@ import CharacterPanel from '../components/Sidebar/CharacterPanel';
 import SettingPanel from '../components/Sidebar/SettingPanel';
 import InspirationPanel from '../components/Sidebar/InspirationPanel';
 import PlotCardPanel from '../components/Sidebar/PlotCardPanel';
-import ConsistencyPanel from '../components/Sidebar/ConsistencyPanel';
 import PanelNav from '../components/Sidebar/PanelNav';
 import usePendingProposals from '../components/Sidebar/usePendingProposals';
+import useRuleIssues, { groupHighIssues } from '../components/Sidebar/ruleIssues';
 import api from '../api/client';
 
 /**
  * 三栏工作区。
  *
- * 左：作品章节树 + 资料面板（人物/设定/情节/检查/灵感）
+ * 左：作品章节树 + 资料面板（人物/设定/情节/灵感）
  * 中：块编辑器
  * 右：AI 侧边栏
  *
@@ -36,10 +36,26 @@ export default function Workspace() {
   const { workId } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { work, chapters, chapter, messages, sending, loadWork, loadChapter } = useWorkspace();
+  const {
+    work,
+    chapters,
+    chapter,
+    messages,
+    sending,
+    saveStatus,
+    loadWork,
+    loadChapter,
+    dispatch,
+  } = useWorkspace();
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
+  // 左栏四个资料面板。原先的「检查」面板已移除：它与右栏审稿人重复，
+  // 规则检查改为后台静默跑，只有高优先级问题时才在章节行点一个圆点。
+  // 只认这四个 key——即使旧状态里残留 'check'，也会落回「人物」，
+  // 不会渲染出一块空白面板。
+  const PANEL_KEYS = ['characters', 'settings', 'plot', 'inspirations'];
   const [panelKey, setPanelKey] = useState('characters');
+  const activePanelKey = PANEL_KEYS.includes(panelKey) ? panelKey : 'characters';
   const isMobile = useIsNarrow();
   const { widths, collapsed, setLeft, setRight, reset, toggleLeft, toggleRight } = useColumnWidths();
   const { focusMode, setFocusMode, setCurrentWorkId } = useFocus();
@@ -206,6 +222,52 @@ export default function Workspace() {
   // 「角标还有、点进去是空的」。
   const { counts: proposalCounts, byKind: proposalsByKind } = usePendingProposals(work?.id);
 
+  // 规则检查在后台静默跑（打开作品、保存成功后各一次）。
+  // 只把高优先级结论挂到章节上，变成章节行里的一个小圆点。
+  const { issues: ruleIssues } = useRuleIssues(work?.id, saveStatus);
+  const chapterIssueMap = useMemo(
+    () => groupHighIssues(ruleIssues, chapters),
+    [ruleIssues, chapters]
+  );
+
+  // 点章节行的小圆点：右栏打开，把这一章的问题作为一条系统提示列出来。
+  // 不写入会话历史（系统消息，可关闭），也不占用左栏面板。
+  const showChapterIssues = useCallback(
+    (chapterId) => {
+      const list = chapterIssueMap.get(chapterId);
+      if (!list?.length) return;
+
+      if (isMobile) {
+        setLeftOpen(false);
+        setRightOpen(true);
+      } else if (collapsed.right) {
+        toggleRight();
+      }
+
+      const target = chapters.find((c) => c.id === chapterId);
+      const messageId = `rule-check-${chapterId}`;
+      // 同一章连点两次不叠加：先移除上一条，再放新的。
+      dispatch({ type: 'message/remove', id: messageId });
+      dispatch({
+        type: 'message/add',
+        message: {
+          id: messageId,
+          role: 'system',
+          kind: 'consistency',
+          chapterId,
+          content: `规则检查：${target?.title || '本章'}有 ${list.length} 条高优先级问题`,
+          issues: list.map((issue) => ({
+            id: issue.id || issue.title,
+            title: issue.title,
+            detail: issue.detail || '',
+            quote: issue.quote || '',
+          })),
+        },
+      });
+    },
+    [chapterIssueMap, chapters, isMobile, collapsed.right, toggleRight, dispatch]
+  );
+
   // 当前面板内容。key 变化时用 key 强制重挂载，配合 CSS 做淡入过渡。
   const panelContent = {
     characters: <CharacterPanel workId={work?.id} proposals={proposalsByKind('character')} />,
@@ -217,13 +279,6 @@ export default function Workspace() {
         proposals={proposalsByKind('plot')}
       />
     ),
-    check: (
-      <ConsistencyPanel
-        workId={work?.id}
-        chapterId={chapter?.id}
-        onOpenChapter={loadChapter}
-      />
-    ),
     inspirations: (
       <InspirationPanel
         workId={work?.id}
@@ -231,14 +286,19 @@ export default function Workspace() {
         chapters={chapters}
       />
     ),
-  }[panelKey];
+  }[activePanelKey];
 
   const leftPanel = (
     <div className="ct-left-inner">
-      <WorkTree currentWorkId={work?.id} currentChapterId={chapter?.id} />
+      <WorkTree
+        currentWorkId={work?.id}
+        currentChapterId={chapter?.id}
+        issueCounts={chapterIssueMap}
+        onShowIssues={showChapterIssues}
+      />
       <div className="ct-divider" />
       <PanelNav
-        activeKey={panelKey}
+        activeKey={activePanelKey}
         onChange={setPanelKey}
         badges={{
           characters: proposalCounts.character,
@@ -246,7 +306,7 @@ export default function Workspace() {
           plot: proposalCounts.plot,
         }}
       />
-      <div className="ct-panel-body ct-panel-enter" key={panelKey}>
+      <div className="ct-panel-body ct-panel-enter" key={activePanelKey}>
         {panelContent}
       </div>
     </div>

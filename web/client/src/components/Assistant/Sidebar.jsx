@@ -772,16 +772,13 @@ export default function AssistantSidebar() {
    * 已定位的意见走 /api/ai/inline（短上下文 + 显式选区，不会被聊天历史撑爆），
    * 未定位的全章级建议仍走 /chat。失败时整批都不标记，并给一句人话提示；
    * 成功后把条目标成已采纳，作者不会因为同一条意见被重复发给写手而反复改稿。
-   *
-   * source 用来把回执送回发起方：检查面板发起的那批要标记面板里的条目，
-   * 卡片里点的不需要。
    */
   const adoptFindings = useCallback(
-    async (findings, source = '') => {
+    async (findings) => {
       if (sending) {
         window.dispatchEvent(
           new CustomEvent('ct:adopt-result', {
-            detail: { ok: false, sent: false, keys: [], source },
+            detail: { ok: false, sent: false, keys: [] },
           })
         );
         return { ok: false, sent: false, keys: [] };
@@ -840,26 +837,13 @@ export default function AssistantSidebar() {
 
       window.dispatchEvent(
         new CustomEvent('ct:adopt-result', {
-          detail: { ok: result.ok, sent: result.sent, keys: result.keys, source },
+          detail: { ok: result.ok, sent: result.sent, keys: result.keys },
         })
       );
       return result;
     },
     [send, sending, toast, blocks, work, chapter, updateBlock]
   );
-
-  // 左侧「检查」面板勾选后，同样交给这里统一发一次 /chat：
-  // 写手改稿的入口只有一个，避免两处各写一套流式处理。
-  useEffect(() => {
-    const onAdopt = (e) => {
-      const detail = e.detail || {};
-      const findings = Array.isArray(detail.findings) ? detail.findings : [];
-      if (!findings.length) return;
-      adoptFindings(findings, detail.source || '');
-    };
-    window.addEventListener('ct:adopt-findings', onAdopt);
-    return () => window.removeEventListener('ct:adopt-findings', onAdopt);
-  }, [adoptFindings]);
 
   /** 侧栏意见 → 正文：滚到对应块并高亮。 */
   const jumpToFinding = useCallback((finding) => {
@@ -1083,6 +1067,7 @@ export default function AssistantSidebar() {
           adoptedFindingKeys={adoptedFindingKeys}
           onAdoptFindings={adoptFindings}
           onJumpToFinding={jumpToFinding}
+          onDismissSystem={(msg) => dispatch({ type: 'message/remove', id: msg.id })}
         />
       </div>
 

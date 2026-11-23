@@ -3,15 +3,14 @@ import {
   UserOutlined,
   BookOutlined,
   PartitionOutlined,
-  SafetyOutlined,
   BulbOutlined,
 } from '@ant-design/icons';
 
 /**
  * 左栏面板导航。
  *
- * 之前用 antd Tabs 承载这 7 个面板，但左栏只有 260px 宽，
- * Tabs 溢出后 antd 会把「检查/作品/灵感」塞进「更多」下拉里——
+ * 之前用 antd Tabs 承载这些面板，但左栏只有 260px 宽，
+ * Tabs 溢出后 antd 会把靠后的几个 tab 塞进「更多」下拉里——
  * 功能就这么被藏起来了，用户根本不知道它们存在。
  *
  * 改成纵向分段：图标 + 文字，全部露出来，一眼扫完。
@@ -19,12 +18,14 @@ import {
  * 「作品」「进度」已经挪到设置页「作品」：书名/题材/简介/大纲/目标字数/模板
  * 都是配置一次的东西，写作时不该占左栏一格。
  * 知情边界同样不在写作页，收进了设置页的「历史悬疑」。
+ *
+ * 「检查」面板已移除：它和右栏审稿人重复，规则检查改为后台静默跑，
+ * 只有高优先级问题时才在章节行点一个圆点。
  */
 const PANELS = [
   { key: 'characters', label: '人物', icon: <UserOutlined /> },
   { key: 'settings', label: '设定', icon: <BookOutlined /> },
   { key: 'plot', label: '情节', icon: <PartitionOutlined /> },
-  { key: 'check', label: '检查', icon: <SafetyOutlined /> },
   { key: 'inspirations', label: '灵感', icon: <BulbOutlined /> },
 ];
 

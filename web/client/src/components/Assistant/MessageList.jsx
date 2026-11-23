@@ -62,6 +62,7 @@ export default function MessageList({
   adoptedFindingKeys,
   onAdoptFindings,
   onJumpToFinding,
+  onDismissSystem,
 }) {
   // 占位提示的文案。
   //
@@ -87,21 +88,54 @@ export default function MessageList({
           data-msg-id={msg.id}
         >
           {msg.role === 'system' ? (
-            // 系统记录：设定改名后「哪些章被改了几处」留在这里，
-            // 不随弹窗关掉而消失，也不跟章节切换走。
-            <div className="ct-msg-changelog">
-              <div className="ct-msg-changelog-title">{msg.content}</div>
-              {msg.items?.length > 0 && (
-                <ul className="ct-msg-changelog-list">
-                  {msg.items.map((it) => (
-                    <li key={it.chapterId || it.chapterTitle}>
-                      <span>{it.chapterTitle || '未命名章节'}</span>
-                      <em>{it.count} 处</em>
+            msg.kind === 'consistency' ? (
+              // 规则检查的系统提示：左栏章节行的小圆点拨开后出现在这里。
+              // 明确标「系统提示」，可关闭；不进会话历史，也不占面板。
+              <div className="ct-msg-system">
+                <div className="ct-msg-system-head">
+                  <span className="ct-msg-system-tag">系统提示</span>
+                  <span className="ct-msg-system-title">{msg.content}</span>
+                  <button
+                    type="button"
+                    className="ct-msg-system-close"
+                    onClick={() => onDismissSystem?.(msg)}
+                    title="关闭这条提示"
+                    aria-label="关闭这条提示"
+                  >
+                    ×
+                  </button>
+                </div>
+                <ul className="ct-msg-system-list">
+                  {msg.issues?.map((issue) => (
+                    <li key={issue.id || issue.title}>
+                      <div className="ct-msg-system-issue">{issue.title}</div>
+                      {issue.quote && (
+                        <div className="ct-msg-system-quote">原文：{issue.quote}</div>
+                      )}
+                      {issue.detail && (
+                        <div className="ct-msg-system-detail">{issue.detail}</div>
+                      )}
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
+              </div>
+            ) : (
+              // 系统记录：设定改名后「哪些章被改了几处」留在这里，
+              // 不随弹窗关掉而消失，也不跟章节切换走。
+              <div className="ct-msg-changelog">
+                <div className="ct-msg-changelog-title">{msg.content}</div>
+                {msg.items?.length > 0 && (
+                  <ul className="ct-msg-changelog-list">
+                    {msg.items.map((it) => (
+                      <li key={it.chapterId || it.chapterTitle}>
+                        <span>{it.chapterTitle || '未命名章节'}</span>
+                        <em>{it.count} 处</em>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )
           ) : msg.role === 'user' ? (
             <div className="ct-msg-user">
               <div className="ct-msg-bubble is-user">{msg.content}</div>

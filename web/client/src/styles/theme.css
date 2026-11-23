@@ -842,33 +842,11 @@ body.ct-resizing * {
   padding: 4px 0 20px;
 }
 
-/* 检查面板的并排按钮 */
-.ct-check-actions {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.ct-check-actions .ant-btn {
-  flex: 1;
-  padding-inline: var(--btn-px-xs) !important;
-}
-
 /* 面板内加载态 */
 .ct-loading {
   display: flex;
   justify-content: center;
   padding: 20px;
-}
-
-.ct-alert {
-  margin-bottom: 8px;
-  font-size: 12px;
-}
-
-.ct-issue-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
 }
 
 /* 新建按钮：虚线幽灵按钮，明确是"入口"而不是普通按钮。
@@ -1136,142 +1114,6 @@ body.ct-resizing * {
   text-wrap: pretty;
 }
 
-/* 检查结果条目：左侧色条区分严重程度 */
-.ct-issue {
-  padding: 8px 10px;
-  margin-bottom: 6px;
-  border-radius: 7px;
-  background: var(--bg-hover);
-  border-left: 2px solid var(--border-strong);
-}
-.ct-issue.sev-high {
-  border-left-color: var(--cinnabar);
-}
-.ct-issue.sev-medium {
-  border-left-color: var(--amber);
-}
-.ct-issue.sev-low {
-  border-left-color: var(--border-strong);
-}
-.ct-issue-title {
-  flex: 1;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-primary);
-}
-.ct-issue-detail {
-  font-size: var(--fs-mini);
-  line-height: 1.7;
-  color: var(--text-tertiary);
-  margin-top: 3px;
-}
-
-/* 全书检查结果：按章分组；每条结论自己处理，不再整章勾选 */
-.ct-issue-group {
-  margin-bottom: 10px;
-}
-.ct-issue-group-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 2px 6px;
-  margin-bottom: 6px;
-  border-bottom: 1px solid var(--border-faint);
-}
-.ct-issue-group-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ct-issue-quote {
-  margin-top: 4px;
-  padding-left: 6px;
-  border-left: 2px solid var(--border);
-  font-size: var(--fs-mini);
-  line-height: 1.6;
-  color: var(--text-tertiary);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.ct-issue.is-adopted {
-  opacity: 0.62;
-}
-.ct-issue.is-adopted .ct-issue-title {
-  text-decoration: line-through;
-  text-decoration-color: var(--border-strong);
-}
-
-/* 结论的出处 / 章节 / 定位状态。窄栏下允许换行，不横向溢出。 */
-.ct-issue-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: var(--fs-micro);
-  line-height: 1.5;
-  color: var(--text-quaternary);
-}
-.ct-issue-source {
-  flex: none;
-  padding: 0 5px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: var(--fs-micro);
-  line-height: 16px;
-  color: var(--text-tertiary);
-}
-.ct-issue-source.is-cross_chapter {
-  border-color: var(--cinnabar-glow);
-  color: var(--cinnabar);
-}
-.ct-issue-where {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ct-issue-unlocatable {
-  flex: none;
-  color: var(--text-quaternary);
-}
-.ct-issue-jump {
-  height: auto !important;
-  padding: 0 2px !important;
-  font-size: var(--btn-fs-xs) !important;
-  line-height: 1.5;
-}
-.ct-issue-ops {
-  display: flex;
-  justify-content: flex-end;
-  gap: 2px;
-  margin-top: 2px;
-}
-.ct-issue-ops .ant-btn {
-  height: var(--btn-h-xs) !important;
-  padding: 0 var(--btn-px-xs) !important;
-  font-size: var(--btn-fs-xs) !important;
-}
-.ct-ai-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  border-radius: var(--btn-r);
-  background: var(--bg-sunken);
-  font-size: var(--fs-ui-sm);
-  color: var(--text-tertiary);
-}
-
 /* 统计块 */
 .ct-stat-row {
   display: flex;
@@ -1383,6 +1225,36 @@ body.ct-resizing * {
   color: var(--text-quaternary);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* 高优先级规则问题的圆点：只在有问题时出现，没问题时什么都不显示。
+   点开才在右栏列问题，所以它不能做成常驻角标。 */
+.ct-tree-issue {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 9px;
+  background: var(--cinnabar-dim);
+  color: var(--cinnabar);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 0.16s ease;
+}
+.ct-tree-issue:hover {
+  background: var(--cinnabar-glow);
+}
+.ct-tree-issue-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 .ct-tree-children {
   padding-left: 16px;
@@ -2903,6 +2775,78 @@ body.ct-resizing * {
 .ct-msg-changelog-list em {
   margin-left: 6px;
   font-style: normal;
+  color: var(--text-quaternary);
+}
+
+/* ---------- 规则检查的系统提示 ----------
+   左栏章节行的小圆点拨开后出现在右栏。明确标「系统提示」并可关闭：
+   它不是一轮 AI 对话，不该混在会话历史里，也不占左栏面板。 */
+.ct-msg-system {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--cinnabar);
+  border-radius: 6px;
+  background: var(--bg-sunken);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.ct-msg-system-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.ct-msg-system-tag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--cinnabar-dim);
+  color: var(--cinnabar);
+  font-size: 10px;
+  line-height: 16px;
+}
+.ct-msg-system-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ct-msg-system-close {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-quaternary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ct-msg-system-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.ct-msg-system-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--text-tertiary);
+}
+.ct-msg-system-list li {
+  margin: 2px 0;
+}
+.ct-msg-system-issue {
+  color: var(--text-primary);
+}
+.ct-msg-system-quote {
+  margin-top: 1px;
+  font-size: 11.5px;
+  color: var(--cinnabar);
+}
+.ct-msg-system-detail {
+  margin-top: 1px;
+  font-size: 11.5px;
   color: var(--text-quaternary);
 }
 
