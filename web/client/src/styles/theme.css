@@ -75,10 +75,15 @@ html[data-theme='light'] {
      格子若是 33.825px 这种小数，每块都会差零点几像素，
      一屏下来字又压线了。原来写死 30px，和 33.8px 的行高
      每行差 3.8px——这才是"字和线对不上"的根源。 */
-  --ruled-line: rgba(120, 108, 82, 0.14);
+  --ruled-line: rgba(120, 108, 82, 0.17);
   --ruled-size: 34px;
-  /* 光标所在块的纸色轻染：必须带透明度，否则会盖掉下面的稿纸格线。 */
+  /* 正文底色的三层语义（任何一层都不许用不透明实色，否则格线被整段盖掉）：
+       1. --block-active-bg：光标所在块，暖灰轻染；
+       2. --selection-bg：临时选中，冷蓝灰，和另外两层色相分开——
+          以前用朱砂，选中一段就像整段被打了红底，和稿纸、泥金高亮一起发闷；
+       3. --mark-bg / --gold-dim / --amber：审稿意见与卡片命中，泥金。 */
   --block-active-bg: rgba(120, 108, 82, 0.075);
+  --selection-bg: rgba(74, 106, 133, 0.13);
 
   /* 引用高亮 */
   --mark-bg: rgba(207, 161, 36, 0.28);
@@ -142,9 +147,10 @@ html[data-theme='dark'] {
   --shadow-float: 0 8px 30px rgba(0, 0, 0, 0.42);
   --shadow-lift: 0 2px 6px rgba(0, 0, 0, 0.28);
 
-  --ruled-line: rgba(236, 229, 214, 0.09);
+  --ruled-line: rgba(236, 229, 214, 0.11);
   --ruled-size: 34px;
   --block-active-bg: rgba(236, 229, 214, 0.06);
+  --selection-bg: rgba(138, 178, 206, 0.18);
 
   --mark-bg: rgba(208, 164, 78, 0.3);
   --mark-text: #f0d9a4;
@@ -249,8 +255,11 @@ textarea {
   font-family: var(--font-ui);
 }
 
+/* 选区：半透明冷蓝灰淡染，压住格线的程度和当前块轻染同一量级。
+   不要用 --cinnabar-dim / --mark-bg：一个会和朱砂主操作、一个会和泥金
+   审稿高亮撞色，选中 + 审稿 + 当前块三层叠上去就分不清哪层是哪层。 */
 ::selection {
-  background: var(--cinnabar-dim);
+  background: var(--selection-bg);
   color: var(--text-primary);
 }
 
