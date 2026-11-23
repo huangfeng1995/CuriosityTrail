@@ -15,8 +15,24 @@
 
 const { parseModelJson } = require('./parse');
 
-/** 节拍类型：六选一。与规划提示词、校验规则保持一致 */
-const BEAT_TYPES = ['行动', '转折', '冲突', '揭示', '决定', '过渡'];
+/** 节拍类型：七选一（险露 仅在历史悬疑模板启用时可用） */
+const BEAT_TYPES = ['行动', '转折', '冲突', '揭示', '决定', '过渡', '险露'];
+
+/**
+ * 高风险拍「险露」：每章差点暴露。
+ *
+ * 它不是「遇到危险」的动作拍，而是**人物在险境中被迫暴露信息**：
+ * 审问、试探、错拿东西、说漏半句——张力来自「差一点被看穿」，
+ * 而不是打斗场面。这条语义写进规划提示词，校验只负责数量与相邻章。
+ */
+const DANGER_TYPE = '险露';
+
+/** 单拍规模：默认 small；一章 large 至多 1 拍。 */
+const SCALE_VALUES = ['small', 'medium', 'large'];
+const DEFAULT_SCALE = 'small';
+
+/** 单拍压力类型；一章 动作 至多 1 拍。 */
+const PRESSURE_VALUES = ['心理', '对峙', '误导', '动作'];
 
 /**
  * 功能拍枚举：这一拍在章节结构里承担什么。
@@ -213,9 +229,11 @@ const MAX_EVIDENCE_CHARS = 30;
  */
 const PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
-beats 6–8 个；每拍含 id（B1…Bn）、function、functionReason、type（行动|转折|冲突|揭示|决定|过渡）、
+beats 6–8 个；每拍含 id（B1…Bn）、function、functionReason、type（行动|转折|冲突|揭示|决定|过渡|险露）、
 goal、obstacle、cost、delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、
-targetChars、wordShare、endHook（这一拍结束时的悬念或钩子）、entities（数组）。
+targetChars、wordShare、endHook（这一拍结束时的悬念或钩子）、entities（数组）、
+scale（small|medium|large，默认 small）、pressure（心理|对峙|误导|动作）。
+险露=人物在险境中被迫暴露信息（被试探、说漏、错拿），不是单纯遇险；每章至多 1 拍。
 entities 列出这一拍出现的人名、物名、关键道具；只能用给定资料里出现过的人或物，
 没有出处的一律不许写，也不许用「父亲/老师/领导」这类新角色代替已有角色。
 function 只能取以下六类，且全章六类必须各出现至少一次（可以有同类多拍）：
@@ -254,8 +272,10 @@ const OUTLINE_PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 
 本章已有作者写好的大纲。请把大纲里的事件按因果顺序拆成 4–8 拍，不要套用任何固定功能模板。
 字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
 每拍含 id（B1…Bn）、function（自由标签，如「入场」「试探」「冲突」「决定」，不要求六类）、
-type（行动|转折|冲突|揭示|决定|过渡）、goal、obstacle、turn（这一拍的转折）、cost、
-delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、wordShare、endHook、entities（数组）。
+type（行动|转折|冲突|揭示|决定|过渡|险露）、goal、obstacle、turn（这一拍的转折）、cost、
+delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、wordShare、endHook、entities（数组）、
+scale（small|medium|large，默认 small）、pressure（心理|对峙|误导|动作）。
+险露=人物在险境中被迫暴露信息（被试探、说漏、错拿），不是单纯遇险；每章至多 1 拍。
 
 硬规则：
 1. 4–8 拍；每拍 3–12 段，全章合计 20–80 段。
@@ -433,6 +453,8 @@ function unique(list) {
  * @param {Object} [options]
  * @param {'outline'|'reference'} [options.mode] outline=按本章大纲规划；reference=无大纲时用范文六类兜底
  * @param {Object} [options.ground] 实体接地资料（本章大纲/人物卡/设定/素材）
+ * @param {string[]} [options.allowedTypes] 本作品允许的节拍类型；险露 只在模板启用时传入
+ * @param {string} [options.previousMainType] 上一章 mainType，用于相邻章不得同为 险露
  * @returns {{ok: boolean, plan: Object|null, errors: string[]}}
  */
 function validateBeatPlan(candidate, options = {}) {
@@ -441,6 +463,11 @@ function validateBeatPlan(candidate, options = {}) {
   const outlineMode = options.mode === 'outline';
   const ground = options.ground || null;
   const corpus = groundCorpus(ground);
+  const allowedTypes = Array.isArray(options.allowedTypes)
+    ? options.allowedTypes.filter((type) => BEAT_TYPES.includes(type))
+    : BEAT_TYPES;
+  const allowedSet = new Set(allowedTypes);
+  const previousMainType = text(options.previousMainType);
 
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return { ok: false, plan: null, errors: ['没有解析出 JSON 对象'] };
@@ -468,8 +495,13 @@ function validateBeatPlan(candidate, options = {}) {
   if (EMPTY_HOOKS.some((word) => hook.includes(word))) {
     errors.push('hook 不能是「且听下回分解」式空钩');
   }
-  if (mainType && !BEAT_TYPES.includes(mainType)) {
-    errors.push(`mainType 必须是六种节拍类型之一，收到「${mainType}」`);
+  if (mainType && !allowedSet.has(mainType)) {
+    errors.push(
+      `mainType 必须是本作品允许的节拍类型之一（${allowedTypes.join('/')}），收到「${mainType}」`
+    );
+  }
+  if (mainType === DANGER_TYPE && previousMainType === DANGER_TYPE) {
+    errors.push('上一章 mainType 已是 险露，相邻两章不得同为 险露');
   }
 
   const rawBeats = Array.isArray(data.beats) ? data.beats : [];
@@ -513,9 +545,22 @@ function validateBeatPlan(candidate, options = {}) {
     const from = text(delta.from);
     const to = text(delta.to);
     const paragraphs = Number(beat.paragraphs);
+    const rawScale = text(beat.scale).toLowerCase();
+    const scale = rawScale || DEFAULT_SCALE;
+    const pressure = text(beat.pressure);
 
     if (id !== `B${index + 1}`) errors.push(`${where}的 id 必须是 B${index + 1}，收到「${id}」`);
-    if (!BEAT_TYPES.includes(type)) errors.push(`${where}的 type 不合法：${type || '空'}`);
+    if (!allowedSet.has(type)) {
+      errors.push(
+        `${where}的 type 不合法：${type || '空'}（本作品允许：${allowedTypes.join('/')}）`
+      );
+    }
+    if (!SCALE_VALUES.includes(scale)) {
+      errors.push(`${where}的 scale 必须是 small/medium/large，收到「${rawScale}」`);
+    }
+    if (pressure && !PRESSURE_VALUES.includes(pressure)) {
+      errors.push(`${where}的 pressure 必须是 心理/对峙/误导/动作，收到「${pressure}」`);
+    }
     // function 缺失/非法不直接判计划作废：作废会掉进整章直写，比缺分类更糟。
     // 这里只记为「未分类」，由路由重排一次；重排后仍缺才写进 plan_degraded。
     if (!outlineMode && !beatFunction) {
@@ -569,8 +614,24 @@ function validateBeatPlan(candidate, options = {}) {
       wordShare: Number.isFinite(rawShare) && rawShare > 0 && rawShare <= 100 ? rawShare : null,
       endHook,
       entities: entities || [],
+      scale: SCALE_VALUES.includes(scale) ? scale : DEFAULT_SCALE,
+      pressure: PRESSURE_VALUES.includes(pressure) ? pressure : '',
     });
   });
+
+  // 险露与两个可选字段都是「全章配额」，单拍校验看不出来，必须按整份表再数一遍。
+  const dangerBeats = beats.filter((beat) => beat.type === DANGER_TYPE);
+  if (dangerBeats.length > 1) {
+    errors.push(`每章至多 1 拍 险露，收到 ${dangerBeats.length} 拍（${dangerBeats.map((b) => b.id).join('、')}）`);
+  }
+  const largeBeats = beats.filter((beat) => beat.scale === 'large');
+  if (largeBeats.length > 1) {
+    errors.push(`一章 large 不得超过 1 拍，收到 ${largeBeats.length} 拍（${largeBeats.map((b) => b.id).join('、')}）`);
+  }
+  const actionPressureBeats = beats.filter((beat) => beat.pressure === '动作');
+  if (actionPressureBeats.length > 1) {
+    errors.push(`一章 pressure=动作 不得超过 1 拍，收到 ${actionPressureBeats.length} 拍（${actionPressureBeats.map((b) => b.id).join('、')}）`);
+  }
 
   // wordShare：模型给齐了就按它的配比；缺项或合计明显不对，就按段落权重折算，
   // 保证每拍都有目标份额，而不是让某一拍静默缺失。
@@ -684,6 +745,11 @@ function salvageBeatPlan(candidate, options = {}) {
   const outlineMode = options.mode === 'outline';
   const ground = options.ground || null;
   const corpus = groundCorpus(ground);
+  const allowedTypes = Array.isArray(options.allowedTypes)
+    ? options.allowedTypes.filter((type) => BEAT_TYPES.includes(type))
+    : BEAT_TYPES;
+  const allowedSet = new Set(allowedTypes);
+  const previousMainType = text(options.previousMainType);
   const rawBeats = Array.isArray(data.beats) ? data.beats : [];
   if (!rawBeats.length) return null;
 
@@ -698,6 +764,9 @@ function salvageBeatPlan(candidate, options = {}) {
     const entities = Array.isArray(beat.entities)
       ? beat.entities.map((x) => text(x)).filter(Boolean)
       : [];
+    const rawType = text(beat.type);
+    const rawScale = text(beat.scale).toLowerCase();
+    const pressure = text(beat.pressure);
     return {
       id: '',
       planMode: outlineMode ? 'outline' : 'reference',
@@ -707,7 +776,7 @@ function salvageBeatPlan(candidate, options = {}) {
           ? text(beat.function)
           : '',
       functionReason: text(beat.functionReason),
-      type: BEAT_TYPES.includes(text(beat.type)) ? text(beat.type) : '过渡',
+      type: allowedSet.has(rawType) ? rawType : '过渡',
       goal: text(beat.goal) || '（原计划缺目标，按章目标推进）',
       obstacle: text(beat.obstacle) || '（原计划缺阻碍，按现有情境补写）',
       turn: text(beat.turn),
@@ -722,6 +791,8 @@ function salvageBeatPlan(candidate, options = {}) {
       wordShare: Number.isFinite(rawShare) && rawShare > 0 && rawShare <= 100 ? rawShare : null,
       endHook: text(beat.endHook) || '（原计划缺钩子，按下一拍推进）',
       entities,
+      scale: SCALE_VALUES.includes(rawScale) ? rawScale : DEFAULT_SCALE,
+      pressure: PRESSURE_VALUES.includes(pressure) ? pressure : '',
     };
   });
 
@@ -731,9 +802,36 @@ function salvageBeatPlan(candidate, options = {}) {
     beats = beats.filter((beat) => ungroundedEntities(beat, corpus).length === 0);
     if (beats.length < 4) return null;
   }
+  // 单章配额：修复时保留第一拍，其余就地降级，不因为配额问题丢掉整份事件链。
+  // 相邻章同为 险露 由 mainType 兜底处理，这里只保证「每章至多 1 拍」。
+  let seenDanger = false;
+  let seenLarge = false;
+  let seenAction = false;
+  for (const beat of beats) {
+    if (beat.type === DANGER_TYPE) {
+      if (seenDanger) beat.type = '转折';
+      else seenDanger = true;
+    }
+    if (beat.scale === 'large') {
+      if (seenLarge) beat.scale = 'small';
+      else seenLarge = true;
+    }
+    if (beat.pressure === '动作') {
+      if (seenAction) beat.pressure = '心理';
+      else seenAction = true;
+    }
+  }
   beats.forEach((beat, index) => {
     beat.id = `B${index + 1}`;
   });
+
+  // mainType 兜底：上一章已是 险露 时丢弃本章 mainType（保留节拍），
+  // 与 P.8.1「重试一次仍非法则丢弃 mainType 但保留节拍」一致。
+  let mainType = text(data.mainType);
+  if (!allowedSet.has(mainType) || (mainType === DANGER_TYPE && previousMainType === DANGER_TYPE)) {
+    const fallback = beats.find((beat) => beat.type !== DANGER_TYPE) || beats[0];
+    mainType = fallback ? fallback.type : '过渡';
+  }
 
   const totalParagraphsForShare = beats.reduce((sum, b) => sum + (b.paragraphs || 0), 0);
   const rawShareTotal = beats.reduce((sum, b) => sum + (b.wordShare || 0), 0);
@@ -773,7 +871,7 @@ function salvageBeatPlan(candidate, options = {}) {
     avoidRepeat: Array.isArray(data.avoidRepeat)
       ? data.avoidRepeat.map((x) => text(x)).filter(Boolean)
       : [],
-    mainType: BEAT_TYPES.includes(text(data.mainType)) ? text(data.mainType) : beats[0].type,
+    mainType,
     beats,
     totalParagraphs: beats.reduce((sum, beat) => sum + (beat.paragraphs || 0), 0),
     shareMissing,
@@ -1102,6 +1200,34 @@ function beatBadge({ coverage, checkError, rewrote, rewriteFailed, truncated } =
 }
 
 /**
+ * 给规划提示词追加类型可用性与单章配额。
+ *
+ * 险露 是阶段三扩展，只在历史悬疑模板启用时可用；非模板作品即使模型
+ * 想「加一点紧张感」，也不能凭空多出一种类型。相邻章规则只带上一章
+ * mainType，不额外查询上一章正文。
+ */
+function buildBeatTypeBlock({ allowedTypes = BEAT_TYPES, previousMainType = '' } = {}) {
+  const lines = [
+    '单拍可选字段：scale（small|medium|large，默认 small；一章 large 至多 1 拍）、' +
+      'pressure（心理|对峙|误导|动作；一章 动作 至多 1 拍）。',
+  ];
+  if (allowedTypes.includes(DANGER_TYPE)) {
+    lines.push(
+      '本作品已启用历史悬疑模板：type 可用 险露（每章至多 1 拍）。' +
+        '险露拍要让人物在险境中被迫暴露信息（被试探、说漏、错拿），不是单纯遇险。'
+    );
+  } else {
+    lines.push(
+      `本作品未启用历史悬疑模板：禁止使用 险露 类型，type 只能取 ${allowedTypes.join('|')}。`
+    );
+  }
+  if (previousMainType === DANGER_TYPE) {
+    lines.push('上一章 mainType=险露；相邻两章不得同为 险露，本章 mainType 不要再选 险露。');
+  }
+  return `\n\n${lines.join('\n')}`;
+}
+
+/**
  * 规划调用。
  *
  * 失败一律返回 plan=null，由路由降级直写——规划只是增强，
@@ -1114,6 +1240,8 @@ function beatBadge({ coverage, checkError, rewrote, rewriteFailed, truncated } =
  * @param {Object} [params.options] temperature/model/thinking/signal
  * @param {'outline'|'reference'} [params.planMode] 有本章大纲时按大纲拆拍；否则用范文六类兜底
  * @param {Object} [params.ground] 实体接地资料
+ * @param {string[]} [params.allowedTypes] 本作品允许的节拍类型
+ * @param {string} [params.previousMainType] 上一章 mainType
  * @returns {Promise<{plan: Object|null, raw: string, errors: string[], reason: string}>}
  */
 async function generateBeatPlan({
@@ -1123,11 +1251,14 @@ async function generateBeatPlan({
   options = {},
   planMode = 'reference',
   ground = null,
+  allowedTypes = BEAT_TYPES,
+  previousMainType = '',
 }) {
   const signal = options.signal || null;
   const outlineMode = planMode === 'outline';
   const prompt = outlineMode ? OUTLINE_PLAN_PROMPT : PLAN_PROMPT;
   const groundBlock = ground ? buildGroundBlock(ground) : '';
+  const typeBlock = buildBeatTypeBlock({ allowedTypes, previousMainType });
   let lastRaw = '';
   let lastErrors = [];
   let lastUsage = null;
@@ -1152,7 +1283,7 @@ async function generateBeatPlan({
     try {
       const result = await provider.chat({
         messages: [
-          { role: 'system', content: `${systemPrompt}\n\n---\n\n${prompt}${groundBlock}` },
+          { role: 'system', content: `${systemPrompt}\n\n---\n\n${prompt}${groundBlock}${typeBlock}` },
           { role: 'user', content: userContent },
         ],
         ...options,
@@ -1164,7 +1295,12 @@ async function generateBeatPlan({
 
       lastRaw = String(result.content || '');
       lastUsage = result.usage || null;
-      const check = validateBeatPlan(lastRaw, { mode: planMode, ground });
+      const check = validateBeatPlan(lastRaw, {
+        mode: planMode,
+        ground,
+        allowedTypes,
+        previousMainType,
+      });
       if (check.ok) {
         return { plan: check.plan, raw: lastRaw, errors: [], reason: '', usage: lastUsage };
       }
@@ -1186,7 +1322,12 @@ async function generateBeatPlan({
   // R4：两次都不合格时按「最接近合法」的版本交付，不丢给写手直写。
   // 修复只夹边界与补占位，不猜剧情；缺功能拍/对手会在 plan_degraded 里写明。
   // 有大纲时，salvage 会再拒绝含无出处实体的拍，避免「父亲+证明」混进正文。
-  const salvaged = salvageBeatPlan(lastRaw, { mode: planMode, ground });
+  const salvaged = salvageBeatPlan(lastRaw, {
+    mode: planMode,
+    ground,
+    allowedTypes,
+    previousMainType,
+  });
   if (salvaged) {
     return { plan: salvaged, raw: lastRaw, errors: lastErrors, reason: 'salvaged', usage: lastUsage };
   }
@@ -1375,6 +1516,9 @@ module.exports = {
   BEAT_FUNCTIONS,
   FUNCTION_LABELS,
   DELTA_VARIABLES,
+  DANGER_TYPE,
+  SCALE_VALUES,
+  PRESSURE_VALUES,
   SAMPLE_SHARES,
   SHARE_ROLES,
   SHARE_TOLERANCE,

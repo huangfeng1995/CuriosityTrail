@@ -42,6 +42,8 @@ const {
   buildFunctionReplanInstruction,
   beatBadge,
   checkWordShares,
+  BEAT_TYPES,
+  DANGER_TYPE,
 } = require('../services/agent/beatPlan');
 const planBrief = require('../services/agent/planBrief');
 const backgroundFacts = require('../services/pipeline/backgroundFacts');
@@ -49,6 +51,7 @@ const referenceAnchor = require('../services/agent/referenceAnchor');
 const segmentWriter = require('../services/agent/segmentWriter');
 const { checkAnchors } = require('../services/pipeline/anchorCheck');
 const knowledgeScan = require('../services/pipeline/knowledgeScan');
+const { isPipelineEnabled } = require('../services/pipeline/gate');
 
 const router = express.Router();
 
@@ -130,6 +133,37 @@ function errorText(err) {
   if (typeof err.message === 'string' && err.message) return err.message;
   try {
     return String(err);
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * 上一章的 mainType（只用于「相邻两章不得同为 险露」）。
+ *
+ * HP11 落库后从 chapter_plans 读；表还没建（HP10 单独上线）时查询会报错，
+ * 这里吞掉错误按「没有上一章计划」处理，不阻断本轮规划。
+ */
+async function loadPreviousMainType(workId, chapterId) {
+  if (!workId || !chapterId) return '';
+  try {
+    const current = await get('SELECT seq FROM chapters WHERE id = ? AND work_id = ?', [
+      chapterId,
+      workId,
+    ]);
+    if (!current) return '';
+    const prev = await get(
+      'SELECT id FROM chapters WHERE work_id = ? AND seq < ? ORDER BY seq DESC LIMIT 1',
+      [workId, current.seq]
+    );
+    if (!prev) return '';
+    const row = await get(
+      'SELECT plan FROM chapter_plans WHERE chapter_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1',
+      [prev.id]
+    );
+    if (!row || !row.plan) return '';
+    const parsed = JSON.parse(row.plan);
+    return parsed && typeof parsed.mainType === 'string' ? parsed.mainType : '';
   } catch (e) {
     return '';
   }
@@ -1124,7 +1158,7 @@ router.post('/chat', async (req, res) => {
                   workId,
                 ]).catch(() => null)
               : null,
-            get('SELECT title, synopsis, outline FROM works WHERE id = ?', [workId]).catch(() => null),
+            get('SELECT title, synopsis, outline, template FROM works WHERE id = ?', [workId]).catch(() => null),
             all('SELECT name, aliases FROM characters WHERE work_id = ?', [workId]).catch(() => []),
             all('SELECT name FROM settings WHERE work_id = ?', [workId]).catch(() => []),
             all(
@@ -1163,6 +1197,16 @@ router.post('/chat', async (req, res) => {
         const planMode = planGround.outline.length >= MIN_OUTLINE_CHARS_FOR_PLAN
           ? 'outline'
           : 'reference';
+
+        // 险露 只在历史悬疑模板启用时可用；相邻章规则需要上一章 mainType。
+        // 模板判定只用这一行作品数据，与注入侧共用同一个 gate。
+        const pipelineEnabled = isPipelineEnabled(planWorkRow);
+        const allowedBeatTypes = pipelineEnabled
+          ? BEAT_TYPES
+          : BEAT_TYPES.filter((type) => type !== DANGER_TYPE);
+        const previousMainType = pipelineEnabled
+          ? await loadPreviousMainType(workId, chapterId)
+          : '';
 
         // ---- 分场 brief（先于节拍规划）----
         //
@@ -1295,6 +1339,8 @@ router.post('/chat', async (req, res) => {
           options: makePlanOptions(),
           planMode,
           ground: planGround,
+          allowedTypes: allowedBeatTypes,
+          previousMainType,
         });
 
         const planMs = Date.now() - planStartedAt;
@@ -1361,6 +1407,8 @@ router.post('/chat', async (req, res) => {
               options: makePlanOptions(),
               planMode,
               ground: planGround,
+              allowedTypes: allowedBeatTypes,
+              previousMainType,
             }).catch((err) => {
               console.error('按功能拍/brief 重排失败，保留第一版节拍表：', err.message);
               return { plan: null, errors: [] };
@@ -1390,6 +1438,8 @@ router.post('/chat', async (req, res) => {
               options: makePlanOptions(),
               planMode,
               ground: planGround,
+              allowedTypes: allowedBeatTypes,
+              previousMainType,
             }).catch((err) => {
               console.error('开场对手重排失败，保留当前节拍表：', err.message);
               return { plan: null, errors: [] };
@@ -1506,6 +1556,11 @@ router.post('/chat', async (req, res) => {
             briefHandover: briefCoverageResult ? briefCoverageResult.handover : 'absent',
             briefMissing: briefCoverageResult ? briefCoverageResult.missing.map((x) => x.id) : [],
             plotCards: plotCardRows.length,
+            pipeline: pipelineEnabled,
+            previousMainType,
+            dangerBeats: beatPlan
+              ? beatPlan.beats.filter((beat) => beat.type === DANGER_TYPE).map((beat) => beat.id)
+              : [],
             errors: (planOut.errors || []).slice(0, 6),
             usage: planOut.usage || null,
           })
