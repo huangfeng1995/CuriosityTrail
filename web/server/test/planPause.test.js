@@ -303,10 +303,29 @@ test('选定后恢复：复用拍表、注入「本节拍已定」，正文照�
   assert.strictEqual(afterChoose.chosen, chosen.id);
 
   const beforePlan = planningCallCount();
+  // 恢复轮次也要加载背景事实：否则 mustReveal 会误判成「尚未入库」，
+  // 第二章起的背景自检等于没跑（HP14 修复三）。
+  const stamp = new Date().toISOString();
+  await db.run(
+    'INSERT INTO characters (id, work_id, name, role, created_at, modified_at) VALUES (?,?,?,?,?,?)',
+    ['pause-char', workId, '杨平', '主角', stamp, stamp]
+  );
+  await db.run(
+    'INSERT INTO story_facts (id, work_id, content, keywords, fact_type, created_at, modified_at) VALUES (?,?,?,?,?,?,?)',
+    ['pause-fact', workId, '庙祝不答', '庙祝,不答', 'background', stamp, stamp]
+  );
+
   fakeModel.setQueue(writingQueue());
   const events = await chat('写这一章', { resumePlanId: row.id });
 
   assert.ok(events.find((event) => event.type === 'action'), '选定后必须继续写作');
+  const action = events.find((event) => event.type === 'action');
+  const revealMissing = (action.beatCheck.mustRevealMissing || []).map((item) => item.content);
+  assert.ok(
+    !revealMissing.some((text) => text.includes('尚未入库')),
+    '恢复轮次必须加载已入库的背景事实'
+  );
+  assert.deepStrictEqual(revealMissing, [], '正文里已经交代的背景事实不算缺');
   assert.strictEqual(planningCallCount(), beforePlan, '恢复不得重新规划');
 
   const systems = writerSystemPrompts();

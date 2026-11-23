@@ -1290,6 +1290,15 @@ router.post('/chat', async (req, res) => {
         // 这里先把「本章必须发生的动作」补成分场级清单，再交给规划器硬覆盖。
         // 失败一律回落到无 brief 的旧链路，不因为多一步而拖挂整轮。
         let briefSystemPrompt = '';
+        // 背景事实要在「复用拍表」的恢复轮次里也加载：HP14 的暂停点正好落在
+        // 规划后，恢复时若跳过这条查询，mustReveal 会误判成「尚未入库」，
+        // 第二章起的背景自检等于没跑。
+        backgroundFactRows = await all(
+          `SELECT * FROM story_facts
+           WHERE work_id = ? AND fact_type = 'background'
+           ORDER BY created_at ASC, id ASC`,
+          [workId]
+        ).catch(() => []);
         if (!reusedPlan) {
           briefSystemPrompt = planContext.messages[0].content;
           try {
@@ -1306,13 +1315,6 @@ router.post('/chat', async (req, res) => {
               `\n\n---\n\n## 本章素材缺口（confidence=missing，只能作为背景线索，不得当作有出处的事实引用）\n` +
               missingMaterials.map((row) => `- ${row.title}`).join('\n');
           }
-
-          backgroundFactRows = await all(
-            `SELECT * FROM story_facts
-             WHERE work_id = ? AND fact_type = 'background'
-             ORDER BY created_at ASC, id ASC`,
-            [workId]
-          ).catch(() => []);
 
           if (backgroundFactRows.length) {
             briefSystemPrompt +=
