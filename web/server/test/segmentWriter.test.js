@@ -1351,7 +1351,7 @@ test('W2 形态违规按类型计数，总数与违规数组一致', () => {
   assert.strictEqual(shape.summary.avg, 1, '段均 81.4 低于 95.3');
   assert.strictEqual(
     Object.keys(shape.summary).sort().join(','),
-    'avg,corner_quote,count,dialogue_ratio,dialogue_stack,fragment_ratio,imagery_density,quote_density,short_run,short_sentence,too_long,total'
+    'avg,corner_quote,count,dialogue_ratio,dialogue_stack,fragment_ratio,generic_reference,imagery_density,quote_density,short_run,short_sentence,too_long,total'
   );
 });
 
@@ -1395,7 +1395,7 @@ test('A1 引号片段密度与对白占比各自有独立阈值', () => {
   );
 });
 
-test('A3 比喻堆叠有范文阈值，正常叙述不误报', () => {
+test('A3 比喻堆叠与泛称指代各自有范文阈值', () => {
   const plan = makePlan(2, 15);
   const imagery = Array.from(
     { length: 30 },
@@ -1407,12 +1407,23 @@ test('A3 比喻堆叠有范文阈值，正常叙述不误报', () => {
   assert.strictEqual(imageRow.limit, segmentWriter.IMAGERY_LIMIT);
   assert.ok(imageRow.perKilo > segmentWriter.IMAGERY_LIMIT);
 
+  const generic = Array.from(
+    { length: 30 },
+    () => '姓周的问了一句，那瘦高的也应了一声，其中一个笑了笑。'
+  ).join('\n\n');
+  const genericShape = segmentWriter.checkParagraphShape(plan, generic);
+  assert.strictEqual(genericShape.summary.generic_reference, 1, '泛称指代密度远超 1 处/千字');
+  const genericRow = genericShape.violations.find((item) => item.kind === 'generic_reference');
+  assert.strictEqual(genericRow.limit, segmentWriter.GENERIC_REF_LIMIT);
+  assert.ok(genericRow.perKilo > segmentWriter.GENERIC_REF_LIMIT);
+
   const clean = Array.from(
     { length: 20 },
     () => '杨平沿着廊下往前走，杨俊在他身后半步，砖缝里的雪水还没有干，靴底踩上去留下两行深浅不一的印子。'
   ).join('\n\n');
   const cleanShape = segmentWriter.checkParagraphShape(plan, clean);
   assert.strictEqual(cleanShape.summary.imagery_density, 0);
+  assert.strictEqual(cleanShape.summary.generic_reference, 0);
 });
 
 test('A1 文字质感三项只拦新造出来的超限，原本超标的好转不被回滚', () => {

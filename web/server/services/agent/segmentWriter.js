@@ -79,6 +79,7 @@ const PARAGRAPH_SHAPE_RULES = [
   '- 对白写成有主语、有动作、有停顿的整段：同一轮交流合进一段，不要一句一引号、不要一句话配一个反应短句；说话人的动作、神态、对方的反应与停顿都放在同一段里。',
   '- 字数质感按范文控制：≤12 字短句不超过全章 18%（范文 12.3%）；引号片段不超过 12 处/千字（范文 8.1）；对白占比不超过全章 27%（范文 18%）。超出部分改成叙述、心理与动作，不许靠加标点把短句撑长。',
   '- 比喻不堆叠：全章不超过 2.1 处/千字（范文 1.39），同一段最多一个明喻；删掉重复的「像/仿佛/如同」，改用动作、感官与细节。',
+  '- 人物用具体称谓：首次出现给姓名与身份，之后用姓名或稳定称谓；不要用「姓X的/那瘦高的/其中一个」反复指代同一批人（匿名特征指代 ≤1 处/千字，范文 0）。',
   '- 引号统一用全角 “”，禁止使用「」；关键交流必须写成直接引语：用人物原话，带说话人的动作、神态或对方的反应，不要用「他说他问我是否……」这类转述代替关键对话。',
   '- 每次对话都要推动一次变化：关系、立场、决定或信息，至少变一项；不写只为填充的寒暄。',
   '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它要付的代价。',
@@ -192,15 +193,24 @@ const QUOTE_SPAN_RE = /“[^“”]*”/g;
 const QUOTE_SPAN_TEST_RE = /“[^“”]*”/;
 
 /**
- * 比喻密度上限，同样来自范文实测。
+ * 比喻与泛称的密度上限，同样来自范文实测。
  *
  *   - 比喻 1.39 处/千字（measure.py 标记词口径）→ 上限 2.1（×1.5）；
- *     线上实测 2.32，主要是「像/仿佛/如同」在同一段里连用。
+ *   - 匿名特征指代 0 处/千字（sample.md 实测）→ 上限 1.0。
+ *     只统计「姓周的/那瘦高的」这类**拿匿名特征当固定人物称谓**的写法；
+ *     「有人/对方/那人」是正常叙述，不进来，否则会把环境描写误判成泛称。
+ *     线上实测 2.75（13 处，主要是姓周的/那瘦高的反复指代同一批人）。
  *
- * 只压堆叠，不禁止使用。
+ * 比喻只压堆叠，不禁止使用；匿名指代要求换成具体人名，首次出现给姓名与身份。
  */
 const SAMPLE_IMAGERY_PER_KILO = 1.39;
 const IMAGERY_LIMIT = Math.round(SAMPLE_IMAGERY_PER_KILO * 1.5 * 10) / 10;
+const SAMPLE_GENERIC_REF_PER_KILO = 0;
+const GENERIC_REF_LIMIT = 1;
+const GENERIC_REF_RE =
+  /姓[^，。！？\s]{1,2}的|那(?:个)?(?:瘦高|穿|年轻|年长|灰袍|高个|矮个|中年|年老|站在)[^，。！？\s]{0,6}的|其中一个|另一个人/g;
+const GENERIC_REF_TEST_RE =
+  /姓[^，。！？\s]{1,2}的|那(?:个)?(?:瘦高|穿|年轻|年长|灰袍|高个|矮个|中年|年老|站在)[^，。！？\s]{0,6}的|其中一个|另一个人/;
 
 /** 交付与日志里显式写出的口径，避免「目标」和「段长」以后又被混用。 */
 const SHAPE_MEASURE = Object.freeze({
@@ -1367,7 +1377,9 @@ function buildBeatRewriteInstruction({
       const needsDialogueFix = shapeRows.some((row) =>
         ['short_sentence', 'quote_density', 'dialogue_ratio'].includes(row.kind)
       );
-      const needsStyleFix = shapeRows.some((row) => row.kind === 'imagery_density');
+      const needsStyleFix = shapeRows.some((row) =>
+        ['imagery_density', 'generic_reference'].includes(row.kind)
+      );
       clauses.push(
         `本拍段落形态不合规（${describeShapeViolations(shapeRows)}）：` +
           `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320，单段不超 320）；` +
@@ -1378,7 +1390,9 @@ function buildBeatRewriteInstruction({
               '超出对白承载的背景、判断与情绪改成叙述、心理和动作，不许靠加标点或硬并句把短句撑长。'
             : '') +
           (needsStyleFix
-            ? '比喻不堆叠：同一段最多一个明喻，删掉重复的「像/仿佛/如同」，改用动作、感官与细节。'
+            ? '比喻不堆叠：同一段最多一个明喻，删掉重复的「像/仿佛/如同」，改用动作、感官与细节；' +
+              '泛称换成具体人名：人物首次出现给姓名与身份，场内固定人物用姓名或稳定称谓，' +
+              '不要用「姓X的/那瘦高的/其中一个」反复指代。'
             : '') +
           ` 先保本拍纯汉字目标，再调形状；重写后本拍段数优先落在 ${Math.max(1, planned - SHAPE_BEAT_TOLERANCE)}–${planned + SHAPE_BEAT_TOLERANCE} 段。`
       );
@@ -1749,6 +1763,10 @@ function checkParagraphShape(plan, body) {
   const quotePerKilo = totalChars ? Math.round((quoteSpans / totalChars) * 1000 * 10) / 10 : 0;
   const dialogueRatio = measureDialogueRatio(text);
   const imageryPerKilo = measureImageryDensity(text);
+  const genericRefs = (text.match(GENERIC_REF_RE) || []).length;
+  const genericPerKilo = totalChars
+    ? Math.round((genericRefs / totalChars) * 1000 * 10) / 10
+    : 0;
   const qualityStats = {
     shortSentenceRatio,
     shortSentenceCount,
@@ -1757,11 +1775,14 @@ function checkParagraphShape(plan, body) {
     quotePerKilo,
     dialogueRatio,
     imageryPerKilo,
+    genericRefs,
+    genericPerKilo,
     limits: {
       shortSentenceRatio: SHORT_SENTENCE_RATIO_LIMIT,
       quotePerKilo: QUOTE_SPAN_LIMIT,
       dialogueRatio: DIALOGUE_RATIO_LIMIT,
       imageryPerKilo: IMAGERY_LIMIT,
+      genericPerKilo: GENERIC_REF_LIMIT,
     },
   };
   if (sentenceTotal >= 20 && shortSentenceRatio > SHORT_SENTENCE_RATIO_LIMIT) {
@@ -1827,6 +1848,24 @@ function checkParagraphShape(plan, body) {
       limit: IMAGERY_LIMIT,
       sample: paragraphSample(
         paragraphs.find((paragraph) => /像|如同|仿佛|宛如|好似|犹如/.test(paragraph)) || ''
+      ),
+    });
+  }
+  if (genericPerKilo > GENERIC_REF_LIMIT) {
+    violations.push({
+      beatId: worstBeatFor(
+        paragraphs
+          .map((paragraph, index) => (GENERIC_REF_TEST_RE.test(paragraph) ? index : -1))
+          .filter((index) => index >= 0),
+        ranges,
+        beats
+      ),
+      kind: 'generic_reference',
+      refs: genericRefs,
+      perKilo: genericPerKilo,
+      limit: GENERIC_REF_LIMIT,
+      sample: paragraphSample(
+        paragraphs.find((paragraph) => GENERIC_REF_TEST_RE.test(paragraph)) || ''
       ),
     });
   }
@@ -1998,7 +2037,7 @@ function checkParagraphShape(plan, body) {
   };
 }
 
-/** 违规按类型计数：分布校验下只保留这十一类。 */
+/** 违规按类型计数：分布校验下只保留这十二类。 */
 const SHAPE_KINDS = [
   'count',
   'too_long',
@@ -2011,6 +2050,7 @@ const SHAPE_KINDS = [
   'quote_density',
   'dialogue_ratio',
   'imagery_density',
+  'generic_reference',
 ];
 
 function summarizeShapeViolations(violations) {
@@ -2055,6 +2095,7 @@ function evaluateShapeDelivery(shape) {
         'quote_density',
         'dialogue_ratio',
         'imagery_density',
+        'generic_reference',
       ].includes(row.kind)
     ) {
       return true;
@@ -2137,6 +2178,7 @@ function shapeAcceptProblems(before, after, ownedBeatIds) {
     ['quote_density', 'perKilo', 'quotePerKilo', '引号片段密度', ' 处/千字'],
     ['dialogue_ratio', 'ratio', 'dialogueRatio', '对白占比', '%'],
     ['imagery_density', 'perKilo', 'imageryPerKilo', '比喻密度', ' 处/千字'],
+    ['generic_reference', 'perKilo', 'genericPerKilo', '泛称指代密度', ' 处/千字'],
   ]) {
     const beforeValue = metricOf(beforeBlocking, kind, field);
     const afterValue = metricOf(afterBlocking, kind, field);
@@ -2183,6 +2225,12 @@ function describeShapeViolations(rows) {
   if (imagery) {
     parts.push(
       `比喻 ${imagery.perKilo} 处/千字（上限 ${imagery.limit}，范文 ${SAMPLE_IMAGERY_PER_KILO}）`
+    );
+  }
+  const generic = list.find((row) => row.kind === 'generic_reference');
+  if (generic) {
+    parts.push(
+      `泛称指代 ${generic.perKilo} 处/千字（上限 ${generic.limit}，范文 ${SAMPLE_GENERIC_REF_PER_KILO}）`
     );
   }
   const tooLong = list.filter((row) => row.kind === 'too_long').length;
@@ -3660,6 +3708,8 @@ module.exports = {
   DIALOGUE_RATIO_LIMIT,
   SAMPLE_IMAGERY_PER_KILO,
   IMAGERY_LIMIT,
+  SAMPLE_GENERIC_REF_PER_KILO,
+  GENERIC_REF_LIMIT,
   SAMPLE_TOTAL_PARAGRAPHS,
   SAMPLE_MEAN_CHARS,
   SAMPLE_MEDIAN_CHARS,
