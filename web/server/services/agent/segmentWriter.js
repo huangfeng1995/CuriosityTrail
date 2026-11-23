@@ -844,6 +844,195 @@ function detectContinuityIssues({ groups }) {
 }
 
 /**
+ * 全章连续性检测（HP14 修复二）。
+ *
+ * 组边界检查只能看到「下一组开头两段」，同一组内部整场戏重演、
+ * 时间倒回去都报不出来（实测第 2 章把「登记 + 接风宴 + 席散」写了两遍，
+ * 旧检查返回 0 条）。这里按整章扫描，四条信号：
+ *   1. 同一句对白（≥5 字）在相隔 ≥3 段的两处逐字重复；
+ *   2. 非相邻段落相似度 ≥0.55（换了措辞的整段重演）；
+ *   3. 同一天的场景时间标记倒退 ≥2 档且没有回溯提示（席散 → 当夜）；
+ *   4. 人物/地点/动作三元组高度重合（只作警告，不阻断）。
+ *
+ * 阻断项交给重写；重写后仍在的，由路由拒绝交付。
+ */
+const CHAPTER_REPEAT_DISTANCE = 3;
+const CHAPTER_QUOTE_MIN_CHARS = 5;
+const CHAPTER_PARAGRAPH_MIN_CHARS = 60;
+const CHAPTER_REPEAT_SIMILARITY = 0.55;
+const CHAPTER_TRIPLE_MIN_CHARS = 100;
+// 场景时间档位：只比较同一天内的先后，「第二日/次日」视为新的一天。
+const TIME_MARKERS = [
+  { re: /(清晨|清早|一早|拂晓|天亮)/, rank: 1 },
+  { re: /(上午|晌午前)/, rank: 2 },
+  { re: /(中午|正午|晌午)/, rank: 3 },
+  { re: /(下午|午后|日头偏西|日斜)/, rank: 4 },
+  { re: /(傍晚|黄昏|擦黑|日暮|天色将晚)/, rank: 5 },
+  { re: /(入夜|当夜|今夜|夜里|掌灯|上灯)/, rank: 6 },
+  { re: /(深夜|三更|半夜|子时)/, rank: 7 },
+  { re: /(席散|散席|宴散|曲终人散)/, rank: 8 },
+];
+const DAY_RESET_RE = /(第二日|次日|翌日|隔日|第二天)/;
+const FLASHBACK_HINT_RE =
+  /(回想|想起|记忆|原来|早先|此前|先前|数日之前|前一日|前一天|昨日|昨夜|当初|当年|那时|彼时)/;
+const QUOTE_RE = /“([^“”]{2,120})”/g;
+const PLACE_TOKENS = [
+  '屋子', '厅', '廊下', '院子', '门口', '城门', '街上', '府里', '庙里',
+  '堂上', '屋里', '案前', '席上', '楼上', '桥头', '林子', '山下', '船上', '马车',
+];
+const ACTION_TOKENS = [
+  '问', '答', '说', '道', '喊', '走', '进', '出', '坐', '站', '看', '听',
+  '写', '递', '接', '拿', '放', '推', '拉', '喝', '吃', '笑', '点头', '摇头',
+];
+
+function stripQuotes(text) {
+  return String(text || '').replace(/“[^“”]*”/g, '');
+}
+
+/** 某段属于哪一拍：按拍权重把段落区间映射回拍号。 */
+function beatAtParagraph(plan, ranges, index) {
+  if (!plan || !Array.isArray(plan.beats) || !ranges) return '';
+  const at = ranges.findIndex(([from, to]) => index >= from && index < to);
+  return at >= 0 && plan.beats[at] ? plan.beats[at].id : '';
+}
+
+function detectChapterContinuityIssues({ plan, body, characters = [] } = {}) {
+  const paragraphs = splitParagraphs(body || '');
+  const issues = [];
+  if (paragraphs.length >= 4) {
+    const ranges =
+      plan && Array.isArray(plan.beats)
+        ? beatParagraphRanges(plan.beats, paragraphs.length)
+        : [];
+    const beatOf = (index) => beatAtParagraph(plan, ranges, index);
+
+    // 1. 逐字重复的对白：换措辞的重演抓不到，复读同一句台词一定会露出。
+    const quotes = new Map();
+    paragraphs.forEach((paragraph, index) => {
+      const seen = new Set();
+      for (const match of paragraph.matchAll(QUOTE_RE)) {
+        const quote = match[1].replace(/[\s，。！？、；：,.!?;:]/g, '');
+        if (Array.from(quote).length < CHAPTER_QUOTE_MIN_CHARS || seen.has(quote)) continue;
+        seen.add(quote);
+        const rows = quotes.get(quote) || [];
+        rows.push(index);
+        quotes.set(quote, rows);
+      }
+    });
+    for (const [quote, rows] of quotes) {
+      if (rows.length < 2) continue;
+      const first = rows[0];
+      const later = rows.find((row) => row - first >= CHAPTER_REPEAT_DISTANCE);
+      if (later === undefined) continue;
+      issues.push({
+        kind: 'repeat_quote',
+        scope: 'chapter',
+        beatIds: [beatOf(first), beatOf(later)].filter(Boolean),
+        evidence: quote.slice(0, 30),
+        against: first,
+        paragraph: later,
+        blocking: true,
+      });
+    }
+
+    // 2. 换措辞的整段重演：段落相似度（跳过相邻段，相邻段有正常的承接关系）。
+    for (let i = 0; i < paragraphs.length; i += 1) {
+      if (normalizedParagraph(paragraphs[i]).length < CHAPTER_PARAGRAPH_MIN_CHARS) continue;
+      for (let j = i + CHAPTER_REPEAT_DISTANCE; j < paragraphs.length; j += 1) {
+        if (normalizedParagraph(paragraphs[j]).length < CHAPTER_PARAGRAPH_MIN_CHARS) continue;
+        const similarity = paragraphSimilarity(paragraphs[i], paragraphs[j]);
+        if (similarity < CHAPTER_REPEAT_SIMILARITY) continue;
+        issues.push({
+          kind: 'repeat_paragraph',
+          scope: 'chapter',
+          beatIds: [beatOf(i), beatOf(j)].filter(Boolean),
+          evidence: paragraphs[j].slice(0, 30),
+          against: i,
+          paragraph: j,
+          similarity: Math.round(similarity * 100) / 100,
+          blocking: true,
+        });
+        break;
+      }
+    }
+
+    // 3. 同一天内时间档位倒退：席散之后又回到「当夜」，且没有回溯提示。
+    let lastRank = 0;
+    let lastIndex = -1;
+    paragraphs.forEach((paragraph, index) => {
+      const narration = stripQuotes(paragraph);
+      if (!narration) return;
+      if (DAY_RESET_RE.test(narration)) {
+        lastRank = 0;
+        lastIndex = index;
+        return;
+      }
+      const hit = TIME_MARKERS.filter((marker) => marker.re.test(narration)).sort(
+        (a, b) => b.rank - a.rank
+      )[0];
+      if (!hit) return;
+      const explicitFlashback =
+        FLASHBACK_HINT_RE.test(narration) || TIME_REVERSAL_RE.test(paragraph.trim());
+      if (lastRank && hit.rank <= lastRank - 2 && !explicitFlashback) {
+        issues.push({
+          kind: 'timeline',
+          scope: 'chapter',
+          beatIds: [beatOf(lastIndex), beatOf(index)].filter(Boolean),
+          evidence: narration.slice(0, 30),
+          against: lastIndex,
+          paragraph: index,
+          blocking: true,
+        });
+      }
+      if (hit.rank > lastRank) {
+        lastRank = hit.rank;
+        lastIndex = index;
+      }
+    });
+
+    // 4. 人物/地点/动作三元组重合：只作警告，误报不阻断交付。
+    const names = (characters || []).map((name) => String(name || '').trim()).filter(Boolean);
+    if (names.length) {
+      const fingerprint = (paragraph) => {
+        const narration = stripQuotes(paragraph);
+        const cast = names.filter((name) => narration.includes(name));
+        const places = PLACE_TOKENS.filter((token) => narration.includes(token));
+        const actions = ACTION_TOKENS.filter((token) => narration.includes(token));
+        return { cast, places, actions };
+      };
+      for (let i = 0; i < paragraphs.length; i += 1) {
+        if (countWords(paragraphs[i]) < CHAPTER_TRIPLE_MIN_CHARS) continue;
+        const left = fingerprint(paragraphs[i]);
+        if (left.cast.length < 2) continue;
+        for (let j = i + 4; j < paragraphs.length; j += 1) {
+          if (countWords(paragraphs[j]) < CHAPTER_TRIPLE_MIN_CHARS) continue;
+          const right = fingerprint(paragraphs[j]);
+          const cast = right.cast.filter((name) => left.cast.includes(name)).length;
+          const places = right.places.filter((token) => left.places.includes(token)).length;
+          const actions = right.actions.filter((token) => left.actions.includes(token)).length;
+          if (cast < 2 || places < 1 || actions < 3) continue;
+          issues.push({
+            kind: 'repeat_triple',
+            scope: 'chapter',
+            beatIds: [beatOf(i), beatOf(j)].filter(Boolean),
+            evidence: paragraphs[j].slice(0, 30),
+            against: i,
+            paragraph: j,
+            blocking: false,
+          });
+          break;
+        }
+      }
+    }
+  }
+  return {
+    issues,
+    blocking: issues.filter((issue) => issue.blocking),
+    warnings: issues.filter((issue) => !issue.blocking),
+  };
+}
+
+/**
  * 某一组的起稿指令。
  *
  * 完整节拍表已经在 system 里（每次调用都会带上），所以这里不再重贴 JSON，
@@ -1090,14 +1279,30 @@ function buildBeatRewriteInstruction({
       );
     }
     if (continuity.has(b.id)) {
-      const rows = continuity.get(b.id).map((issue) =>
-        issue.kind === 'timeline'
-          ? `本组开头把时间倒回了前文之前（证据：「${issue.evidence}」）`
-          : `重演了前文已经写过的动作（证据：「${issue.evidence}」，与第 ${Number(issue.against) + 1} 组重复）`
-      );
+      const rows = continuity.get(b.id).map((issue) => {
+        if (issue.kind === 'timeline') {
+          return issue.scope === 'chapter'
+            ? `本章把时间倒了回去（证据：「${issue.evidence}」，在第 ${Number(issue.against) + 1} 段之后又回到更早的时段）`
+            : `本组开头把时间倒回了前文之前（证据：「${issue.evidence}」）`;
+        }
+        if (issue.scope === 'chapter') {
+          const where = `与第 ${Number(issue.against) + 1} 段重复`;
+          if (issue.kind === 'repeat_quote') {
+            return `本章复读了前文同一句对白（证据：「${issue.evidence}」，${where}）`;
+          }
+          if (issue.kind === 'repeat_paragraph') {
+            return `本章重演了前文整段（证据：「${issue.evidence}」，${where}，相似度 ${issue.similarity}）`;
+          }
+          return `本章与前文的人物/地点/动作高度重合（证据：「${issue.evidence}」，${where}）`;
+        }
+        return `重演了前文已经写过的动作（证据：「${issue.evidence}」，与第 ${Number(issue.against) + 1} 组重复）`;
+      });
+      const chapterScoped = continuity.get(b.id).some((issue) => issue.scope === 'chapter');
       clauses.push(
-        `${rows.join('；')}；删掉重演/倒回的部分，改成从上一组结束的时间点顺叙推进，` +
-          '已经发生的事件只用一句话交代后果。'
+        `${rows.join('；')}；删掉重演/倒回的部分，` +
+          (chapterScoped
+            ? '从本章上一处的时间点顺叙推进，已经发生的事件只用一句话交代后果。'
+            : '改成从上一组结束的时间点顺叙推进，已经发生的事件只用一句话交代后果。')
       );
     }
     if (revealBeats.has(b.id)) {
@@ -1141,7 +1346,7 @@ function buildBeatRewriteInstruction({
     hasCoverageGap
       ? '覆盖自检发现这些拍没有落地。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
       : continuity.size
-        ? '这些拍与前文重复、或把时间倒回了前文之前。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
+        ? '这些拍与前文重复、或把时间倒回了前文之前（同组内部或全章范围内都算）。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
         : (revealBeats.size || premature.size)
           ? '这些拍涉及背景信息的释放时机。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
           : '这些拍节拍齐全，只是篇幅不足。只补指定拍的细节，其他拍与其他组保持原样。',
@@ -3264,6 +3469,7 @@ module.exports = {
   buildGroupLedger,
   ledgerBlock,
   detectContinuityIssues,
+  detectChapterContinuityIssues,
   buildContinuationInstruction,
   buildBeatRewriteInstruction,
   stripClosingTail,

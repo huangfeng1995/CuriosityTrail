@@ -2197,6 +2197,35 @@ router.post('/chat', async (req, res) => {
       );
     }
     if (beatCheck && segmented) beatCheck.continuityIssues = segmented.continuityIssues;
+    // 全章连续性检测（HP14 修复二）：组边界只能看到后一组的前两段，同一组内部
+    // 整场戏重演、时间倒回去都报不出来。这里按整章扫描：重复对白、整段重演、
+    // 时间词单调性、人物/地点/动作三元组。阻断项进下面的重写，重写后仍在的
+    // 由交付前门禁拒绝落库。
+    let chapterContinuity = beatPlan && isProse
+      ? segmentWriter.detectChapterContinuityIssues({
+          plan: beatPlan,
+          body: payload.content,
+          characters: planCharacterNames,
+        })
+      : { issues: [], blocking: [], warnings: [] };
+    if (beatCheck) {
+      beatCheck.chapterContinuityIssues = chapterContinuity.issues;
+      beatCheck.chapterContinuityWarnings = chapterContinuity.warnings;
+    }
+    console.log(
+      JSON.stringify({
+        event: 'ai_chapter_continuity',
+        traceId,
+        userId: req.userId,
+        issues: chapterContinuity.issues.map((issue) => ({
+          kind: issue.kind,
+          blocking: issue.blocking,
+          beatIds: issue.beatIds,
+          against: Number(issue.against) + 1,
+          paragraph: Number(issue.paragraph) + 1,
+        })),
+      })
+    );
     // 交付只允许一次：确定性扫正文，不依赖模型自检。
     const handoverDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
     if (beatCheck) beatCheck.handoverDuplicated = handoverDup.beatIds;
@@ -2286,9 +2315,15 @@ router.post('/chat', async (req, res) => {
     // 否则每一轮成功起稿都会多一条无意义的 ai_segment_rewrite_skip。
     // 连续性问题（重复描写 / 时间倒序）也进入同一轮重写：只点名问题组，
     // 与缺拍/形态问题共用 2 次重写配额与 85% 回滚记账。
+    const chapterContinuityIds = chapterContinuity.blocking.flatMap((issue) => issue.beatIds || []);
     const continuityIds = segmented
-      ? (segmented.continuityIssues || []).flatMap((issue) => issue.beatIds || [])
-      : [];
+      ? [
+          ...new Set([
+            ...(segmented.continuityIssues || []).flatMap((issue) => issue.beatIds || []),
+            ...chapterContinuityIds,
+          ]),
+        ]
+      : chapterContinuityIds;
     const segmentedMissingIds = beatCheck
       ? [
           ...beatCheck.missing,
@@ -2378,7 +2413,10 @@ router.post('/chat', async (req, res) => {
             mustWithholdIds: withholdIds,
             invariantConflicts,
             shapeViolations: shapeCheck.violations,
-            continuityIssues: segmented.continuityIssues || [],
+            continuityIssues: [
+              ...(segmented.continuityIssues || []),
+              ...(chapterContinuity.blocking || []),
+            ],
             runSegment: segmentRun,
             maxCalls: rewriteMaxCalls,
             callCount: segmented.callCount,
@@ -2429,7 +2467,19 @@ router.post('/chat', async (req, res) => {
               originalChars: rewrite.originalChars,
               chars: rewrite.chars,
             };
-            if (beatCheck) beatCheck.continuityIssues = segmented.continuityIssues;
+            // 重写后复检全章：仍存在就如实留在 beatCheck 里，交付前再拦一次。
+            chapterContinuity = beatPlan && isProse
+              ? segmentWriter.detectChapterContinuityIssues({
+                  plan: beatPlan,
+                  body: payload.content,
+                  characters: planCharacterNames,
+                })
+              : { issues: [], blocking: [], warnings: [] };
+            if (beatCheck) {
+              beatCheck.continuityIssues = segmented.continuityIssues;
+              beatCheck.chapterContinuityIssues = chapterContinuity.issues;
+              beatCheck.chapterContinuityWarnings = chapterContinuity.warnings;
+            }
 
             beatRewrite = rewrite.rewroteGroups > 0;
             if (rewrite.degraded || rewrite.failedGroups.length) beatRewriteFailed = true;
@@ -2468,6 +2518,10 @@ router.post('/chat', async (req, res) => {
             if (recheckOut.coverage) {
               beatCheck = recheckOut.coverage;
               beatCheckError = '';
+              // 复检换了一个新对象：连续性与全章检测结果要挂回去，否则最终 payload 里丢掉。
+              beatCheck.continuityIssues = segmented.continuityIssues || [];
+              beatCheck.chapterContinuityIssues = chapterContinuity.issues;
+              beatCheck.chapterContinuityWarnings = chapterContinuity.warnings;
             } else {
               beatCheckError = 'recheck';
             }
@@ -3303,6 +3357,68 @@ router.post('/chat', async (req, res) => {
       } catch (err) {
         // 与节拍自检同一种容错：断言挂了不挡正文，也不弹错误。
         console.error('[ai] 锚点断言失败（已跳过）:', err.message);
+      }
+    }
+
+    // ---- 交付前全章连续性门禁（HP14 修复二）----
+    //
+    // 重写后仍检出整段重演、复读对白或时间倒序，就不落库：
+    // 宁可报错让作者重试，也不把「同一场戏写两遍」的稿子交付。
+    // 重写后正文可能又被扩写/续写改过，所以这里按最终正文再扫一次。
+    if (beatPlan && generatedProse && payload.content.trim()) {
+      chapterContinuity = segmentWriter.detectChapterContinuityIssues({
+        plan: beatPlan,
+        body: payload.content,
+        characters: planCharacterNames,
+      });
+      if (payload.beatCheck) {
+        payload.beatCheck.chapterContinuityIssues = chapterContinuity.issues;
+        payload.beatCheck.chapterContinuityWarnings = chapterContinuity.warnings;
+      }
+      if (chapterContinuity.blocking.length) {
+        const labels = {
+          repeat_quote: '复读对白',
+          repeat_paragraph: '整段重演',
+          timeline: '时间倒序',
+        };
+        const detail = chapterContinuity.blocking
+          .slice(0, 3)
+          .map(
+            (issue) =>
+              `${labels[issue.kind] || issue.kind}（第 ${Number(issue.against) + 1} 段 → 第 ${Number(issue.paragraph) + 1} 段）`
+          )
+          .join('；');
+        console.log(
+          JSON.stringify({
+            event: 'ai_chapter_continuity_blocked',
+            traceId,
+            userId: req.userId,
+            issues: chapterContinuity.blocking.map((issue) => ({
+              kind: issue.kind,
+              beatIds: issue.beatIds,
+              against: Number(issue.against) + 1,
+              paragraph: Number(issue.paragraph) + 1,
+            })),
+          })
+        );
+        send({
+          type: 'error',
+          code: 'CHAPTER_CONTINUITY',
+          message: `本章仍有重演或时间倒序：${detail}。这一版没有保存，请重试。`,
+        });
+        send({
+          type: 'done',
+          conversationId: conversation.id,
+          provider: name,
+          stopReason: finalResult.stopReason,
+          traceId,
+        });
+        // 没交付就不能留下孤立的提问，也不能让重新生成前的那一版消失。
+        if (insertedUserMessageId) {
+          await run('DELETE FROM messages WHERE id = ?', [insertedUserMessageId]).catch(() => {});
+        }
+        await restoreRemoved();
+        return;
       }
     }
 

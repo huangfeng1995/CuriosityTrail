@@ -1982,3 +1982,239 @@ test('P3 底牌提前释放：重写点名提前解释的拍，要求留到指�
   assert.match(instruction, /必须交代的背景事实（按拍释放/);
   assert.ok(out.calls[0].reasons.includes('reveal'), '重写原因要记成 reveal');
 });
+
+// ---- P4：全章重演与时间倒序（HP14 修复二）----
+
+/** 12 段的 4 拍计划：B1 0–2、B2 3–5、B3 6–8、B4 9–11。 */
+function chapterPlan() {
+  return makePlan(4, 3);
+}
+
+function chapterText(rows) {
+  return rows.join('\n\n');
+}
+
+test('P4 全章重演：同一组内部复读同一句对白也报出来', () => {
+  const rows = [
+    '陈默推开院门，先看见檐下挂着一串风干的辣椒。',
+    '“城北那口井三年前就封了。”老周把炉钩子放下，声音压得很低。',
+    '陈默没接话，只把技校证明折好塞回内袋。',
+    '院子里静下来，只剩炉膛里的火轻轻响。',
+    '老周又低头拨了拨炭，像是要把那句话咽回去。',
+    '“城北那口井三年前就封了。”他把同一句话又说了一遍。',
+    '陈默抬头看他，屋里的灯正好闪了一下。',
+    '两个人都没有再往下说，雨声从檐口落下来。',
+    '老周起身把门帘放下，挡住了外面的风。',
+    '陈默把椅子往后挪了挪，留出半步的距离。',
+    '炉上的水开了，壶盖轻轻跳了两下。',
+    '他把火压小，屋里重新暗下来。',
+  ];
+
+  const { issues, blocking } = segmentWriter.detectChapterContinuityIssues({
+    plan: chapterPlan(),
+    body: chapterText(rows),
+  });
+
+  const quote = issues.find((issue) => issue.kind === 'repeat_quote');
+  assert.ok(quote, '逐字复读的对白必须报出来');
+  assert.strictEqual(quote.scope, 'chapter');
+  assert.strictEqual(quote.blocking, true);
+  assert.strictEqual(quote.against, 1, '第一次出现在第 2 段');
+  assert.strictEqual(quote.paragraph, 5, '第二次出现在第 6 段');
+  assert.ok(quote.evidence.includes('城北那口井'));
+  assert.deepStrictEqual(quote.beatIds, ['B1', 'B2']);
+  assert.ok(blocking.includes(quote));
+});
+
+test('P4 全章重演：换了几个字的整段重演按相似度报出来', () => {
+  const first =
+    '陈默把技校证明折好塞进内袋，抬头看见老周正把门帘掀开一条缝，炉膛里的火已经压成一层暗红，屋里只剩下收音机的电流声。雨还没有停。';
+  const second =
+    '陈默把技校证明折好塞进内袋，抬头看见老周正把门帘掀开一条缝，炉膛里的火已经压成一层暗红色，屋里只剩下收音机的电流声。雨还没有停。';
+  const rows = [
+    first,
+    '老周没有回头，只把炉钩子立在墙边。',
+    '陈默在门槛外站了一会儿，雨气顺着门缝钻进来。',
+    '巷子里的灯一盏一盏亮起来。',
+    '老周终于开口，说的却是别的。',
+    second,
+    '陈默没有接话，只把手放在火边烤了烤。',
+    '屋外的雨声慢慢小了。',
+    '老周把门帘重新放下。',
+    '陈默起身要走，又停住。',
+    '两个人隔着炉子站了一会儿。',
+    '最后是陈默先转身。',
+  ];
+
+  const { issues } = segmentWriter.detectChapterContinuityIssues({
+    plan: chapterPlan(),
+    body: chapterText(rows),
+  });
+
+  const repeat = issues.find((issue) => issue.kind === 'repeat_paragraph');
+  assert.ok(repeat, '换了措辞的整段重演必须报出来');
+  assert.strictEqual(repeat.blocking, true);
+  assert.strictEqual(repeat.against, 0);
+  assert.strictEqual(repeat.paragraph, 5);
+  assert.ok(repeat.similarity >= 0.55);
+  assert.deepStrictEqual(repeat.beatIds, ['B1', 'B2']);
+});
+
+test('P4 全章时间倒序：席散之后又回到「当夜」要报出来', () => {
+  const rows = [
+    '清晨，陈默跟着引路的差役进了城门。',
+    '街上还没有什么行人，只有卖水的担子从巷口过去。',
+    '他在县衙外的石阶上等了半个时辰。',
+    '门房把他领进偏厅，桌上摆着一盏冷茶。',
+    '席上的人陆续到齐，谁也没有先开口。',
+    '席散之后，院里只剩几盏残灯。',
+    '当夜，陈默回到屋里，把门闩上。',
+    '他坐在床边，听见远处打更的声音。',
+    '灯芯爆了一下，屋子里暗了暗。',
+    '他把外袍脱下来，搭在椅背上。',
+    '窗外有脚步经过，又很快远去。',
+    '陈默没有睡，一直坐到天快亮。',
+  ];
+
+  const { issues, blocking } = segmentWriter.detectChapterContinuityIssues({
+    plan: chapterPlan(),
+    body: chapterText(rows),
+  });
+
+  const timeline = issues.find((issue) => issue.kind === 'timeline');
+  assert.ok(timeline, '席散之后回到当夜必须报时间倒序');
+  assert.strictEqual(timeline.scope, 'chapter');
+  assert.strictEqual(timeline.blocking, true);
+  assert.strictEqual(timeline.against, 5);
+  assert.strictEqual(timeline.paragraph, 6);
+  assert.ok(blocking.includes(timeline));
+});
+
+test('P4 全章时间顺序：跨日重置与回溯提示都不误报', () => {
+  const rows = [
+    '席散之后，院里只剩几盏残灯。',
+    '第二日清晨，陈默又回到那间屋子。',
+    '当夜，他想起昨日席上的那句话。',
+    '窗外的雨一直没停。',
+    '他把灯挑亮，翻开那本旧档。',
+    '纸页被风翻得哗啦一响。',
+    '远处传来一两声更鼓。',
+    '陈默把灯熄灭，和衣躺下。',
+  ];
+
+  const { issues } = segmentWriter.detectChapterContinuityIssues({
+    plan: chapterPlan(),
+    body: chapterText(rows),
+  });
+
+  assert.deepStrictEqual(
+    issues.filter((issue) => issue.kind === 'timeline'),
+    [],
+    '同一天的先后之外，跨日与回溯都不是倒序'
+  );
+});
+
+test('P4 三元组重合：人物/地点/动作高度重合只作警告，不阻断交付', () => {
+  const first =
+    '陈默走进院子，问老周昨晚去了哪里。老周说没去哪，只是站在门口看了会儿雨。' +
+    '陈默没再问，转身走进屋里，把门带上。院子里的水洼映着天光，老周低头点了一支烟，把火柴梗丢在地上。' +
+    '雨声从檐口一阵一阵落下来，屋里的炭火也跟着暗了一暗。';
+  const second =
+    '老周站在院子的檐下，看陈默推门出来，问他是不是要走。陈默说天晚了，先把东西放下。' +
+    '老周点头，走进屋里，把灯点上，又出来站在门口听雨。院子里的水洼被风吹皱，老周低头点了一支烟，什么也没说。' +
+    '檐外的雨一直没停。';
+  const rows = [
+    first,
+    '巷口的积水漫过脚面，两个人绕了一段路。',
+    '门房在廊下添了一盆炭，火苗慢慢立起来。',
+    '差役把名帖送进去，回来时只说了一句稍等。',
+    '偏厅里的茶换了两次，谁也没有先动。',
+    '老周把袖口挽起来，露出手腕上一道旧疤。',
+    second,
+    '陈默把椅子往后挪了挪，留出半步的距离。',
+    '灯芯忽然爆了一下，屋里暗了暗。',
+    '院墙上的旧灯笼被风撕开一角。',
+    '两个人隔着炉子站了一会儿。',
+    '最后是陈默先转身。',
+  ];
+
+  const { issues, blocking, warnings } = segmentWriter.detectChapterContinuityIssues({
+    plan: chapterPlan(),
+    body: chapterText(rows),
+    characters: ['陈默', '老周'],
+  });
+
+  const triple = issues.find((issue) => issue.kind === 'repeat_triple');
+  assert.ok(triple, '人物/地点/动作高度重合要报出来');
+  assert.strictEqual(triple.blocking, false, '三元组只作警告');
+  assert.ok(warnings.includes(triple));
+  assert.ok(!blocking.includes(triple));
+});
+
+test('P4 正常章节：顺叙、无复读对白与整段重演时不误报', () => {
+  const rows = [
+    '天还没亮，陈默就出了门，沿着河堤往东走。',
+    '河面上浮着一层薄雾，对岸的树只剩一个轮廓。',
+    '他在第三个渡口停下，等一条迟到的渡船。',
+    '撑船的老人没有多问，只把竹篙往水里一插。',
+    '船到中流，雾散了一些，能看见岸上的屋脊。',
+    '陈默把包袱往怀里按了按，确认东西还在。',
+    '上岸之后，他顺着石阶走进一条窄巷。',
+    '巷子尽头是一扇半旧的木门，门环上缠着布条。',
+    '他抬手敲了两下，门里没有动静。',
+    '又等了一会儿，才听见里面有脚步挪动。',
+    '门开了一条缝，一只眼睛从里面看出来。',
+    '陈默报上姓名，门才慢慢打开。',
+  ];
+
+  const { issues } = segmentWriter.detectChapterContinuityIssues({
+    plan: chapterPlan(),
+    body: chapterText(rows),
+  });
+
+  assert.deepStrictEqual(issues, []);
+});
+
+test('P4 全章问题进入重写指令：点明段号并给出全章改写要求', async () => {
+  const { plan, groups } = rewriteFixture();
+  const runner = parsedRunner([
+    beatReply('B2', Array.from({ length: 5 }, () => '改'.repeat(100))),
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: [], weak: [] },
+    continuityIssues: [
+      {
+        kind: 'repeat_quote',
+        scope: 'chapter',
+        beatIds: ['B2'],
+        evidence: '城北那口井三年前就封了',
+        against: 1,
+        paragraph: 5,
+        blocking: true,
+      },
+      {
+        kind: 'timeline',
+        scope: 'chapter',
+        beatIds: ['B2'],
+        evidence: '当夜',
+        against: 5,
+        paragraph: 6,
+        blocking: true,
+      },
+    ],
+    runSegment: runner,
+    callCount: 0,
+    maxCalls: 8,
+  });
+
+  const instruction = runner.seen[0].instruction;
+  assert.match(instruction, /同组内部或全章范围内都算/);
+  assert.match(instruction, /本章复读了前文同一句对白/);
+  assert.match(instruction, /与第 2 段重复/);
+  assert.match(instruction, /本章把时间倒了回去/);
+  assert.match(instruction, /从本章上一处的时间点顺叙推进/);
+  assert.ok(out.calls[0].reasons.includes('continuity'));
+});

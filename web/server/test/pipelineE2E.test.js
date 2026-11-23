@@ -12,6 +12,7 @@ const assert = require('node:assert');
 
 const { setupTempEnv, startServer } = require('./helpers');
 const { startFakeModel } = require('./fakeModel');
+const { segmentBody } = require('./segmentBodyFixture');
 
 const env = setupTempEnv();
 
@@ -161,21 +162,7 @@ function validPlanJson() {
   });
 }
 
-/** 20 段 × 约 120 字，避免分段写作时触发续写。 */
-function segmentBody(label, extraParagraph = '') {
-  const sentence = '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
-  // 自检 evidence 必须真的能在正文里找到，用例不能凭空写一句原句。
-  const anchors = {
-    2: '庙门半掩，主角在门槛外停了停。他问庙祝照片上是谁，庙祝不答。',
-    11: '旧档中间缺了几页，断口很新。',
-  };
-  const rows = Array.from(
-    { length: extraParagraph ? 19 : 20 },
-    (_, i) => anchors[i] || `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
-  );
-  if (extraParagraph) rows.push(extraParagraph);
-  return rows.join('\n\n');
-}
+/** 20 段 × 约 110 字，避免分段写作时触发续写（见 segmentBodyFixture）。 */
 
 /** 规划成功 → 两组正文 → 覆盖自检。 */
 function planningQueue() {

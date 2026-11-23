@@ -138,20 +138,110 @@ function validPlanJson() {
  * 写满一组目标篇幅的假正文，避免测试里意外触发续写。
  *
  * 四拍章按 3 拍一组切成 2 组，每组目标 20 段 ≈ 2440 字，
- * 低于 80% 会触发续写，所以这里给到 20 段 × 约 120 字。
+ * 低于 80% 会触发续写，所以这里给到 20 段 × 约 110 字。
+ *
+ * 段落用不同的语料轮转拼，不能每段都写同一句话：全章连续性检测会按
+ * 段落相似度抓「整段重演」，夹具自己复写会被当成问题正文（生产正文
+ * 本来也不该复写同一段）。两组用不同偏移，跨组也不会撞成重复。
  */
 function segmentBody(label, extraParagraph = '') {
-  const sentence = '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
-  // 第 3/12 段固定写成自检 evidence 的真实出处：
+  const firstGroup = /第一组/.test(label);
+  const offset = firstGroup ? 0 : /重写/.test(label) ? 40 : 20;
+  const cast = ['杨平', '杨俊', '老周', '庙祝', '差役', '门房', '车夫', '司马防', '主簿', '驿卒'];
+  const place = ['庙檐下', '长廊里', '院门口', '石阶前', '偏厅里', '巷口', '城门边', '案前', '灯下', '屋角'];
+  const action = [
+    '把手按在门环上，指腹能摸到一层薄冰',
+    '低头理了理被雨打湿的袖口，没有说话',
+    '抬眼看了看檐角压下来的天色',
+    '把伞靠在墙边，抖了抖衣上的雪',
+    '侧耳听了听门里头的动静',
+    '将名帖递过去，又慢慢收了回来',
+    '在门槛外停了停，才抬脚进去',
+    '把火盆往近处挪了挪，伸手烤了烤',
+    '伸手掸了掸案上的灰，又退回半步',
+    '把灯芯挑亮了一寸',
+  ];
+  const detail = [
+    '指腹上那道旧伤又被冷风逼得发疼',
+    '檐角的滴水正一滴一滴落在石阶上',
+    '墙根的雪早被踩成一滩黑水',
+    '门里有人轻轻咳了一声，又没了动静',
+    '廊柱的影子已经斜到台阶边上',
+    '远处传来一两声闷闷的更鼓',
+    '炭火的气味压过了屋里的霉味',
+    '纸页被风翻得哗啦一响',
+    '灯芯忽然爆了一下，屋里暗了暗',
+    '窗纸上的影子晃了晃，很快定住',
+  ];
+  const second = [
+    '他把要说的话在心里过了一遍，终究没有先开口',
+    '廊下静得能听见雪落下来的声音',
+    '这件事他已经在路上想了很久，还是没想明白',
+    '没有人迎出来，也没有人应声',
+    '他忽然想起动身那天也是这样的天气',
+    '屋里的炭盆烧得正旺，却没有多少暖意',
+    '外面的人声远远的，像隔着一层布',
+    '他把手收进袖子里，站定不动',
+    '那一瞬间，他几乎要转身就走',
+    '风从门缝里挤进来，吹得灯火一偏',
+  ];
+  const third = [
+    '他把外袍的下摆提起来，免得沾上台阶上的雪水',
+    '屋檐下的风把灯笼吹得来回晃，影子也跟着晃',
+    '这一路走过来，脚底已经冻得有些发木',
+    '他没急着说话，只把手里的东西换到另一只手上',
+    '院子里静悄悄的，连鸡犬的声音都听不见',
+    '门轴响了一声，随后又归于安静',
+    '墙角的炭灰堆得很高，说明这里常有人来',
+    '他把灯笼往下压了压，免得火光晃到别人脸上',
+    '屋里的人似乎也在等，谁都不肯先出声',
+    '鞋底在砖地上蹭了两下，才稳住身子',
+  ];
+  const fourth = [
+    '他把脚步放轻，沿着廊下的砖缝一步一步往前挪',
+    '檐上的雪被风卷下来，落在肩头，很快化成一片凉',
+    '门内的灯火从帘缝里透出来，在地面上铺了一道细长的亮',
+    '他没有回头看，只把背挺得更直了一些',
+    '院墙上挂着的旧灯笼已经褪了色，边角被风撕开',
+    '这一处宅子比他想的要深，走了许久还没到头',
+    '案上的书册摊开着，不知被谁翻到了中间一页',
+    '廊柱上的漆剥落了几块，露出底下发黑的木头',
+    '他把手心里的汗在衣角上擦干，才伸手去推门',
+    '屋角的铜盆里结了一层薄冰，映着窗外的天光',
+  ];
+  const fifth = [
+    '他知道再往前就没有回头路了，可脚还是照样迈出去',
+    '廊外的天光一点一点暗下来，屋里的人却还坐着不动',
+    '这一路上没有谁说话，只有车轮碾过积雪的轻响',
+    '他把那句话说出口之后，自己先愣了一下',
+    '院子里那棵老树落尽了叶子，枝杈在风里轻轻发颤',
+    '门里的声音停了一停，像是在等外面的人先开口',
+    '他数着脚下的砖，一格一格走过去，心里才慢慢定下来',
+    '墙上的影子渐渐拉长，提醒他时候已经不早',
+    '屋里的炭火将熄未熄，只剩一点暗红',
+    '他把袖口拢紧，站在原处，没有再往前走',
+  ];
+  // 第 3/12 段固定写成自检 evidence 的真实出处（只放在第一组，避免跨组复写）：
   // 覆盖自检现在要求「证据必须能在正文里找到」，用例不能再让 evidence 凭空出现。
-  const anchors = {
-    2: '庙门半掩，主角在门槛外停了停。他问庙祝照片上是谁，庙祝不答。',
-    11: '旧档中间缺了几页，断口很新。',
-  };
-  const rows = Array.from(
-    { length: extraParagraph ? 19 : 20 },
-    (_, i) => anchors[i] || `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
-  );
+  const anchors = firstGroup
+    ? {
+        2: '庙门半掩，主角在门槛外停了停。他问庙祝照片上是谁，庙祝不答。',
+        11: '旧档中间缺了几页，断口很新。',
+      }
+    : {};
+  const rows = Array.from({ length: extraParagraph ? 19 : 20 }, (_, i) => {
+    if (anchors[i]) return anchors[i];
+    const j = i + offset;
+    const cycle = Math.floor(j / 10);
+    const pick = (pool, step, bonus) => pool[(j * step + bonus * cycle) % 10];
+    return (
+      `${label}第${i + 1}段：` +
+      `${pick(cast, 1, 1)}在${pick(place, 3, 2)}，` +
+      `${pick(action, 7, 3)}，${pick(detail, 9, 4)}。` +
+      `${pick(second, 3, 5)}。${pick(third, 7, 6)}。` +
+      `${pick(fourth, 9, 8)}。${pick(fifth, 7, 9)}。`
+    );
+  });
   // 末尾的额外段落（章末钩子）要占掉一个名额，而不是多出来一段：
   // 多出来会被「按拍收段」裁掉，B4 的证据就真的不在正文里了。
   if (extraParagraph) rows.push(extraParagraph);
@@ -1031,11 +1121,20 @@ test('缺拍触发一次重写：重写后仍缺只标注，不再重写第二�
       }),
       finishReason: 'stop',
     },
-    // 5. 只重写缺拍所在的第二组
+    // 5. 只重写缺拍所在的第二组（B4）
     {
       content: JSON.stringify({
-        action: 'append',
-        content: '重写版：补上了照片被取走的那一拍。\n\n' + segmentBody('第二组重写', '章末抬出一口箱子。'),
+        action: 'rewrite',
+        beats: [
+          {
+            id: 'B4',
+            paragraphs: [
+              '重写版：补上了照片被取走的那一拍。',
+              ...segmentBody('第二组重写').split('\n\n').slice(0, 8),
+              '章末抬出一口箱子。',
+            ],
+          },
+        ],
         reason: '补写缺失节拍',
         citations: [],
       }),
@@ -1595,6 +1694,165 @@ test('首次出场缺少背景事实：beatCheck 标出、重写指令带事实�
   const instruction = String(rewriteCall.messages[rewriteCall.messages.length - 1].content || '');
   assert.match(instruction, /必须交代的背景事实/);
   assert.match(instruction, /主角今年十四岁/);
+});
+
+// ---------------------------------------------------------------------------
+// 全章重演：重写对应拍；重写后仍在则拒绝交付、不落库
+// ---------------------------------------------------------------------------
+
+/** 在一组正文的两个段落前插入同一句对白，制造「同组内部复读」。 */
+function withRepeatedQuote(text, quote = '“城北那口井三年前就封了。”') {
+  const rows = text.split('\n\n');
+  rows[1] = `${quote}${rows[1]}`;
+  rows[6] = `${quote}${rows[6]}`;
+  return rows.join('\n\n');
+}
+
+const COVERED_REPORT = JSON.stringify({
+  covered: [
+    { id: 'B1', evidence: '庙门半掩' },
+    { id: 'B2', evidence: '庙祝不答' },
+    { id: 'B3', evidence: '旧档中间缺了几页' },
+    { id: 'B4', evidence: '县衙后门当晚抬出一口箱子' },
+  ],
+  missing: [],
+  weak: [],
+  hookPresent: true,
+  chapterGoalMet: true,
+});
+
+test('全章重演：同组内复读对白会被点名重写，改掉后正常交付', async () => {
+  const { workId, chapterId } = await seedChapter({ outline: '主角进庙查旧案。' });
+  const repeated = withRepeatedQuote(segmentBody('第一组'));
+
+  fakeModel.setQueue([
+    { content: validPlanJson(), finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: repeated,
+        reason: '第一组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第二组', '县衙后门当晚抬出一口箱子。'),
+        reason: '第二组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    { content: COVERED_REPORT, finishReason: 'stop' },
+    // 重写：按拍返回，B1 改写成不再复读的十段
+    {
+      content: JSON.stringify({
+        action: 'rewrite',
+        beats: [
+          {
+            id: 'B1',
+            paragraphs: segmentBody('第一组重写').split('\n\n').slice(0, 10),
+          },
+        ],
+        reason: '删掉复读的对白',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    { content: COVERED_REPORT, finishReason: 'stop' },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const events = await chat('按大纲写这一章', { workId, chapterId });
+  const action = events.find((e) => e.type === 'action');
+
+  assert.ok(action, '重写改掉复读后必须正常交付');
+  assert.ok(
+    events.some((e) => e.type === 'agent_thinking' && /正在重写缺少节拍的组/.test(e.label)),
+    '检出全章重演要进入重写'
+  );
+
+  const rewriteCall = fakeModel.calls[before + 4];
+  const instruction = String(rewriteCall.messages[rewriteCall.messages.length - 1].content || '');
+  assert.match(instruction, /同组内部或全章范围内都算/);
+  assert.match(instruction, /本章复读了前文同一句对白/);
+  assert.match(instruction, /城北那口井三年前就封了/);
+
+  assert.ok(action.beatCheck.chapterContinuityIssues, 'beatCheck 要带出全章检测结果');
+  assert.deepStrictEqual(
+    action.beatCheck.chapterContinuityIssues.filter((issue) => issue.blocking),
+    [],
+    '交付时不应再有阻断级重演'
+  );
+});
+
+test('全章重演：重写后仍在就不交付、不落库，并给出可见错误', async () => {
+  const { workId, chapterId } = await seedChapter({ outline: '主角进庙查旧案。' });
+  const repeated = withRepeatedQuote(segmentBody('第一组'));
+
+  fakeModel.setQueue([
+    { content: validPlanJson(), finishReason: 'stop' },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: repeated,
+        reason: '第一组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    {
+      content: JSON.stringify({
+        action: 'append',
+        content: segmentBody('第二组', '县衙后门当晚抬出一口箱子。'),
+        reason: '第二组',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    { content: COVERED_REPORT, finishReason: 'stop' },
+    // 重写仍然复读同一句：不能被放行
+    {
+      content: JSON.stringify({
+        action: 'rewrite',
+        beats: [
+          {
+            id: 'B1',
+            paragraphs: withRepeatedQuote(segmentBody('第一组重写'))
+              .split('\n\n')
+              .slice(0, 10),
+          },
+        ],
+        reason: '只换了个说法，还是复读',
+        citations: [],
+      }),
+      finishReason: 'stop',
+    },
+    { content: COVERED_REPORT, finishReason: 'stop' },
+  ]);
+
+  const before = fakeModel.calls.length;
+  const events = await chat('按大纲写这一章', { workId, chapterId });
+
+  assert.strictEqual(events.find((e) => e.type === 'action'), undefined, '阻断时不能下发 action');
+  const error = events.find((e) => e.type === 'error');
+  assert.ok(error, '必须给出可见错误');
+  assert.strictEqual(error.code, 'CHAPTER_CONTINUITY');
+  assert.match(error.message, /重演或时间倒序/);
+
+  const conversation = await get(
+    'SELECT id FROM conversations WHERE work_id = ? ORDER BY created_at DESC LIMIT 1',
+    [workId]
+  );
+  assert.ok(conversation, '会话应当存在');
+  const assistants = await all(
+    "SELECT id FROM messages WHERE conversation_id = ? AND role = 'assistant'",
+    [conversation.id]
+  );
+  assert.strictEqual(assistants.length, 0, '被阻断的正文不能落库');
+  assert.strictEqual(fakeModel.calls.length - before, 6, '尝试过一次重写后才阻断');
 });
 
 

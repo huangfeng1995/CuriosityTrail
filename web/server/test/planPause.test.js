@@ -17,6 +17,7 @@ const assert = require('node:assert');
 
 const { setupTempEnv, startServer } = require('./helpers');
 const { startFakeModel } = require('./fakeModel');
+const { segmentBody } = require('./segmentBodyFixture');
 
 const env = setupTempEnv();
 
@@ -101,20 +102,6 @@ function criticalPlanJson() {
       },
     ],
   });
-}
-
-function segmentBody(label, extraParagraph = '') {
-  const sentence = '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
-  const anchors = {
-    2: '庙门半掩，主角在门槛外停了停。他问庙祝照片上是谁，庙祝不答。',
-    11: '旧档中间缺了几页，断口很新。',
-  };
-  const rows = Array.from(
-    { length: extraParagraph ? 19 : 20 },
-    (_, i) => anchors[i] || `${label}第${i + 1}段：${sentence}${sentence}${sentence}`
-  );
-  if (extraParagraph) rows.push(extraParagraph);
-  return rows.join('\n\n');
 }
 
 /** 恢复轮次：只有两组正文 + 覆盖自检，没有规划。 */
