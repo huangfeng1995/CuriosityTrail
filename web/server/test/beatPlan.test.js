@@ -1206,9 +1206,9 @@ test('大纲模式：范文功能份额验收不适用', () => {
 });
 
 test('A2 规划阶段给对白占比目标：缺省 18%，越界夹到 27%', () => {
-  const withTarget = makeOutlinePlan({ dialoguePercent: 12 });
+  const withTarget = makeOutlinePlan({ dialoguePercent: 15 });
   const plan = validateBeatPlan(withTarget, { mode: 'outline', ground: OUTLINE_GROUND }).plan;
-  assert.strictEqual(plan.dialoguePercent, 12);
+  assert.strictEqual(plan.dialoguePercent, 15);
 
   const missing = validateBeatPlan(makeOutlinePlan(), {
     mode: 'outline',
@@ -1221,12 +1221,20 @@ test('A2 规划阶段给对白占比目标：缺省 18%，越界夹到 27%', () 
     ground: OUTLINE_GROUND,
   }).plan;
   assert.strictEqual(tooHigh.dialoguePercent, 27, '目标上限 27%，不因此判计划作废');
+
+  const tooLow = validateBeatPlan(makeOutlinePlan({ dialoguePercent: 5 }), {
+    mode: 'outline',
+    ground: OUTLINE_GROUND,
+  }).plan;
+  assert.strictEqual(tooLow.dialoguePercent, 14, '目标下限 14%（范文 -20%）');
 });
 
 test('A2 两个规划提示词都要求给 dialoguePercent，并写进写手节拍表', () => {
   assert.match(PLAN_PROMPT, /dialoguePercent/);
+  assert.match(PLAN_PROMPT, /不得低于 14%/);
   assert.match(PLAN_PROMPT, /不得超过 27%/);
   assert.match(OUTLINE_PLAN_PROMPT, /dialoguePercent/);
+  assert.match(OUTLINE_PLAN_PROMPT, /不得低于 14%/);
   assert.match(OUTLINE_PLAN_PROMPT, /不得超过 27%/);
 
   const plan = validateBeatPlan(makeOutlinePlan({ dialoguePercent: 15 }), {
@@ -1234,7 +1242,8 @@ test('A2 两个规划提示词都要求给 dialoguePercent，并写进写手节�
     ground: OUTLINE_GROUND,
   }).plan;
   const text = formatBeatPlan(plan);
-  assert.match(text, /对白占比目标 ≤15%/);
+  assert.match(text, /对白占比目标 14–27%/);
+  assert.match(text, /低于下限要把关键交锋写成直接引语/);
   assert.match(text, /同一轮交流写进同一段/);
 });
 

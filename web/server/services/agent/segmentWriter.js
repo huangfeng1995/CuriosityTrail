@@ -77,7 +77,7 @@ const PARAGRAPH_SHAPE_RULES = [
   '- 段均向范文 112 字看齐（95–129）；不要为凑 80 字把短段拉长，也不要为压 320 字把长段砍成两段。',
   '- 对白必须与动作/叙述合并在同一段，不得连续独立成段；只有两句以内、且前后有动作句时才允许单独成段。',
   '- 对白写成有主语、有动作、有停顿的整段：同一轮交流合进一段，不要一句一引号、不要一句话配一个反应短句；说话人的动作、神态、对方的反应与停顿都放在同一段里。',
-  '- 字数质感按范文控制：≤12 字短句不超过全章 18%（范文 12.3%）；引号片段不超过 12 处/千字（范文 8.1）；对白占比不超过全章 27%（范文 18%）。超出部分改成叙述、心理与动作，不许靠加标点把短句撑长。',
+  '- 字数质感按范文控制：≤12 字短句不超过全章 18%（范文 12.3%）；引号片段不超过 12 处/千字（范文 8.1）；对白占比落在 14.4%–27% 之间（范文 18%），低于下限要把关键交锋写成直接引语，高于上限改成叙述、心理与动作。',
   '- 比喻不堆叠：全章不超过 2.1 处/千字（范文 1.39），同一段最多一个明喻；删掉重复的「像/仿佛/如同」，改用动作、感官与细节。',
   '- 人物用具体称谓：首次出现给姓名与身份，之后用姓名或稳定称谓；不要用「姓X的/那瘦高的/其中一个」反复指代同一批人（匿名特征指代 ≤1 处/千字，范文 0）。',
   '- 引号统一用全角 “”，禁止使用「」；关键交流必须写成直接引语：用人物原话，带说话人的动作、神态或对方的反应，不要用「他说他问我是否……」这类转述代替关键对话。',
@@ -186,6 +186,14 @@ const SAMPLE_QUOTE_SPANS_PER_KILO = 8.12;
 const QUOTE_SPAN_LIMIT = Math.round(SAMPLE_QUOTE_SPANS_PER_KILO * 1.5 * 10) / 10;
 const SAMPLE_DIALOGUE_RATIO = 17.99;
 const DIALOGUE_RATIO_LIMIT = Math.round(SAMPLE_DIALOGUE_RATIO * 1.5 * 10) / 10;
+/**
+ * 对白下限：范文 17.99% 允许 -20%，即 14.4%。
+ *
+ * 上限保留 +50%（27%）是因为原来的失分是「对白过多」；下限用 20%
+ * 与段均 ±15% 同一量级，低于它说明把该由对话承载的交锋写成了概述。
+ * 两轮实测 13.62%、7.17% 都低于下限，必须触发补对白重写。
+ */
+const DIALOGUE_RATIO_MIN = Math.round(SAMPLE_DIALOGUE_RATIO * 0.8 * 10) / 10;
 
 /** 全角引号片段：只认 “…”；「」在别处作为违规单独处理。 */
 const QUOTE_SPAN_RE = /“[^“”]*”/g;
@@ -1419,6 +1427,7 @@ function buildBeatRewriteInstruction({
       const needsDialogueFix = shapeRows.some((row) =>
         ['short_sentence', 'quote_density', 'dialogue_ratio'].includes(row.kind)
       );
+      const needsDialogueAdd = shapeRows.some((row) => row.kind === 'dialogue_low');
       const needsStyleFix = shapeRows.some((row) =>
         ['imagery_density', 'generic_reference'].includes(row.kind)
       );
@@ -1430,6 +1439,11 @@ function buildBeatRewriteInstruction({
           (needsDialogueFix
             ? '把微型对白合成有主语、有动作、有停顿的对白段：同一轮交流写在一段里，不要一句一引号、不要一句话配一个反应短句；' +
               '超出对白承载的背景、判断与情绪改成叙述、心理和动作，不许靠加标点或硬并句把短句撑长。'
+            : '') +
+          (needsDialogueAdd
+            ? `对白不足：把本拍的关键交锋写成有来有回的直接引语（下限 ${DIALOGUE_RATIO_MIN}%，范文 ${SAMPLE_DIALOGUE_RATIO}%），` +
+              '让每一轮对话推动关系、立场、决定或信息，不要把该说的话概括成叙述；' +
+              '补对白不是加寒暄，也不是把动作改写成对白，仍要带动作、神态与停顿。'
             : '') +
           (needsStyleFix
             ? '比喻不堆叠：同一段最多一个明喻，删掉重复的「像/仿佛/如同」，改用动作、感官与细节；' +
@@ -1823,6 +1837,7 @@ function checkParagraphShape(plan, body) {
       shortSentenceRatio: SHORT_SENTENCE_RATIO_LIMIT,
       quotePerKilo: QUOTE_SPAN_LIMIT,
       dialogueRatio: DIALOGUE_RATIO_LIMIT,
+      dialogueRatioMin: DIALOGUE_RATIO_MIN,
       imageryPerKilo: IMAGERY_LIMIT,
       genericPerKilo: GENERIC_REF_LIMIT,
     },
@@ -1872,6 +1887,20 @@ function checkParagraphShape(plan, body) {
       kind: 'dialogue_ratio',
       ratio: dialogueRatio,
       limit: DIALOGUE_RATIO_LIMIT,
+    });
+  }
+  if (totalChars >= 600 && dialogueRatio < DIALOGUE_RATIO_MIN) {
+    violations.push({
+      beatId: worstBeatFor(
+        paragraphs
+          .map((paragraph, index) => (QUOTE_SPAN_TEST_RE.test(paragraph) ? index : -1))
+          .filter((index) => index >= 0),
+        ranges,
+        beats
+      ),
+      kind: 'dialogue_low',
+      ratio: dialogueRatio,
+      limit: DIALOGUE_RATIO_MIN,
     });
   }
   if (imageryPerKilo > IMAGERY_LIMIT) {
@@ -2091,6 +2120,7 @@ const SHAPE_KINDS = [
   'short_sentence',
   'quote_density',
   'dialogue_ratio',
+  'dialogue_low',
   'imagery_density',
   'generic_reference',
 ];
@@ -2136,6 +2166,7 @@ function evaluateShapeDelivery(shape) {
         'short_sentence',
         'quote_density',
         'dialogue_ratio',
+        'dialogue_low',
         'imagery_density',
         'generic_reference',
       ].includes(row.kind)
@@ -2230,6 +2261,18 @@ function shapeAcceptProblems(before, after, ownedBeatIds) {
     }
   }
 
+  // 对白下限是反向指标：低于下限要补，越补越低才是变差。
+  const dialogueMin = limitOf('dialogueRatioMin');
+  const lowBefore = metricOf(beforeBlocking, 'dialogue_low', 'ratio');
+  const lowAfter = metricOf(afterBlocking, 'dialogue_low', 'ratio');
+  if (dialogueMin > 0) {
+    const beforeUnder = lowBefore > 0 ? lowBefore : dialogueMin;
+    const afterUnder = lowAfter > 0 ? lowAfter : dialogueMin;
+    if (beforeUnder >= dialogueMin ? afterUnder < dialogueMin : afterUnder < beforeUnder) {
+      problems.push(`对白占比 ${afterUnder}%（下限 ${dialogueMin}%）`);
+    }
+  }
+
   return problems;
 }
 
@@ -2261,6 +2304,12 @@ function describeShapeViolations(rows) {
   if (dialogueRatio) {
     parts.push(
       `对白占比 ${dialogueRatio.ratio}%（上限 ${dialogueRatio.limit}%，范文 ${SAMPLE_DIALOGUE_RATIO}%）`
+    );
+  }
+  const dialogueLow = list.find((row) => row.kind === 'dialogue_low');
+  if (dialogueLow) {
+    parts.push(
+      `对白占比 ${dialogueLow.ratio}%（下限 ${dialogueLow.limit}%，范文 ${SAMPLE_DIALOGUE_RATIO}%）`
     );
   }
   const imagery = list.find((row) => row.kind === 'imagery_density');
@@ -2942,7 +2991,12 @@ async function rewriteMissingGroups({
     // 形态问题，就该保留，不能因为比原稿短就回滚成那份明知不合格的长稿。
     // 段数超出计划也不算回滚理由：合并上限 160 之后，合不动是设计使然，
     // 把稿子退回长段版本只会更差；超出如实记在 draftOverflow / countReason 里。
-    const shapeImproved = afterDelivery.blocking.length < beforeDelivery.blocking.length;
+    // 缩水只在「本轮就是冲着形态去、并且确实改好了」时才放过：
+    // 缺拍/揭示类重写把 1160 字砍到 590，形态违规当然会跟着消失，
+    // 那不是改好，是删掉了内容，仍按 85% 地板回滚。
+    const targetedShape = beats.some((beat) => shapeIds.includes(beat.id));
+    const shapeImproved =
+      targetedShape && afterDelivery.blocking.length < beforeDelivery.blocking.length;
     if (groupBeforeChars > 0 && (shapeProblems.length || (shrinkReason && !shapeImproved))) {
       group.content = snapshot;
       rewriteReverted.push({
@@ -3749,6 +3803,7 @@ module.exports = {
   QUOTE_SPAN_LIMIT,
   SAMPLE_DIALOGUE_RATIO,
   DIALOGUE_RATIO_LIMIT,
+  DIALOGUE_RATIO_MIN,
   SAMPLE_IMAGERY_PER_KILO,
   IMAGERY_LIMIT,
   SAMPLE_GENERIC_REF_PER_KILO,

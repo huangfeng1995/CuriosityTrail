@@ -1351,7 +1351,7 @@ test('W2 形态违规按类型计数，总数与违规数组一致', () => {
   assert.strictEqual(shape.summary.avg, 1, '段均 81.4 低于 95.3');
   assert.strictEqual(
     Object.keys(shape.summary).sort().join(','),
-    'avg,corner_quote,count,dialogue_ratio,dialogue_stack,fragment_ratio,generic_reference,imagery_density,quote_density,short_run,short_sentence,too_long,total'
+    'avg,corner_quote,count,dialogue_low,dialogue_ratio,dialogue_stack,fragment_ratio,generic_reference,imagery_density,quote_density,short_run,short_sentence,too_long,total'
   );
 });
 
@@ -1463,6 +1463,21 @@ test('A5 全章不足 5000 时按缺口挑扩写拍，单拍刚好达标也要�
   );
 });
 
+test('A6 对白低于范文 -20% 触发补对白，而不是只压上限', () => {
+  const plan = makePlan(2, 15);
+  const noDialogue = Array.from(
+    { length: 20 },
+    () => '杨平沿着廊下往前走，杨俊在他身后半步，砖缝里的雪水还没有干，靴底踩上去留下两行深浅不一的印子。'
+  ).join('\n\n');
+  const shape = segmentWriter.checkParagraphShape(plan, noDialogue);
+  assert.strictEqual(shape.summary.dialogue_low, 1, '全篇 0 对白必须触发下限');
+  assert.strictEqual(shape.summary.dialogue_ratio, 0);
+  const row = shape.violations.find((item) => item.kind === 'dialogue_low');
+  assert.strictEqual(row.limit, segmentWriter.DIALOGUE_RATIO_MIN);
+  assert.strictEqual(segmentWriter.DIALOGUE_RATIO_MIN, 14.4, '范文 17.99 的 -20%');
+  assert.strictEqual(segmentWriter.evaluateShapeDelivery(shape).passed, false);
+});
+
 test('A3 比喻堆叠与泛称指代各自有范文阈值', () => {
   const plan = makePlan(2, 15);
   const imagery = Array.from(
@@ -1503,6 +1518,7 @@ test('A1 文字质感三项只拦新造出来的超限，原本超标的好转�
         shortSentenceRatio: cap,
         quotePerKilo: 12.2,
         dialogueRatio: 27,
+        dialogueRatioMin: segmentWriter.DIALOGUE_RATIO_MIN,
         imageryPerKilo: 2.1,
         genericPerKilo: 1,
       },
@@ -1516,6 +1532,7 @@ test('A1 文字质感三项只拦新造出来的超限，原本超标的好转�
         shortSentenceRatio: cap,
         quotePerKilo: 12.2,
         dialogueRatio: 27,
+        dialogueRatioMin: segmentWriter.DIALOGUE_RATIO_MIN,
         imageryPerKilo: 2.1,
         genericPerKilo: 1,
       },
@@ -1535,6 +1552,7 @@ test('A1 文字质感三项只拦新造出来的超限，原本超标的好转�
         shortSentenceRatio: cap,
         quotePerKilo: 12.2,
         dialogueRatio: 27,
+        dialogueRatioMin: segmentWriter.DIALOGUE_RATIO_MIN,
         imageryPerKilo: 2.1,
         genericPerKilo: 1,
       },
@@ -1548,6 +1566,7 @@ test('A1 文字质感三项只拦新造出来的超限，原本超标的好转�
         shortSentenceRatio: cap,
         quotePerKilo: 12.2,
         dialogueRatio: 27,
+        dialogueRatioMin: segmentWriter.DIALOGUE_RATIO_MIN,
         imageryPerKilo: 2.1,
         genericPerKilo: 1,
       },
@@ -1590,7 +1609,7 @@ test('X1 段均偏高只记数、不判失败；偏低的碎段仍算失败', ()
   const plan = makePlan(2, 3);
   const high = segmentWriter.checkParagraphShape(
     plan,
-    Array.from({ length: 6 }, () => '字'.repeat(200)).join('\n\n')
+    Array.from({ length: 6 }, () => '字'.repeat(160) + '“' + '话'.repeat(36) + '”').join('\n\n')
   );
   assert.strictEqual(high.summary.avg, 1, '偏高要记数');
   const highDelivery = segmentWriter.evaluateShapeDelivery(high);
@@ -1863,7 +1882,12 @@ function shapeRows(count = 12, mutate = () => {}) {
 
 test('段落形态：合格正文（每拍 3 段、段长 80–140）不报违规', () => {
   const plan = makePlan(4, 3);
-  const result = segmentWriter.checkParagraphShape(plan, shapeRows(12));
+  const rows = segmentWriter.splitParagraphs(shapeRows(12));
+  // 合格正文也要有 14.4% 以上的直接引语，否则会按对白下限报违规。
+  rows[2] = `他把碗沿按住，低声道：“${'今夜的雨怕是不会停，府门外那条路已经积了半尺深的水，车马若要进来，得先清出一条道。'.repeat(2)}”`;
+  rows[6] = `杨平把灯挑亮，说：“${'父亲的马车若到得晚，我先去廊下等，免得门吏多问，也免得叫人看出我们初来乍到。'.repeat(2)}”`;
+  rows[10] = `廊下的人回话：“${'仓曹方才已经来过一趟，问过名刺与征辟文书，叮嘱说今夜不必再递第二回。'.repeat(2)}”`;
+  const result = segmentWriter.checkParagraphShape(plan, rows.join('\n\n'));
 
   assert.strictEqual(result.applicable, true);
   assert.strictEqual(result.totalParagraphs, 12);
