@@ -2311,6 +2311,7 @@ router.post('/chat', async (req, res) => {
       beatCheck.shapeMeasure = segmentWriter.SHAPE_MEASURE;
       beatCheck.paragraphCount = shapeCheck.totalParagraphs;
       beatCheck.avgParagraphChars = shapeCheck.avgChars;
+      beatCheck.shapeDialogue = shapeCheck.dialogue;
     }
     const revealAllMissing = revealCheck.applicable ? revealCheck.missing : [];
     // 「背景事实尚未入库」不是写手能补的：只报给作者（beatCheck + 徽标），
@@ -2585,6 +2586,8 @@ router.post('/chat', async (req, res) => {
               beatCheck.shapeBeatIds = shapeCheck.beatIds;
               beatCheck.paragraphCount = shapeCheck.totalParagraphs;
               beatCheck.avgParagraphChars = shapeCheck.avgChars;
+            beatCheck.shapeDialogue = shapeCheck.dialogue;
+              beatCheck.shapeDialogue = shapeCheck.dialogue;
               // 回滚的组必须显式带出（组/拍/前后字数/差值/原因），不能静默吃掉一次重写。
               // 回滚后正文就是原稿，下面的形态与禁写复检都按这份原稿重算——
               // 原有违规照旧报出，不因为「这次重写被回滚」就记成通过。
@@ -2738,6 +2741,7 @@ router.post('/chat', async (req, res) => {
             beatCheck.shapeBeatIds = shapeCheck.beatIds;
             beatCheck.paragraphCount = shapeCheck.totalParagraphs;
             beatCheck.avgParagraphChars = shapeCheck.avgChars;
+            beatCheck.shapeDialogue = shapeCheck.dialogue;
           }
 
           console.log(
@@ -2871,6 +2875,7 @@ router.post('/chat', async (req, res) => {
             beatCheck.shapeBeatIds = shapeCheck.beatIds;
             beatCheck.paragraphCount = shapeCheck.totalParagraphs;
             beatCheck.avgParagraphChars = shapeCheck.avgChars;
+            beatCheck.shapeDialogue = shapeCheck.dialogue;
             withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
             beatCheck.mustWithholdViolations = withholdCheck.violations;
             beatCheck.mustWithholdUnmapped = withholdCheck.unmapped || [];

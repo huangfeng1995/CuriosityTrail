@@ -14,6 +14,7 @@
 
 const { countWords } = require('../wordCount');
 const { briefWriterBlock } = require('./planBrief');
+const { measureSentenceLength, measureDialogueRatio } = require('../style/metrics');
 
 /** 每组最多写的节拍数（设计上允许 2–4，取 3 让 8 拍的章也有 3 次推进） */
 const MAX_BEATS_PER_GROUP = 3;
@@ -75,6 +76,8 @@ const PARAGRAPH_SHAPE_RULES = [
   '- 连续 3 段都 <40 字才算「碎」；短促反应、单句对白最多连续 2 段，且前后必须有动作或叙述句承接。',
   '- 段均向范文 112 字看齐（95–129）；不要为凑 80 字把短段拉长，也不要为压 320 字把长段砍成两段。',
   '- 对白必须与动作/叙述合并在同一段，不得连续独立成段；只有两句以内、且前后有动作句时才允许单独成段。',
+  '- 对白写成有主语、有动作、有停顿的整段：同一轮交流合进一段，不要一句一引号、不要一句话配一个反应短句；说话人的动作、神态、对方的反应与停顿都放在同一段里。',
+  '- 字数质感按范文控制：≤12 字短句不超过全章 18%（范文 12.3%）；引号片段不超过 12 处/千字（范文 8.1）；对白占比不超过全章 27%（范文 18%）。超出部分改成叙述、心理与动作，不许靠加标点把短句撑长。',
   '- 引号统一用全角 “”，禁止使用「」；关键交流必须写成直接引语：用人物原话，带说话人的动作、神态或对方的反应，不要用「他说他问我是否……」这类转述代替关键对话。',
   '- 每次对话都要推动一次变化：关系、立场、决定或信息，至少变一项；不写只为填充的寒暄。',
   '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它要付的代价。',
@@ -161,12 +164,39 @@ const SHAPE_40_79_MAX_RATIO = SAMPLE_40_79_RATIO + SHAPE_FRAGMENT_SLACK;
 const SHAPE_MEAN_MIN = SAMPLE_MEAN_CHARS * (1 - SHAPE_MEAN_TOLERANCE);
 const SHAPE_MEAN_MAX = SAMPLE_MEAN_CHARS * (1 + SHAPE_MEAN_TOLERANCE);
 
+/**
+ * 文字质感阈值：全部由范文实测 ×1.5 得出，不手调。
+ *
+ * 线上实测第二章短句 35.45%、引号片段 108 个（范文 41）、对白占比 31.85%，
+ * 三项都远超范文；只查段落长度发现不了「对白被切成一句一引号」。
+ * 这里把三项纳入同一份形态自检：超限即点名拍、进入分组重写。
+ *
+ *   - 短句：范文 171 句、≤12 字占 12.28% → 上限 18.4%；
+ *   - 引号片段：范文 41 个 / 5047 字 = 8.12 处/千字 → 上限 12.2；
+ *   - 对白占比：范文 17.99% → 上限 27.0%。
+ *
+ * 只做检出与重写指令，不在正文上改标点或强行并句——那不是修文质。
+ */
+const SAMPLE_SHORT_SENTENCE_RATIO = 12.28;
+const SHORT_SENTENCE_RATIO_LIMIT = Math.round(SAMPLE_SHORT_SENTENCE_RATIO * 1.5 * 10) / 10;
+const SHORT_SENTENCE_MAX_CHARS = 12;
+const SAMPLE_QUOTE_SPANS_PER_KILO = 8.12;
+const QUOTE_SPAN_LIMIT = Math.round(SAMPLE_QUOTE_SPANS_PER_KILO * 1.5 * 10) / 10;
+const SAMPLE_DIALOGUE_RATIO = 17.99;
+const DIALOGUE_RATIO_LIMIT = Math.round(SAMPLE_DIALOGUE_RATIO * 1.5 * 10) / 10;
+
+/** 全角引号片段：只认 “…”；「」在别处作为违规单独处理。 */
+const QUOTE_SPAN_RE = /“[^“”]*”/g;
+/** 同一口径的非全局版本，供 test 使用（全局正则的 lastIndex 会串状态）。 */
+const QUOTE_SPAN_TEST_RE = /“[^“”]*”/;
+
 /** 交付与日志里显式写出的口径，避免「目标」和「段长」以后又被混用。 */
 const SHAPE_MEASURE = Object.freeze({
   paragraphLength: 'countWords（含标点）',
   shotTarget: '纯汉字（不含标点）',
   judge: '分布校验（非逐段 80–140）',
-  summary: '目标=纯汉字、段长=含标点、判定=分布',
+  quality: '短句≤12字/引号片段/对白占比（阈值=范文实测×1.5）',
+  summary: '目标=纯汉字、段长=含标点、判定=分布+文字质感',
 });
 
 /** 只用于检出，不做替换：作者交稿后由写手改，不静默改作者文字。 */
@@ -1321,11 +1351,19 @@ function buildBeatRewriteInstruction({
     }
     if (shape.has(b.id)) {
       const planned = Number(b.paragraphs) || 3;
+      const shapeRows = shape.get(b.id) || [];
+      const needsDialogueFix = shapeRows.some((row) =>
+        ['short_sentence', 'quote_density', 'dialogue_ratio'].includes(row.kind)
+      );
       clauses.push(
-        `本拍段落形态不合规（${describeShapeViolations(shape.get(b.id))}）：` +
+        `本拍段落形态不合规（${describeShapeViolations(shapeRows)}）：` +
           `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320，单段不超 320）；` +
           '40–79 的短段不要硬拉长，超过 320 的长段才压缩（删冗余修饰、同段内拆句安排节奏），不得整段拆成两段；' +
           '对白与动作合并在同一段，引号统一用全角 “”、禁止「」。' +
+          (needsDialogueFix
+            ? '把微型对白合成有主语、有动作、有停顿的对白段：同一轮交流写在一段里，不要一句一引号、不要一句话配一个反应短句；' +
+              '超出对白承载的背景、判断与情绪改成叙述、心理和动作，不许靠加标点或硬并句把短句撑长。'
+            : '') +
           ` 先保本拍纯汉字目标，再调形状；重写后本拍段数优先落在 ${Math.max(1, planned - SHAPE_BEAT_TOLERANCE)}–${planned + SHAPE_BEAT_TOLERANCE} 段。`
       );
     }
@@ -1647,6 +1685,7 @@ function checkParagraphShape(plan, body) {
       summary: summarizeShapeViolations([]),
       buckets: {},
       stats: null,
+      dialogue: null,
       distribution: null,
     };
   }
@@ -1670,6 +1709,7 @@ function checkParagraphShape(plan, body) {
   }
   const sorted = [...lengths].sort((a, b) => a - b);
   const mean = Math.round((lengths.reduce((sum, chars) => sum + chars, 0) / lengths.length) * 100) / 100;
+  const totalChars = lengths.reduce((sum, chars) => sum + chars, 0);
   const stats = {
     min: sorted[0],
     max: sorted[sorted.length - 1],
@@ -1677,6 +1717,81 @@ function checkParagraphShape(plan, body) {
     mean,
     meanRange: [Math.round(SHAPE_MEAN_MIN * 10) / 10, Math.round(SHAPE_MEAN_MAX * 10) / 10],
   };
+
+  // 0.1 文字质感：短句比例、引号片段密度、对白占比。
+  // 三项都用范文同一口径（measure.py / style/metrics），阈值 = 范文 ×1.5。
+  const text = String(body || '');
+  const sentenceShape = measureSentenceLength(text);
+  const sentenceTotal = sentenceShape.sentences.length;
+  const shortSentenceCount = sentenceShape.sentences.filter(
+    (sentence) => sentence.words <= SHORT_SENTENCE_MAX_CHARS
+  ).length;
+  const shortSentenceRatio = sentenceTotal
+    ? Math.round((shortSentenceCount / sentenceTotal) * 1000) / 10
+    : 0;
+  const quoteSpans = (text.match(QUOTE_SPAN_RE) || []).length;
+  const quotePerKilo = totalChars ? Math.round((quoteSpans / totalChars) * 1000 * 10) / 10 : 0;
+  const dialogueRatio = measureDialogueRatio(text);
+  const dialogueStats = {
+    shortSentenceRatio,
+    shortSentenceCount,
+    sentenceTotal,
+    quoteSpans,
+    quotePerKilo,
+    dialogueRatio,
+    limits: {
+      shortSentenceRatio: SHORT_SENTENCE_RATIO_LIMIT,
+      quotePerKilo: QUOTE_SPAN_LIMIT,
+      dialogueRatio: DIALOGUE_RATIO_LIMIT,
+    },
+  };
+  if (sentenceTotal >= 20 && shortSentenceRatio > SHORT_SENTENCE_RATIO_LIMIT) {
+    const shortParagraphs = paragraphs
+      .map((paragraph, index) =>
+        measureSentenceLength(paragraph).sentences.some(
+          (sentence) => sentence.words <= SHORT_SENTENCE_MAX_CHARS
+        )
+          ? index
+          : -1
+      )
+      .filter((index) => index >= 0);
+    violations.push({
+      beatId: worstBeatFor(shortParagraphs, ranges, beats),
+      kind: 'short_sentence',
+      ratio: shortSentenceRatio,
+      limit: SHORT_SENTENCE_RATIO_LIMIT,
+      count: shortSentenceCount,
+      total: sentenceTotal,
+      sample: paragraphSample(paragraphs[shortParagraphs[0] || 0]),
+    });
+  }
+  if (quotePerKilo > QUOTE_SPAN_LIMIT) {
+    const quoteParagraphs = paragraphs
+      .map((paragraph, index) => ((paragraph.match(QUOTE_SPAN_RE) || []).length ? index : -1))
+      .filter((index) => index >= 0);
+    violations.push({
+      beatId: worstBeatFor(quoteParagraphs, ranges, beats),
+      kind: 'quote_density',
+      spans: quoteSpans,
+      perKilo: quotePerKilo,
+      limit: QUOTE_SPAN_LIMIT,
+      sample: paragraphSample(paragraphs[quoteParagraphs[0] || 0]),
+    });
+  }
+  if (dialogueRatio > DIALOGUE_RATIO_LIMIT) {
+    violations.push({
+      beatId: worstBeatFor(
+        paragraphs
+          .map((paragraph, index) => (QUOTE_SPAN_TEST_RE.test(paragraph) ? index : -1))
+          .filter((index) => index >= 0),
+        ranges,
+        beats
+      ),
+      kind: 'dialogue_ratio',
+      ratio: dialogueRatio,
+      limit: DIALOGUE_RATIO_LIMIT,
+    });
+  }
 
   // 1. 每拍段数 N±2
   beats.forEach((beat, i) => {
@@ -1823,7 +1938,6 @@ function checkParagraphShape(plan, body) {
     });
   });
 
-  const totalChars = lengths.reduce((sum, chars) => sum + chars, 0);
   return {
     applicable: true,
     totalParagraphs: paragraphs.length,
@@ -1833,6 +1947,7 @@ function checkParagraphShape(plan, body) {
     summary: summarizeShapeViolations(violations),
     buckets,
     stats,
+    dialogue: dialogueStats,
     distribution: {
       hardMax: SHAPE_HARD_MAX,
       fragmentRatio: buckets['40to79'].ratio,
@@ -1845,7 +1960,7 @@ function checkParagraphShape(plan, body) {
   };
 }
 
-/** 违规按类型计数：分布校验下只保留这七类。 */
+/** 违规按类型计数：分布校验下只保留这十类。 */
 const SHAPE_KINDS = [
   'count',
   'too_long',
@@ -1854,6 +1969,9 @@ const SHAPE_KINDS = [
   'avg',
   'dialogue_stack',
   'corner_quote',
+  'short_sentence',
+  'quote_density',
+  'dialogue_ratio',
 ];
 
 function summarizeShapeViolations(violations) {
@@ -1889,7 +2007,18 @@ function evaluateShapeDelivery(shape) {
   // 段均偏低是碎段，仍算失败；段均偏高只是这一章内容多——按拍收段之后
   // 段数被压到计划、字数没减，段均必然偏高，此时让段长分布让路，只记数。
   const distributionOk = !blocking.some((row) => {
-    if (['count', 'fragment_ratio', 'short_run'].includes(row.kind)) return true;
+    if (
+      [
+        'count',
+        'fragment_ratio',
+        'short_run',
+        'short_sentence',
+        'quote_density',
+        'dialogue_ratio',
+      ].includes(row.kind)
+    ) {
+      return true;
+    }
     return row.kind === 'avg' && row.side === 'low';
   });
   const styleOk = !blocking.some((row) =>
@@ -1955,6 +2084,27 @@ function shapeAcceptProblems(before, after, ownedBeatIds) {
     problems.push(`40–79 字段占比 ${ratioAfter}%（上限 ${limit}%）`);
   }
 
+  // 文字质感三项：只拦「这次改动新造出来的超限」，原本就超的只要没变差就放行，
+  // 否则一次有效的重写会因为整章底子差被整组回滚。
+  const metricOf = (rows, kind, field) => {
+    const row = (rows || []).find((item) => item.kind === kind);
+    return row ? Number(row[field]) || 0 : 0;
+  };
+  const limitOf = (field) =>
+    (after && after.dialogue && after.dialogue.limits && after.dialogue.limits[field]) || 0;
+  for (const [kind, field, limitField, label, unit] of [
+    ['short_sentence', 'ratio', 'shortSentenceRatio', '≤12 字短句占比', '%'],
+    ['quote_density', 'perKilo', 'quotePerKilo', '引号片段密度', ' 处/千字'],
+    ['dialogue_ratio', 'ratio', 'dialogueRatio', '对白占比', '%'],
+  ]) {
+    const beforeValue = metricOf(beforeBlocking, kind, field);
+    const afterValue = metricOf(afterBlocking, kind, field);
+    const cap = limitOf(limitField);
+    if (beforeValue <= cap ? afterValue > cap : afterValue > beforeValue) {
+      problems.push(`${label} ${afterValue}${unit}（上限 ${cap}${unit}）`);
+    }
+  }
+
   return problems;
 }
 
@@ -1970,6 +2120,24 @@ function describeShapeViolations(rows) {
   if (ratio) parts.push(`40–79 字段占 ${ratio.ratio}%（上限 ${ratio.limit}%）`);
   const avg = list.find((row) => row.kind === 'avg');
   if (avg) parts.push(`段均 ${avg.mean}，范文区间 ${avg.range[0]}–${avg.range[1]}`);
+  const shortSentences = list.find((row) => row.kind === 'short_sentence');
+  if (shortSentences) {
+    parts.push(
+      `≤${SHORT_SENTENCE_MAX_CHARS} 字短句 ${shortSentences.ratio}%（上限 ${shortSentences.limit}%，范文 ${SAMPLE_SHORT_SENTENCE_RATIO}%）`
+    );
+  }
+  const quoteDensity = list.find((row) => row.kind === 'quote_density');
+  if (quoteDensity) {
+    parts.push(
+      `引号片段 ${quoteDensity.perKilo} 处/千字（上限 ${quoteDensity.limit}，范文 ${SAMPLE_QUOTE_SPANS_PER_KILO}）`
+    );
+  }
+  const dialogueRatio = list.find((row) => row.kind === 'dialogue_ratio');
+  if (dialogueRatio) {
+    parts.push(
+      `对白占比 ${dialogueRatio.ratio}%（上限 ${dialogueRatio.limit}%，范文 ${SAMPLE_DIALOGUE_RATIO}%）`
+    );
+  }
   const tooLong = list.filter((row) => row.kind === 'too_long').length;
   if (tooLong) parts.push(`有 ${tooLong} 段超过 320 字`);
   const shortRun = list.find((row) => row.kind === 'short_run');
@@ -3436,6 +3604,13 @@ module.exports = {
   SHAPE_40_79_MAX_RATIO,
   SHAPE_MEAN_MIN,
   SHAPE_MEAN_MAX,
+  SAMPLE_SHORT_SENTENCE_RATIO,
+  SHORT_SENTENCE_RATIO_LIMIT,
+  SHORT_SENTENCE_MAX_CHARS,
+  SAMPLE_QUOTE_SPANS_PER_KILO,
+  QUOTE_SPAN_LIMIT,
+  SAMPLE_DIALOGUE_RATIO,
+  DIALOGUE_RATIO_LIMIT,
   SAMPLE_TOTAL_PARAGRAPHS,
   SAMPLE_MEAN_CHARS,
   SAMPLE_MEDIAN_CHARS,

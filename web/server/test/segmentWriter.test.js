@@ -1351,8 +1351,81 @@ test('W2 形态违规按类型计数，总数与违规数组一致', () => {
   assert.strictEqual(shape.summary.avg, 1, '段均 81.4 低于 95.3');
   assert.strictEqual(
     Object.keys(shape.summary).sort().join(','),
-    'avg,corner_quote,count,dialogue_stack,fragment_ratio,short_run,too_long,total'
+    'avg,corner_quote,count,dialogue_ratio,dialogue_stack,fragment_ratio,quote_density,short_run,short_sentence,too_long,total'
   );
+});
+
+test('A1 短句比例超范文 1.5 倍触发形态违规，可进入重写', () => {
+  const plan = makePlan(2, 15);
+  const text = Array.from({ length: 30 }, () => '他走了一步。').join('\n\n');
+  const shape = segmentWriter.checkParagraphShape(plan, text);
+
+  assert.strictEqual(shape.summary.short_sentence, 1, '全部是 ≤12 字短句，必须报');
+  const row = shape.violations.find((item) => item.kind === 'short_sentence');
+  assert.strictEqual(row.ratio, 100);
+  assert.strictEqual(row.limit, segmentWriter.SHORT_SENTENCE_RATIO_LIMIT);
+  assert.ok(row.beatId, '要挂到具体拍上，重写才有落点');
+
+  const delivery = segmentWriter.evaluateShapeDelivery(shape);
+  assert.strictEqual(delivery.passed, false);
+  assert.strictEqual(delivery.distributionOk, false);
+});
+
+test('A1 引号片段密度与对白占比各自有独立阈值', () => {
+  const plan = makePlan(2, 15);
+  const quoteHeavy = Array.from(
+    { length: 30 },
+    () => '“好。”他点头，把门推开，走进院子，看见灯还亮着。'
+  ).join('\n\n');
+  const quoted = segmentWriter.checkParagraphShape(plan, quoteHeavy);
+  assert.strictEqual(quoted.summary.quote_density, 1, '30 个引号片段/约千字，超过 12.2 处/千字');
+  const density = quoted.violations.find((item) => item.kind === 'quote_density');
+  assert.ok(density.perKilo > segmentWriter.QUOTE_SPAN_LIMIT);
+  assert.strictEqual(density.limit, segmentWriter.QUOTE_SPAN_LIMIT);
+
+  const dialogueHeavy = Array.from(
+    { length: 30 },
+    () => '“我今天一定要把这件事从头到尾说清楚，让所有人都听明白。”他说。'
+  ).join('\n\n');
+  const talk = segmentWriter.checkParagraphShape(plan, dialogueHeavy);
+  assert.strictEqual(talk.summary.dialogue_ratio, 1, '对白占比远超 27%');
+  assert.ok(
+    talk.violations.find((item) => item.kind === 'dialogue_ratio').ratio >
+      segmentWriter.DIALOGUE_RATIO_LIMIT
+  );
+});
+
+test('A1 文字质感三项只拦新造出来的超限，原本超标的好转不被回滚', () => {
+  const cap = segmentWriter.SHORT_SENTENCE_RATIO_LIMIT;
+  const before = {
+    blocking: [{ kind: 'short_sentence', ratio: 40 }],
+    dialogue: { limits: { shortSentenceRatio: cap, quotePerKilo: 12.2, dialogueRatio: 27 } },
+    distribution: {},
+  };
+  const improved = {
+    blocking: [{ kind: 'short_sentence', ratio: 30 }],
+    dialogue: { limits: { shortSentenceRatio: cap, quotePerKilo: 12.2, dialogueRatio: 27 } },
+    distribution: {},
+  };
+  assert.deepStrictEqual(
+    segmentWriter.shapeAcceptProblems(before, improved, ['B1']),
+    [],
+    '从 40% 降到 30% 仍是好转，不拦'
+  );
+
+  const cleanBefore = {
+    blocking: [],
+    dialogue: { limits: { shortSentenceRatio: cap, quotePerKilo: 12.2, dialogueRatio: 27 } },
+    distribution: {},
+  };
+  const regressed = {
+    blocking: [{ kind: 'short_sentence', ratio: 25 }],
+    dialogue: { limits: { shortSentenceRatio: cap, quotePerKilo: 12.2, dialogueRatio: 27 } },
+    distribution: {},
+  };
+  const problems = segmentWriter.shapeAcceptProblems(cleanBefore, regressed, ['B1']);
+  assert.strictEqual(problems.length, 1);
+  assert.match(problems[0], /短句/);
 });
 
 test('X1 硬拦只有单段 >320：319 个汉字 + 2 个标点 = 321 字必须报', () => {
