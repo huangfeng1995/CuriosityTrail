@@ -63,6 +63,29 @@ const CONTEXT_BUDGET = 24000;
 /** 侧边栏历史消息的字符预算（只保留最近的部分，更早的省略） */
 const HISTORY_BUDGET = 12000;
 
+/** 素材片段最多注入多少条 */
+const RETRIEVAL_LIMIT = 6;
+
+/**
+ * 默认文风基线。
+ *
+ * 数值全部来自 docs/superpowers/baseline/sample.md 的 measure.py 实测，
+ * 不手调、不凭感觉写形容词：
+ *   - 5047 字 / 45 段 / 段均 112.16 / 最长 314；
+ *   - 对白占比 17.99%（仅对白 17.34%）；
+ *   - 句长均值 29.51，最长 79，≤12 字短句 12.28%；
+ *   - 比喻 1.39 处/千字；专名合计 39.63 个/千字。
+ *
+ * 作者自建的文风规则卡在前，这一段在后：卡是显式覆盖，这里是没有规则时的默认底线。
+ */
+const STYLE_BASELINE = [
+  '## 文风基线（范文 sample.md 实测）',
+  '- 段落：段均 112 字（多数 95–129），单段不超过 320；40–79 字约 29%，80–140 字约 47%。',
+  '- 句子：平均 29.5 字，≤12 字短句约 12%，长短句交错。',
+  '- 对白约占 18%，用直接引语；比喻约 1.4 处/千字，专名约 40 个/千字。',
+  '- 每段至少一个可感知细节，不直接下情绪结论。',
+].join('\n');
+
 /**
  * 各分区的优先级：数字越小越不可牺牲。
  *
@@ -538,10 +561,20 @@ async function assembleContext(params = {}) {
     bookProgress: null,
     // 本轮注入的最近章节摘要条数。
     recentSummaries: 0,
+    // 本轮是否注入了默认文风基线。
+    styleBaseline: false,
   };
 
   if (styleText) {
     addPart(styleText, PRIORITY.ROLE, true);
+  }
+
+  // 没有作者规则卡时，写手仍然需要一条来自范文的默认底线。
+  // 不设 fixed：它很重要，但仍要计入预算；超预算时由 applyBudget
+  // 按优先级让位，而不是让 system 总长无上限地涨。
+  if (roleKey === 'writer') {
+    addPart(STYLE_BASELINE, PRIORITY.ROLE);
+    meta.styleBaseline = true;
   }
 
   // ---- 1. 作品层 ----

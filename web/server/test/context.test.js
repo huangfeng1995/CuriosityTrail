@@ -578,6 +578,50 @@ test('跨章承接：规划上下文只给上一章结尾摘要，不注入整�
   assert.ok(!system.includes('## 当前章节正文'), '规划不注入整章正文');
 });
 
+test('默认文风基线：写手上下文注入 sample.md 实测口径，其他角色不注入', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-style-baseline';
+  const chapterId = 'style-baseline-1';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, '基线测试', '', '', '', 0, ?, ?)`,
+    [workId, userId, now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第一章', 1, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, now, now]
+  );
+
+  const writer = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+  const writerSystem = writer.messages[0].content;
+  assert.strictEqual(writer.meta.styleBaseline, true);
+  assert.ok(writerSystem.includes('## 文风基线（范文 sample.md 实测）'));
+  assert.ok(writerSystem.includes('段均 112 字'), '段均必须来自实测，不是手写形容词');
+  assert.ok(writerSystem.includes('对白约占 18%'));
+  assert.ok(writerSystem.includes('≤12 字短句约 12%'));
+
+  const editor = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'editor',
+    scope: 'chapter',
+    userId,
+  });
+  assert.strictEqual(editor.meta.styleBaseline, false);
+  assert.ok(!editor.messages[0].content.includes('## 文风基线'), '基线只给写手');
+});
+
 test.after(async () => {
   env.cleanup();
 });
