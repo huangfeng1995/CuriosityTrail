@@ -232,6 +232,56 @@ test('自检：模型漏报的拍要按节拍表补回 missing，并保留 30 �
   assert.strictEqual(coverage.chapterGoalMet, false);
 });
 
+test('章末自检：末段只重复前文意象不算钩子，即使模型说 hookPresent', () => {
+  const plan = validateBeatPlan(makePlan()).plan;
+  const body = [
+    '林砚在门槛外站了一会儿，才伸手推门。',
+    '老周不答，只说香案后头还有一箱旧档。',
+    '庙檐下的雪压着灯笼，风一过就簌簌落下一层白。',
+    '庙檐下的雪压着灯笼，风一过就簌簌落下一层白。',
+  ].join('\n\n');
+
+  const coverage = validateCoverage(
+    { covered: [], missing: [], weak: [], hookPresent: true },
+    plan,
+    body
+  );
+
+  assert.strictEqual(coverage.hookPresent, false, '重复意象没有新信息，不能算合格钩子');
+  assert.strictEqual(coverage.ending.repeatedImagery, true);
+  assert.ok(coverage.ending.repeatedWith >= 0, '必须指出与第几段重复');
+  assert.strictEqual(coverage.ending.passed, false);
+});
+
+test('章末自检：带来未决决定且不重复意象，才算合格收束', () => {
+  const plan = validateBeatPlan(makePlan()).plan;
+  const body = [
+    '庙檐下的雪压着灯笼，风一过就簌簌落下一层白。',
+    '老周把门关上，说旧档只剩半箱。',
+    '林砚没有立刻走，他决定第二天带着照片去县衙后门等那个人。',
+  ].join('\n\n');
+
+  const coverage = validateCoverage(
+    {
+      covered: [],
+      missing: [],
+      weak: [],
+      ending: { newInfo: false, unresolvedDecision: true, repeatedImagery: false },
+    },
+    plan,
+    body
+  );
+
+  assert.strictEqual(coverage.hookPresent, true);
+  assert.deepStrictEqual(coverage.ending, {
+    newInfo: false,
+    unresolvedDecision: true,
+    repeatedImagery: false,
+    repeatedWith: -1,
+    passed: true,
+  });
+});
+
 test('自检：没有证据的 covered 不算覆盖，证据超长会被截到 30 字', () => {
   const plan = validateBeatPlan(makePlan()).plan;
   const coverage = validateCoverage(

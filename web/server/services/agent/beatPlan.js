@@ -367,9 +367,16 @@ const COVERAGE_PROMPT = `你是节拍覆盖检查器。只输出一个 JSON 对�
 段数多少不是判断标准：某拍只写了两段，只要事件和变化都在，也照常算 covered。
 - repeatViolations：逐条核对节拍表的 avoidRepeat（上一章已经写过、本章不得重演的旧事件）。
   正文若重演了其中某条，把重演的那句原文放进来；没有重演就输出空数组。
-另需判断 hookPresent（章末最后一段是否留下未解问题或作出后果未定的决定）与
-chapterGoalMet（正文是否回答了 chapterGoal 的人物+动作+结果）。
-输出字段：covered（数组）、missing（数组）、weak（数组）、hookPresent（布尔）、chapterGoalMet（布尔）、
+另需判断章末最后一段的收束质量（不要只判「有没有钩子」）：
+- newInfo：最后一段是否带来前文没有的新信息（新事实、新代价、新发现）。
+- unresolvedDecision：最后一段是否留下一个后果未定的决定或动作。
+- repeatedImagery：最后一段是否重复前文已经出现过的意象或描写
+  （同一比喻、同一种天气、同一件道具的同一细节）。
+hookPresent 仅在（newInfo 或 unresolvedDecision）且 repeatedImagery=false 时为 true；
+只重复前文意象、没有新信息，不算钩子。
+chapterGoalMet：正文是否回答了 chapterGoal 的人物+动作+结果。
+输出字段：covered（数组）、missing（数组）、weak（数组）、chapterGoalMet（布尔）、
+ending（对象，三个布尔字段：newInfo / unresolvedDecision / repeatedImagery）、
 repeatViolations（字符串数组）。
 只使用节拍表里出现过的 id，不要编造。`;
 
@@ -796,6 +803,50 @@ function normalizeEvidence(value) {
 }
 
 /**
+ * 章末最后一段是否在重复前文意象。
+ *
+ * 用二元组重合度判断：末段有 65% 以上的二元组已经在前文某段出现过，
+ * 说明它主要在复述同一场景/比喻，而不是带来新信息。末段太短时不做机械判定，
+ * 交给自检模型自己报 repeatedImagery。
+ */
+const ENDING_REPEAT_MIN_CHARS = 20;
+const ENDING_REPEAT_SIMILARITY = 0.65;
+
+function detectRepeatedEnding(body) {
+  const paragraphs = String(body || '')
+    .split(/\n+/)
+    .map((row) => row.trim())
+    .filter(Boolean);
+  if (paragraphs.length < 2) return { repeated: false, index: -1 };
+  const last = normalizeEvidence(paragraphs.pop());
+  if (last.length < ENDING_REPEAT_MIN_CHARS) return { repeated: false, index: -1 };
+
+  const bigrams = (value) => {
+    const map = new Map();
+    for (let i = 0; i < value.length - 1; i += 1) {
+      const gram = value.slice(i, i + 2);
+      map.set(gram, (map.get(gram) || 0) + 1);
+    }
+    return map;
+  };
+  const lastCounts = bigrams(last);
+  for (let index = 0; index < paragraphs.length; index += 1) {
+    const earlier = normalizeEvidence(paragraphs[index]);
+    if (earlier.length < 8) continue;
+    const earlierCounts = bigrams(earlier);
+    let shared = 0;
+    for (const [gram, count] of lastCounts) {
+      const other = earlierCounts.get(gram) || 0;
+      if (other) shared += Math.min(count, other);
+    }
+    if (shared / Math.max(1, last.length - 1) >= ENDING_REPEAT_SIMILARITY) {
+      return { repeated: true, index };
+    }
+  }
+  return { repeated: false, index: -1 };
+}
+
+/**
  * 校验自检结果。
  *
  * 以节拍表为准重新计算 missing：模型有时会给出自相矛盾的
@@ -873,13 +924,31 @@ function validateCoverage(candidate, plan, body) {
         .slice(0, 5)
     : [];
   const avoidRepeat = Array.isArray(plan.avoidRepeat) ? plan.avoidRepeat : [];
+  // 章末自检：从「有没有钩子」改成「最后一段有没有新信息/未决决定，且不重复前文意象」。
+  // 兼容旧自检输出：只给 hookPresent 时按 newInfo 处理。
+  const endingRaw = data.ending && typeof data.ending === 'object' && !Array.isArray(data.ending)
+    ? data.ending
+    : null;
+  const legacyHook = data.hookPresent === true;
+  const newInfo = endingRaw ? endingRaw.newInfo === true : legacyHook;
+  const unresolvedDecision = endingRaw ? endingRaw.unresolvedDecision === true : false;
+  const repeated = detectRepeatedEnding(body);
+  const repeatedImagery = (endingRaw ? endingRaw.repeatedImagery === true : false) || repeated.repeated;
+  const endingPassed = (newInfo || unresolvedDecision) && !repeatedImagery;
 
   return {
     covered,
     missing,
     weak,
     evidence,
-    hookPresent: data.hookPresent === true,
+    hookPresent: endingPassed,
+    ending: {
+      newInfo,
+      unresolvedDecision,
+      repeatedImagery,
+      repeatedWith: repeated.repeated ? repeated.index : -1,
+      passed: endingPassed,
+    },
     chapterGoalMet: data.chapterGoalMet === true,
     avoidRepeat,
     repeatViolations,

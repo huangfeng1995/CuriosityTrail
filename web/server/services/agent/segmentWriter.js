@@ -989,6 +989,8 @@ function buildBeatRewriteInstruction({
   shapeViolations = [],
   expandShots = [],
   continuityIssues = [],
+  mustRevealIds = [],
+  prematureReveal = [],
   tail,
   nextHead,
   brief = null,
@@ -1027,6 +1029,15 @@ function buildBeatRewriteInstruction({
       continuity.set(id, rows);
     }
   }
+  const revealBeats = new Set((mustRevealIds || []).filter(Boolean));
+  const premature = new Map();
+  for (const item of prematureReveal || []) {
+    const id = item && item.actualBeat;
+    if (!id) continue;
+    const rows = premature.get(id) || [];
+    rows.push(item);
+    premature.set(id, rows);
+  }
   const briefBlock = briefWriterBlock(brief);
   const revealLines = (mustReveal || []).map((fact) => `- ${fact}`);
   const flagged = (beat) =>
@@ -1037,6 +1048,8 @@ function buildBeatRewriteInstruction({
     conflicts.has(beat.id) ||
     shape.has(beat.id) ||
     continuity.has(beat.id) ||
+    revealBeats.has(beat.id) ||
+    premature.has(beat.id) ||
     expand.has(beat.id);
   const beats = group.beats.filter(flagged);
   const ids = beats.map((beat) => beat.id);
@@ -1080,6 +1093,20 @@ function buildBeatRewriteInstruction({
           '已经发生的事件只用一句话交代后果。'
       );
     }
+    if (revealBeats.has(b.id)) {
+      clauses.push(
+        '本拍按信息释放时间表交代指定背景信息（见「必须交代的背景事实」）；' +
+          '只交代本拍对应的那一项，不把后面拍的底牌一起说完。'
+      );
+    }
+    if (premature.has(b.id)) {
+      const rows = premature.get(b.id).map(
+        (item) => `「${item.content}」最早应在第 ${item.earliestBeat} 拍才允许说，本拍就提前解释了`
+      );
+      clauses.push(
+        `${rows.join('；')}；删掉解释和结论，只保留触发它的动作或疑问，把这条信息留到指定拍。`
+      );
+    }
     if (shape.has(b.id)) {
       const planned = Number(b.paragraphs) || 3;
       clauses.push(
@@ -1108,7 +1135,9 @@ function buildBeatRewriteInstruction({
       ? '覆盖自检发现这些拍没有落地。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
       : continuity.size
         ? '这些拍与前文重复、或把时间倒回了前文之前。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
-        : '这些拍节拍齐全，只是篇幅不足。只补指定拍的细节，其他拍与其他组保持原样。',
+        : (revealBeats.size || premature.size)
+          ? '这些拍涉及背景信息的释放时机。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
+          : '这些拍节拍齐全，只是篇幅不足。只补指定拍的细节，其他拍与其他组保持原样。',
     `完整节拍表见 system 中的「本章节拍表」，全章共 ${plan.beats.length} 拍。`,
     avoidBlock || null,
     '',
@@ -1127,7 +1156,7 @@ function buildBeatRewriteInstruction({
     problems.length ? problems.join('\n') : '把点名的拍写完整。',
     '',
     revealLines.length
-      ? `## 必须交代的背景事实（每项至少一句，写进人物对话或叙述，不得一句话带过）\n${revealLines.join('\n')}`
+      ? `## 必须交代的背景事实（按拍释放：到指定拍才说，之前禁止解释；每拍最多一项）\n${revealLines.join('\n')}`
       : '',
     revealLines.length ? '' : null,
     briefBlock,
@@ -2081,6 +2110,8 @@ async function rewriteMissingGroups({
   shapeViolations = [],
   expandShots = [],
   continuityIssues = [],
+  mustRevealIds = [],
+  prematureReveal = [],
   log = () => {},
   progress = () => {},
 }) {
@@ -2105,6 +2136,11 @@ async function rewriteMissingGroups({
   const continuityIds = [
     ...new Set((continuityIssues || []).flatMap((issue) => issue.beatIds || []).filter(Boolean)),
   ];
+  // 信息释放时间表：该在哪一拍说（缺）、以及已经提前说漏的拍（删）。
+  const revealIds = [...new Set((mustRevealIds || []).filter(Boolean))];
+  const prematureIds = [
+    ...new Set((prematureReveal || []).map((item) => item && item.actualBeat).filter(Boolean)),
+  ];
   const missingIds = [
     ...(coverage?.missing || []),
     ...weakIds,
@@ -2113,6 +2149,8 @@ async function rewriteMissingGroups({
     ...conflictIds,
     ...shapeIds,
     ...continuityIds,
+    ...revealIds,
+    ...prematureIds,
     ...(expandShots || []).map((shot) => shot && shot.id).filter(Boolean),
   ];
   const wanted = new Set(missingIds);
@@ -2157,6 +2195,8 @@ async function rewriteMissingGroups({
       shapeViolations: factsOnly ? [] : (shapeViolations || []),
       expandShots: factsOnly ? [] : (expandShots || []),
       continuityIssues: factsOnly ? [] : (continuityIssues || []),
+      mustRevealIds: factsOnly ? [] : revealIds,
+      prematureReveal: factsOnly ? [] : (prematureReveal || []),
       tail: tailParagraphs(before || existingBody, 3),
       nextHead,
       brief,
@@ -2185,6 +2225,7 @@ async function rewriteMissingGroups({
     if (!factsOnly && beats.some((beat) => (coverage?.missing || []).includes(beat.id) || weakIds.includes(beat.id) || dupIds.includes(beat.id))) reasons.push('missing');
     if (!factsOnly && beats.some((beat) => (mustWithholdIds || []).includes(beat.id) || conflictIds.includes(beat.id))) reasons.push('forbidden');
     if (!factsOnly && beats.some((beat) => continuityIds.includes(beat.id))) reasons.push('continuity');
+    if (!factsOnly && beats.some((beat) => revealIds.includes(beat.id) || prematureIds.includes(beat.id))) reasons.push('reveal');
     const entry = {
       call: count,
       kind: 'rewrite',

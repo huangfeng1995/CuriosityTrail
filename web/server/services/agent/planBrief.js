@@ -127,7 +127,7 @@ const MAX_KEYWORDS = 6;
 
 const BRIEF_PROMPT = `你是章节分场 brief 规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 任务：根据本章大纲、作品大纲、人物卡、设定、素材与上一章结尾，回答「这一章必须发生哪些动作」。
-输出格式：{"items":[{"kind":"loss|mustPresent|mustWithhold|mustReveal|evidence|opponent","text":"具体动作，写到物、写到人","keywords":["能在正文或节拍表里被逐字命中的词"],"slot":"opening|discussion|identity|father|farewell|departure","source":"本章大纲|作品大纲|人物卡|设定|素材|上一章","inferred":false,"handover":false}],
+输出格式：{"items":[{"kind":"loss|mustPresent|mustWithhold|mustReveal|evidence|opponent","text":"具体动作，写到物、写到人","keywords":["能在正文或节拍表里被逐字命中的词"],"slot":"opening|discussion|identity|father|farewell|departure","revealAt":"B3","source":"本章大纲|作品大纲|人物卡|设定|素材|上一章","inferred":false,"handover":false}],
 "invariants":[{"key":"age|hometown|fosterStartAge|fosterYears|keyItemOwner","value":"正文里该怎么说，如十八岁/河内获嘉/十一年","numeric":18,"unit":"岁|年","keywords":["正文里能逐字命中的定位词"],"source":"人物卡|设定|素材|背景事实","inferred":false}]}
 六类含义：
 - loss：不可逆损失/交出物/说出口的话/做出的决定。必须具体到物，如「交出犀角弓」。
@@ -139,6 +139,8 @@ const BRIEF_PROMPT = `你是章节分场 brief 规划器。只输出一个 JSON 
   father 长辈到场 / farewell 告别 / departure 启程），按语义归属填，不要按关键词猜；
   这条 slot 决定正文自检在哪些拍里查「有没有把悬念解释掉」，留空等于没有守卫目标。
 - mustReveal：必须交代的背景信息，如年龄、籍贯、寄养原因。每项要能一句话说清。
+  每条必须填 revealAt：最早允许在第几拍交代（如 "B3"）。在这之前禁止解释、禁止提前透露；
+  底牌不能在第一拍就说完，按场景把信息分散到不同拍，一章里不要集中在前两拍全部交代。
 - evidence：物证或制度异常，如符传形制、逾制信号。
 - opponent：本章对抗、牵制主角的具体外部主体，写成「谁/哪个势力 + 用什么方式阻碍」，
   如「张杨征粮的使者」「司马家不让他带弓」。必须是能在正文里出场的人或势力；
@@ -274,6 +276,15 @@ function normalizeItem(raw, index, dropped) {
     ? rawSlot
     : '';
 
+  /**
+   * 信息释放时间表：mustReveal 的最早允许拍。
+   *
+   * 只接受 B 开头的拍号；模型没给或给了别的东西时不猜位置，
+   * 由自检按「不早于本章后半段」的默认节奏释放。
+   */
+  const rawRevealAt = text(raw.revealAt).toUpperCase();
+  const revealAt = kind === 'mustReveal' && /^B\d+$/.test(rawRevealAt) ? rawRevealAt : '';
+
   return {
     id: `${kind[0].toUpperCase()}${index + 1}`,
     kind,
@@ -283,6 +294,7 @@ function normalizeItem(raw, index, dropped) {
     inferred,
     handover,
     ...(slot ? { slot } : {}),
+    ...(revealAt ? { revealAt } : {}),
     ...(handover ? { to: handoverTo, handoverKind, once: true } : {}),
   };
 }
@@ -456,7 +468,12 @@ function itemLine(item) {
   const handover = item.handover === true
     ? `（交付给：${item.to || '未登记'}；形式：${item.handoverKind || '话或物'}；全章只交付一次）`
     : '';
-  return `- [${item.kind}] ${item.text}${handover}${source}${keywords}`;
+  const reveal = item.kind === 'mustReveal'
+    ? (item.revealAt
+      ? `（最早 ${item.revealAt} 拍才允许说；之前禁止解释）`
+      : '（不早于本章后半段；不得在第一拍说完）')
+    : '';
+  return `- [${item.kind}] ${item.text}${handover}${reveal}${source}${keywords}`;
 }
 
 /**
@@ -490,7 +507,7 @@ function formatPlanBrief(brief) {
     ['必须到场的人物', present],
     ['托付（全章只允许一次完整交付，告别/离场拍由托付人本人把主角交给登记对象并交付话或物；交付对象必须在场）', handover],
     ['必须 withhold、不得解释的信息', withhold],
-    ['必须交代的背景信息', reveal],
+    ['背景信息按拍释放（到指定拍才允许说，之前禁止解释）', reveal],
     ['物证/制度异常', evidence],
   ];
   for (const [label, items] of sections) {
@@ -931,7 +948,15 @@ function briefWriterBlock(brief) {
     lines.push(`- 托付（${onceLine}交付对象必须同处该拍）：${detail}`);
   }
   if (withhold.length) lines.push(`- 不得解释（必须 withhold）：${withhold.map((x) => x.text).join('；')}`);
-  if (reveal.length) lines.push(`- 必须交代（每项至少一句）：${reveal.map((x) => x.text).join('；')}`);
+  if (reveal.length) {
+    lines.push('- 背景信息按拍释放（到指定拍才允许说，之前禁止解释）：');
+    for (const item of reveal) {
+      const timing = item.revealAt
+        ? `（最早 ${item.revealAt} 拍才允许说；在这之前禁止解释）`
+        : '（不早于本章后半段；不得在第一拍说完）';
+      lines.push(`  - ${item.id ? `${item.id} ` : ''}${item.text}${timing}`);
+    }
+  }
   if (evidence.length) lines.push(`- 必须落地的物证/制度异常：${evidence.map((x) => x.text).join('；')}`);
   if (opponentNone.length) {
     lines.push(`- 本章没有明确的外部对手（${opponentNone.map((x) => x.reason).join('；')}）；不要硬编一个。`);

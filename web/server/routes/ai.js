@@ -1922,6 +1922,10 @@ router.post('/chat', async (req, res) => {
           chapterText: `${chapterRow.outline || ''}\n${String(message)}`,
           priorBodies: prior.map((row) => row.content || ''),
           body,
+          // 按拍释放：有节拍表与 brief 时，每条背景事实只在 revealAt 之后才允许说；
+          // 更早出现即判「底牌提前释放」，交给下面的重写删掉。
+          plan: beatPlan,
+          brief,
         });
       } catch (err) {
         console.error('背景事实自检失败：', err.message);
@@ -2015,6 +2019,16 @@ router.post('/chat', async (req, res) => {
     // 「背景事实尚未入库」不是写手能补的：只报给作者（beatCheck + 徽标），
     // 不发起重写，否则等于逼写手编造年龄/籍贯。
     const revealMissing = revealAllMissing.filter((item) => !item.notIngested);
+    // 底牌提前释放：某条背景信息出现在 revealAt 之前的拍，删掉解释、留到指定拍。
+    const revealPremature = revealCheck.applicable ? (revealCheck.premature || []) : [];
+    const revealTargetIds = [
+      ...revealMissing.map((item) => item.revealBeat),
+      ...revealPremature.map((item) => item.actualBeat),
+    ].filter(Boolean);
+    if (beatCheck) {
+      beatCheck.mustRevealPremature = revealPremature;
+      beatCheck.mustRevealMissing = revealAllMissing;
+    }
 
     // 缺拍重写：最多一次。
     //
@@ -2039,13 +2053,14 @@ router.post('/chat', async (req, res) => {
           ...invariantIds,
           ...shapeIds,
           ...continuityIds,
+          ...revealTargetIds,
         ]
-      : [...withholdIds, ...invariantIds, ...shapeIds];
+      : [...withholdIds, ...invariantIds, ...shapeIds, ...revealTargetIds];
     if (
       segmented &&
       beatPlan &&
       beatCheck &&
-      (segmentedMissingIds.length || revealMissing.length) &&
+      (segmentedMissingIds.length || revealMissing.length || revealPremature.length) &&
       !roundSignal.aborted
     ) {
       // 分段起稿的缺拍重写：只换掉缺拍所在的组，其他组原样保留。
@@ -2108,7 +2123,13 @@ router.post('/chat', async (req, res) => {
             groups: segmented.groups,
             coverage: beatCheck,
             brief,
-            mustReveal: revealMissing.map((fact) => fact.content),
+            mustReveal: revealMissing.map((fact) =>
+              fact.revealBeat
+                ? `${fact.content}（最早 ${fact.revealBeat} 拍才允许说；之前禁止解释）`
+                : fact.content
+            ),
+            mustRevealIds: revealMissing.map((fact) => fact.revealBeat).filter(Boolean),
+            prematureReveal: revealPremature,
             mustWithholdIds: withholdIds,
             invariantConflicts,
             shapeViolations: shapeCheck.violations,
@@ -2805,6 +2826,8 @@ router.post('/chat', async (req, res) => {
       total: revealCheck.total,
       covered: revealCheck.covered,
       missing: revealCheck.missing,
+      // 底牌提前释放：早于 revealAt 出现的条目与所在拍，供复盘对照。
+      premature: revealCheck.premature || [],
     };
     // 分场 brief 与硬覆盖结果：给前端复盘用，不改变正文。
     payload.planBrief = brief

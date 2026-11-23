@@ -143,6 +143,82 @@ test('年龄必须出现年龄表述：十八了算交代，十八年不算', ()
   assert.strictEqual(wordOnly.missing.length, 1, '只出现「年龄」这个词不算交代');
 });
 
+test('信息释放时间表：早于 revealAt 出现算提前释放，未出现按拍报缺', () => {
+  const plan = {
+    beats: ['B1', 'B2', 'B3', 'B4'].map((id) => ({ id, paragraphs: 2 })),
+  };
+  const brief = {
+    items: [{ kind: 'mustReveal', text: '杨平今年十四岁', revealAt: 'B3' }],
+  };
+  const body = [
+    '杨平今年十四岁。',
+    '风从城门那边吹过来，卷起地上的碎草。',
+    '车队在门口等着，马鼻子里喷出白气。',
+    '父亲没有说话，只把手按在车辕上。',
+    '他抬头看了一眼灰白的天。',
+    '巷子里很安静，连狗都没有叫。',
+    '远处有人敲钟，一声比一声远。',
+    '他把手缩回袖子里，跟着往前走了两步。',
+  ].join('\n\n');
+
+  const check = backgroundFacts.checkMustReveal({
+    facts: factRows(),
+    body,
+    plan,
+    brief,
+  });
+
+  assert.strictEqual(check.premature.length, 1, '第一段就把年龄说完了，属于提前释放');
+  assert.strictEqual(check.premature[0].content, '杨平今年十四岁');
+  assert.strictEqual(check.premature[0].actualBeat, 'B1');
+  assert.strictEqual(check.premature[0].earliestBeat, 'B3');
+  assert.deepStrictEqual(
+    check.missing.map((item) => item.content),
+    ['杨平是河内获嘉人', '杨平因战乱寄养在司马防家']
+  );
+  assert.deepStrictEqual(
+    check.missing.map((item) => item.revealBeat),
+    ['B4', 'B4'],
+    '没给 revealAt 的事实从后半段起按一拍一项排'
+  );
+
+  const chapter = backgroundFacts.mustRevealForChapter({
+    facts: factRows(),
+    characters: [PROTAGONIST],
+    chapterText: '杨平随父亲离城。',
+    priorBodies: [],
+    body,
+    plan,
+    brief,
+  });
+  assert.strictEqual(chapter.applicable, true);
+  assert.strictEqual(chapter.premature.length, 1, 'mustRevealForChapter 必须把提前释放带出来');
+});
+
+test('信息释放时间表：在 revealAt 之后交代才算覆盖', () => {
+  const plan = {
+    beats: ['B1', 'B2', 'B3', 'B4'].map((id) => ({ id, paragraphs: 2 })),
+  };
+  const brief = {
+    items: [{ kind: 'mustReveal', text: '杨平今年十四岁', revealAt: 'B3' }],
+  };
+  const body = [
+    '风从城门那边吹过来，卷起地上的碎草。',
+    '车队在门口等着，马鼻子里喷出白气。',
+    '父亲没有说话，只把手按在车辕上。',
+    '他抬头看了一眼灰白的天。',
+    '杨平今年十四岁。',
+    '巷子里很安静，连狗都没有叫。',
+    '远处有人敲钟，一声比一声远。',
+    '他把手缩回袖子里，跟着往前走了两步。',
+  ].join('\n\n');
+
+  const check = backgroundFacts.checkMustReveal({ facts: factRows(), body, plan, brief });
+
+  assert.deepStrictEqual(check.premature, []);
+  assert.ok(!check.missing.some((item) => item.content.includes('十四岁')), '到点说了就不算缺');
+});
+
 test('非首次出场：更早章节已出现主角 → 不强制交代', () => {
   const chapter = backgroundFacts.mustRevealForChapter({
     facts: factRows(),

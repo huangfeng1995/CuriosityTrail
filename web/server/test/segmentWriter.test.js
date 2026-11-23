@@ -1918,3 +1918,39 @@ test('P2 连续性问题只重写问题组，沿用既有 85% 回滚与调用记
   assert.ok(out.calls[0].reasons.includes('continuity'), '重写原因要记成 continuity');
   assert.strictEqual(out.callCount, 1);
 });
+
+// ---- P3：信息释放时间表 ----
+
+test('P3 底牌提前释放：重写点名提前解释的拍，要求留到指定拍', async () => {
+  const { plan, groups } = rewriteFixture();
+  const runner = parsedRunner([
+    beatReply('B2', Array.from({ length: 5 }, () => '改'.repeat(100))),
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: [], weak: [] },
+    prematureReveal: [
+      {
+        id: 'f1',
+        content: '主角今年十四岁',
+        earliestBeat: 'B2',
+        actualBeat: 'B2',
+        evidence: '主角今年十四岁',
+      },
+    ],
+    mustRevealIds: ['B2'],
+    mustReveal: ['主角今年十四岁（最早 B2 拍才允许说；之前禁止解释）'],
+    runSegment: runner,
+    callCount: 0,
+    maxCalls: 8,
+  });
+
+  const instruction = runner.seen[0].instruction;
+  assert.match(instruction, /这些拍涉及背景信息的释放时机/);
+  assert.match(instruction, /「主角今年十四岁」最早应在第 B2 拍才允许说，本拍就提前解释了/);
+  assert.match(instruction, /本拍按信息释放时间表交代指定背景信息/);
+  assert.match(instruction, /必须交代的背景事实（按拍释放/);
+  assert.ok(out.calls[0].reasons.includes('reveal'), '重写原因要记成 reveal');
+});

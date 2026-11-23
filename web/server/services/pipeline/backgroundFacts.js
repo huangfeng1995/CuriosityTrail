@@ -80,6 +80,78 @@ function factTerms(fact) {
   return deriveKeywords(fact.content, normalizeText(fact.keywords));
 }
 
+/** 单段正文是否命中了某条背景事实（与 checkMustReveal 同一套判定）。 */
+function factHitInText(fact, text) {
+  const terms = factTerms(fact);
+  const prefix = Array.from(normalizeText(fact.content)).slice(0, 12).join('');
+  const ageToken = ageTokenOf(fact.content);
+  if (ageToken) return ageExpressionHit(text, ageToken);
+  return terms.some((term) => text.includes(term)) || Boolean(prefix && text.includes(prefix));
+}
+
+function splitParagraphs(text) {
+  return String(text || '')
+    .split(/\n+/)
+    .map((row) => row.trim())
+    .filter(Boolean);
+}
+
+/** 按每拍段落数把段落分给各拍；与节拍规划的段落权重保持一致。 */
+function beatParagraphRanges(beats, paragraphCount) {
+  const weights = beats.map((beat) => Math.max(1, Number(beat && beat.paragraphs) || 1));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const ranges = [];
+  let from = 0;
+  for (let i = 0; i < beats.length; i += 1) {
+    const last = i === beats.length - 1;
+    const to = last
+      ? paragraphCount
+      : Math.min(paragraphCount, Math.max(from, from + Math.round((weights[i] / total) * paragraphCount)));
+    ranges.push([from, to]);
+    from = to;
+  }
+  return ranges;
+}
+
+/**
+ * 信息释放时间表：每条背景事实最早允许在第几拍说。
+ *
+ * 优先用 brief 里模型给的 revealAt；没给时按「本章后半段起、一事一拍」排出默认节奏，
+ * 不再允许「首次出场章每项至少一句」那样在第一拍把底牌全说完。
+ */
+function revealSchedule({ facts = [], plan = null, brief = null } = {}) {
+  const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
+  if (!beats.length) return null;
+  const background = (facts || []).filter(
+    (fact) => normalizeText(fact.fact_type) === FACT_TYPE_BACKGROUND
+  );
+  if (!background.length) return null;
+
+  const items = brief && Array.isArray(brief.items)
+    ? brief.items.filter((item) => item && item.kind === 'mustReveal')
+    : [];
+  const beatIds = beats.map((beat) => beat.id);
+  const start = Math.max(1, Math.ceil(beats.length / 2));
+  const schedule = new Map();
+
+  background.forEach((fact, index) => {
+    const content = normalizeText(fact.content);
+    const terms = factTerms(fact);
+    const item = items.find((candidate) => {
+      const itemText = normalizeText(candidate.text);
+      if (itemText && (content.includes(itemText) || itemText.includes(content))) return true;
+      return (candidate.keywords || []).some((keyword) => content.includes(normalizeText(keyword)))
+        || terms.some((term) => itemText.includes(term));
+    });
+    const explicit = item && beatIds.includes(normalizeText(item.revealAt));
+    const beatId = explicit
+      ? normalizeText(item.revealAt)
+      : beatIds[Math.min(beats.length - 1, start + index)];
+    schedule.set(fact.id, beatId);
+  });
+  return schedule;
+}
+
 /**
  * 素材 → 背景事实的内容。
  *
@@ -200,37 +272,64 @@ async function upgradeBackgroundFacts({ userId, workId, materialIds = [], facts 
  * @param {string} params.body 正文
  * @returns {{total:number, covered:number, missing:Array}}
  */
-function checkMustReveal({ facts = [], body = '' }) {
+function checkMustReveal({ facts = [], body = '', plan = null, brief = null }) {
   const text = normalizeText(body);
   const background = (facts || []).filter(
     (fact) => normalizeText(fact.fact_type) === FACT_TYPE_BACKGROUND
   );
+  const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
+  const schedule = revealSchedule({ facts: background, plan, brief });
+  const paragraphs = splitParagraphs(text);
+  const ranges = beats.length ? beatParagraphRanges(beats, paragraphs.length) : [];
+  const paragraphBeatIndex = (index) => {
+    const hit = ranges.findIndex(([from, to]) => index >= from && index < to);
+    return hit >= 0 ? hit : -1;
+  };
 
   const missing = [];
+  const premature = [];
+  let covered = 0;
+
   for (const fact of background) {
     const terms = factTerms(fact);
-    const prefix = Array.from(normalizeText(fact.content)).slice(0, 12).join('');
-    const ageToken = ageTokenOf(fact.content);
-    let hit;
-    if (ageToken) {
-      // 年龄项必须出现年龄表述，不能靠全文含「年龄」或地名就算交代。
-      hit = ageExpressionHit(text, ageToken);
-    } else {
-      hit = terms.some((term) => text.includes(term)) || (prefix && text.includes(prefix));
-    }
-    if (!hit) {
+    const revealBeat = schedule ? schedule.get(fact.id) || '' : '';
+    const revealIndex = revealBeat ? beats.findIndex((beat) => beat.id === revealBeat) : -1;
+    const hitIndexes = [];
+    paragraphs.forEach((paragraph, index) => {
+      if (factHitInText(fact, paragraph)) hitIndexes.push(index);
+    });
+
+    if (!hitIndexes.length) {
       missing.push({
         id: fact.id,
         content: normalizeText(fact.content),
         keywords: terms.slice(0, 4),
+        ...(revealBeat ? { revealBeat } : {}),
       });
+      continue;
     }
+
+    // 有节拍计划时按拍释放：最早命中的段落若落在 revealAt 之前，就是底牌提前释放。
+    const firstBeatIndex = paragraphBeatIndex(hitIndexes[0]);
+    if (revealIndex >= 0 && firstBeatIndex >= 0 && firstBeatIndex < revealIndex) {
+      premature.push({
+        id: fact.id,
+        content: normalizeText(fact.content),
+        earliestBeat: revealBeat,
+        actualBeat: beats[firstBeatIndex].id,
+        evidence: paragraphs[hitIndexes[0]].slice(0, 40),
+      });
+      continue;
+    }
+
+    covered += 1;
   }
 
   return {
     total: background.length,
-    covered: background.length - missing.length,
+    covered,
     missing,
+    premature,
   };
 }
 
@@ -266,9 +365,11 @@ function mustRevealForChapter({
   chapterText = '',
   priorBodies = [],
   body = '',
+  plan = null,
+  brief = null,
 }) {
   const protagonist = pickProtagonist(characters);
-  const empty = { applicable: false, protagonist, total: 0, covered: 0, missing: [] };
+  const empty = { applicable: false, protagonist, total: 0, covered: 0, missing: [], premature: [] };
   if (!protagonist) return empty;
 
   const variants = characterVariants(protagonist);
@@ -282,7 +383,7 @@ function mustRevealForChapter({
   const current = `${chapterText || ''}\n${body || ''}`;
   if (!variants.some((name) => current.includes(name))) return empty;
 
-  const check = checkMustReveal({ facts, body });
+  const check = checkMustReveal({ facts, body, plan, brief });
 
   // 库里一条背景事实都没有时，不能因为「没有可检查项」就静默放过：
   // 主角首次出场章必须让作者看见「背景事实还没入库」，否则正文会继续缺年龄/籍贯/寄养原因。
@@ -300,6 +401,7 @@ function mustRevealForChapter({
           notIngested: true,
         },
       ],
+      premature: [],
     };
   }
 
@@ -360,6 +462,7 @@ module.exports = {
   materialToFact,
   upgradeBackgroundFacts,
   checkMustReveal,
+  revealSchedule,
   pickProtagonist,
   mustRevealForChapter,
   mustRevealBadge,

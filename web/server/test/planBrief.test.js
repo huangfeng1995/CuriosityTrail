@@ -210,11 +210,45 @@ test('brief 写手块：具体到物/到人，inferred 只进建议行', () => {
   assert.match(block, /本章不可逆损失\/交出物：交出犀角弓/);
   assert.match(block, /必须到场：司马防到场并当面托付/);
   assert.match(block, /不得解释（必须 withhold）：不得解释司马防为何要保他/);
-  assert.match(block, /必须交代（每项至少一句）：杨平年龄、籍贯与寄养在司马家的原因/);
+  assert.match(block, /背景信息按拍释放（到指定拍才允许说，之前禁止解释）：/);
+  assert.match(block, /杨平年龄、籍贯与寄养在司马家的原因（不早于本章后半段；不得在第一拍说完）/);
 
   const hardPart = block.split('- 建议')[0];
   assert.ok(!hardPart.includes('司马朗'), 'inferred 项不能出现在硬约束部分');
   assert.match(block, /- 建议（inferred，可不用.*）：司马朗随行/);
+});
+
+test('信息释放时间表：revealAt 只收 B 拍号，写手块标明最早可说的拍', () => {
+  const brief = validatePlanBrief({
+    items: [
+      {
+        kind: 'mustReveal',
+        text: '杨平今年十四岁',
+        keywords: ['十四岁'],
+        revealAt: 'b3',
+        source: '背景事实',
+      },
+      {
+        kind: 'mustReveal',
+        text: '杨平是河内获嘉人',
+        keywords: ['获嘉'],
+        source: '背景事实',
+      },
+      {
+        kind: 'mustPresent',
+        text: '司马防到场',
+        revealAt: 'B2',
+        source: '人物卡',
+      },
+    ],
+  }).brief;
+  const block = briefWriterBlock(brief);
+
+  assert.strictEqual(brief.items[0].revealAt, 'B3', '拍号统一成大写');
+  assert.ok(!brief.items[1].revealAt, '没给 revealAt 时不猜位置');
+  assert.ok(!brief.items[2].revealAt, '只有 mustReveal 接受 revealAt');
+  assert.match(block, /杨平今年十四岁（最早 B3 拍才允许说；在这之前禁止解释）/);
+  assert.match(block, /杨平是河内获嘉人（不早于本章后半段；不得在第一拍说完）/);
 });
 
 test('重排指令：缺项带可落点，且禁止新增输入里没有的人物', () => {
