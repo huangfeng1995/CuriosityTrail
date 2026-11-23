@@ -629,19 +629,20 @@ body.ct-resizing * {
   top: 8px;
   left: 50%;
   transform: translateX(-50%);
-  width: 18px;
-  height: 26px;
+  width: 20px;
+  height: 28px;
   border: 1px solid var(--border);
   background: var(--bg-sunken);
   color: var(--text-secondary);
   font-size: 14px;
-  line-height: 24px;
+  line-height: 26px;
   text-align: center;
   cursor: pointer;
   border-radius: 4px;
   padding: 0;
   z-index: 6;
-  opacity: 0.55;
+  /* 0.55 在浅色背景上几乎和分隔线融在一起；0.72 仍然安静，但一眼能看见。 */
+  opacity: 0.72;
   transition: opacity 0.16s ease, background-color 0.16s ease;
 }
 .ct-resizer:hover .ct-resizer-collapse,
@@ -654,24 +655,39 @@ body.ct-resizing * {
 }
 
 /* ---------- 栏收起后的展开按钮 ----------
-   一条细竖条，贴在编辑区两侧，点击展开对应侧栏。 */
+   栏收起后留在编辑区两侧的竖条：图标 + 竖排文案 + Tooltip。
+   之前是 14px 宽、只放一个 › 字形，在 1440 宽屏上贴着屏幕最右侧，
+   作者收起后就再也找不到它了。现在加到 32px 并带上「目录与资料」
+   /「AI 助手」的竖排标签，始终可见，不依赖悬停。 */
 .ct-col-toggle {
   flex: 0 0 auto;
-  width: 14px;
+  width: 32px;
   border: none;
   background: var(--bg-sunken);
   color: var(--text-secondary);
-  font-size: 14px;
   cursor: pointer;
-  padding: 0;
+  /* 顶部对齐：与把手上的收起按钮同一水平线，收起/展开不用上下找。 */
+  padding: 10px 0 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
   transition: background-color 0.16s ease, color 0.16s ease;
+}
+.ct-col-toggle-label {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+  font-size: 12px;
+  line-height: 1.2;
+  user-select: none;
 }
 .ct-col-toggle:hover {
   background: var(--accent-dim);
   color: var(--accent);
+}
+.ct-col-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .ct-col-toggle.is-left {
   border-right: 1px solid var(--border);

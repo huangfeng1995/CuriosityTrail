@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Spin, App as AntApp } from 'antd';
-import { Menu, PanelRight } from 'lucide-react';
+import { Button, Spin, Tooltip, App as AntApp } from 'antd';
+import { Menu, PanelLeft, PanelRight } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useWorkspace } from '../store/workspace';
 import { useFocus, ENTER_FOCUS_EVENT, EXIT_FOCUS_EVENT } from '../store/focus';
@@ -302,15 +302,25 @@ export default function Workspace() {
     return (
       <div className="ct-workspace-mobile">
         <div className="ct-mobile-bar">
-          <Button size="small" icon={<Menu size={14} />} onClick={() => setLeftOpen(true)}>
+          <Button
+            size="small"
+            icon={<Menu size={14} />}
+            onClick={() => setLeftOpen(true)}
+            aria-label="打开目录与资料"
+          >
             目录
           </Button>
           <span className="ct-mobile-title">
             {work.title}
             {chapter ? ` · ${chapter.title}` : ''}
           </span>
-          <Button size="small" icon={<PanelRight size={14} />} onClick={() => setRightOpen(true)}>
-            AI
+          <Button
+            size="small"
+            icon={<PanelRight size={14} />}
+            onClick={() => setRightOpen(true)}
+            aria-label="打开 AI 助手"
+          >
+            AI 助手
           </Button>
         </div>
 
@@ -378,17 +388,23 @@ export default function Workspace() {
 
       {/* 左栏展开条：左栏收起时露出来，贴在编辑区左缘。
           放在左 Resizer 之后、中栏之前，收起后它正好占据左栏的位置，
-          不会跑到屏幕最右侧去。 */}
-      <button
-        type="button"
-        className="ct-col-toggle is-left"
-        data-hidden={!collapsed.left || focusMode ? 'true' : undefined}
-        onClick={toggleLeft}
-        title={'展开左栏（目录与资料） · ⌘/Ctrl+Shift+\\'}
-        aria-label="展开左栏"
-      >
-        ›
-      </button>
+          不会跑到屏幕最右侧去。
+
+          图标 + 竖排文案 + Tooltip 三件套：11px 细条加一个 › 字形
+          在 1440 宽屏上几乎看不见，作者收起后就找不到回来的路。
+          入口必须始终可见，不能只在悬停时才告诉作者这里能点。 */}
+      <Tooltip title="展开左栏：目录与资料" placement="right">
+        <button
+          type="button"
+          className="ct-col-toggle is-left"
+          data-hidden={!collapsed.left || focusMode ? 'true' : undefined}
+          onClick={toggleLeft}
+          aria-label="展开左栏（目录与资料）"
+        >
+          <PanelLeft size={15} aria-hidden="true" />
+          <span className="ct-col-toggle-label">目录与资料</span>
+        </button>
+      </Tooltip>
 
       <main className="ct-col-center">
         {work?.template === 'history_thriller' && (
@@ -441,17 +457,23 @@ export default function Workspace() {
       </aside>
 
       {/* 右栏展开条：右栏收起时露出来，贴在编辑区右缘。
-          专注模式里藏掉——它本来就是「这里能展开侧栏」的入口，专注模式不该有。 */}
-      <button
-        type="button"
-        className="ct-col-toggle is-right"
-        data-hidden={!collapsed.right || focusMode ? 'true' : undefined}
-        onClick={toggleRight}
-        title={'展开右栏（AI 助手） · ⌘/Ctrl+\\'}
-        aria-label="展开右栏"
-      >
-        ‹
-      </button>
+          与左栏同一套形态：图标 + 竖排文案 + Tooltip，位置固定在栏顶，
+          跟收起按钮同一水平线——收起后不用到处找那个 14px 的细条。
+
+          专注模式里藏掉：专注模式有顶栏和章节头两个「退出专注」入口，
+          不需要再挂一个展开侧栏的条。 */}
+      <Tooltip title="展开右栏：AI 助手" placement="left">
+        <button
+          type="button"
+          className="ct-col-toggle is-right"
+          data-hidden={!collapsed.right || focusMode ? 'true' : undefined}
+          onClick={toggleRight}
+          aria-label="展开右栏（AI 助手）"
+        >
+          <PanelRight size={15} aria-hidden="true" />
+          <span className="ct-col-toggle-label">AI 助手</span>
+        </button>
+      </Tooltip>
     </div>
   );
 }
