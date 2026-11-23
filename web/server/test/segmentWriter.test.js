@@ -1438,8 +1438,28 @@ test('A5 全章不足 5000 时按缺口挑扩写拍，单拍刚好达标也要�
         { id: 'B1', chars: 2500 },
         { id: 'B2', chars: 2500 },
       ],
+      countTotal: 5330,
     }),
     []
+  );
+
+  // 5000 是含标点的 countWords：汉字 4735、含标点 5400 时已经够长，不应再扩。
+  assert.deepStrictEqual(
+    segmentWriter.findChapterDeficitShots(
+      { beats: [{ id: 'B1', targetChars: 2500 }, { id: 'B2', targetChars: 2500 }] },
+      { beats: [{ id: 'B1', chars: 2360 }, { id: 'B2', chars: 2375 }], countTotal: 5400 }
+    ),
+    []
+  );
+
+  // 同样 4735 个汉字、含标点只有 4735 时仍不足，要扩。
+  assert.ok(
+    segmentWriter
+      .findChapterDeficitShots(
+        { beats: [{ id: 'B1', targetChars: 2500 }, { id: 'B2', targetChars: 2500 }] },
+        { beats: [{ id: 'B1', chars: 2360 }, { id: 'B2', chars: 2375 }], countTotal: 4735 }
+      )
+      .length > 0
   );
 });
 

@@ -544,9 +544,16 @@ function findShortShots(plan, report, ratio = SHOT_FILL_RATIO) {
  */
 function findChapterDeficitShots(plan, report, floor = TARGET_CHAPTER_CHARS) {
   const rows = shotCharStats(plan, report);
-  const total = rows.reduce((sum, row) => sum + row.chars, 0);
-  if (total >= floor) return [];
-  let gap = floor - total;
+  const cjkTotal = rows.reduce((sum, row) => sum + row.chars, 0);
+  // 5000 是作者口径的 countWords（含标点）；拍目标 targetChars 是纯汉字。
+  // 把 countWords 地板按本章自身的汉字比例折成汉字地板，避免用 5000 汉字
+  // 去要求约 5500 字（含标点），把本来就够长的章再拉长一轮。
+  const countTotal = Number(report && report.countTotal) || 0;
+  const cjkFloor = countTotal > 0
+    ? Math.ceil((floor * cjkTotal) / countTotal)
+    : floor;
+  if (cjkTotal >= cjkFloor) return [];
+  let gap = cjkFloor - cjkTotal;
 
   const picked = [];
   const headroom = rows

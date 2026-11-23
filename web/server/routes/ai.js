@@ -2800,7 +2800,7 @@ router.post('/chat', async (req, res) => {
       const cheapest = affectedGroups.length * SEGMENT_CALL_TIMEOUT_MS + CHECK_TIMEOUT_MS;
 
       if (shortShots.length && affectedGroups.length && remainingMs >= cheapest) {
-        const chapterChars = Number(wordSharesReport.total) || 0;
+        const chapterChars = Number(wordSharesReport.countTotal) || Number(wordSharesReport.total) || 0;
         send({
           type: 'agent_thinking',
           label:
@@ -2956,7 +2956,7 @@ router.post('/chat', async (req, res) => {
         expandedIds
       );
       beatCheck.shotExpanded = Boolean(shotExpand);
-      beatCheck.chapterChars = Number(wordSharesReport.total) || 0;
+      beatCheck.chapterChars = Number(wordSharesReport.countTotal) || 0;
       beatCheck.chapterFloor = segmentWriter.TARGET_CHAPTER_CHARS;
     }
 

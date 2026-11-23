@@ -14,6 +14,7 @@
  */
 
 const { parseModelJson } = require('./parse');
+const { countWords } = require('../wordCount');
 
 /** 节拍类型：七选一（险露 仅在历史悬疑模板启用时可用） */
 const BEAT_TYPES = ['行动', '转折', '冲突', '揭示', '决定', '过渡', '险露'];
@@ -1608,6 +1609,7 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
     return {
       applicable: false,
       total: 0,
+      countTotal: 0,
       beats: [],
       roleShares: emptyRoleShares,
       outOfRange: [],
@@ -1623,6 +1625,9 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
   const ranges = shareParagraphRanges(beats, paragraphs.length);
   const rows = [];
   const total = cjkCount(paragraphs.join(''));
+  // 扩写闸门的「5000 字」是作者口径的 countWords（含标点），与 measure.py 一致；
+  // total 是纯汉字，只用于拍份额。两者都返回，别混用。
+  const countTotal = countWords(paragraphs.join('\n'));
   for (let i = 0; i < beats.length; i += 1) {
     const [from, to] = ranges[i];
     const chars = to > from ? cjkCount(paragraphs.slice(from, to).join('')) : 0;
@@ -1648,6 +1653,7 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
       applicable: false,
       reason: 'outline_mode',
       total,
+      countTotal,
       beats: rows,
       roleShares: emptyRoleShares,
       outOfRange: [],
@@ -1683,6 +1689,7 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
       reason: 'share_missing',
       shareMissing,
       total,
+      countTotal,
       beats: rows,
       roleShares,
       outOfRange: [],
@@ -1691,7 +1698,7 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
   const outOfRange = rows
     .filter((row) => row.target !== null && Math.abs(row.delta) > tolerance)
     .map((row) => row.id);
-  return { applicable: true, total, beats: rows, roleShares, outOfRange, shareMissing };
+  return { applicable: true, total, countTotal, beats: rows, roleShares, outOfRange, shareMissing };
 }
 
 module.exports = {
