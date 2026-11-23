@@ -1068,6 +1068,8 @@ router.post('/chat', async (req, res) => {
     let brief = null;
     let briefCoverageResult = null;
     let backgroundFactRows = [];
+    // 人物卡里的姓名/别名：分段起稿的前情账本要用它区分「在场人物」与道具。
+    let planCharacterNames = [];
 
     if (planningEnabled) {
       send({ type: 'agent_thinking', label: '正在规划本章节拍' });
@@ -1122,6 +1124,13 @@ router.post('/chat', async (req, res) => {
           settings: groundSettings || [],
           materials: groundMaterials || [],
         };
+        // 姓名 + 别名（aliases 可能是逗号/顿号分隔的字符串），只做前情账本的人物识别用。
+        planCharacterNames = [...new Set(
+          (groundCharacters || [])
+            .flatMap((row) => [row.name, ...String(row.aliases || '').split(/[，,、|/;；]/)])
+            .map((name) => String(name || '').trim())
+            .filter((name) => name.length >= 2)
+        )];
         // 只有「像大纲」的文本才按大纲拆拍：一行故事前提（例如「主角进庙查旧案」）
         // 提供不了场景与因果，硬按大纲模式反而会退化成直写；这种短文本继续走
         // 六类功能兜底。真实分场大纲通常远超 40 字。
@@ -1634,6 +1643,8 @@ router.post('/chat', async (req, res) => {
       segmented = await segmentWriter.draftInSegments({
         plan: beatPlan,
         brief,
+        // 前情账本用它识别人物；没有人物卡时退回空数组，账本仍会给出事件与道具。
+        characters: planCharacterNames,
         runSegment: segmentRun,
         // 起稿只拿预算表里的 4 次：3 组初稿 + 最多 1 次续写。
         // 续写是最低优先级，剩余的 4 次留给重写与扩写。
@@ -1673,6 +1684,9 @@ router.post('/chat', async (req, res) => {
           // 起稿当场收段的记账：合并了多少次、哪几拍合不动。
           draftTrimmed: segmented.draftTrimmed || 0,
           draftOverflow: segmented.draftOverflow || [],
+          // 前情账本注入次数与拼接后检出的连续性问题（重复描写 / 时间倒序）。
+          ledgerGroups: segmented.ledgerGroups || 0,
+          continuityIssues: segmented.continuityIssues || [],
           originalChars: segmented.originalChars,
           truncated: segmented.truncated,
 
@@ -1916,6 +1930,24 @@ router.post('/chat', async (req, res) => {
     };
 
     await loadRevealCheck(payload.content);
+    // 拼接后的连续性检查：重复描写与时间倒序。只点名问题组，交给下面的重写。
+    if (segmented) {
+      segmented.continuityIssues = segmentWriter.detectContinuityIssues({ groups: segmented.groups });
+      console.log(
+        JSON.stringify({
+          event: 'ai_segment_continuity',
+          traceId,
+          userId: req.userId,
+          issues: segmented.continuityIssues.map((issue) => ({
+            group: issue.group + 1,
+            beatIds: issue.beatIds,
+            kind: issue.kind,
+            against: issue.against + 1,
+          })),
+        })
+      );
+    }
+    if (beatCheck && segmented) beatCheck.continuityIssues = segmented.continuityIssues;
     // 交付只允许一次：确定性扫正文，不依赖模型自检。
     const handoverDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
     if (beatCheck) beatCheck.handoverDuplicated = handoverDup.beatIds;
@@ -1993,6 +2025,11 @@ router.post('/chat', async (req, res) => {
     // 就会被整轮上限掐断，第一版也没了，等于双输。
     // 只有覆盖报告真的指出缺拍/weak 才进重写；全覆盖时不打 skip 日志，
     // 否则每一轮成功起稿都会多一条无意义的 ai_segment_rewrite_skip。
+    // 连续性问题（重复描写 / 时间倒序）也进入同一轮重写：只点名问题组，
+    // 与缺拍/形态问题共用 2 次重写配额与 85% 回滚记账。
+    const continuityIds = segmented
+      ? (segmented.continuityIssues || []).flatMap((issue) => issue.beatIds || [])
+      : [];
     const segmentedMissingIds = beatCheck
       ? [
           ...beatCheck.missing,
@@ -2001,6 +2038,7 @@ router.post('/chat', async (req, res) => {
           ...withholdIds,
           ...invariantIds,
           ...shapeIds,
+          ...continuityIds,
         ]
       : [...withholdIds, ...invariantIds, ...shapeIds];
     if (
@@ -2074,6 +2112,7 @@ router.post('/chat', async (req, res) => {
             mustWithholdIds: withholdIds,
             invariantConflicts,
             shapeViolations: shapeCheck.violations,
+            continuityIssues: segmented.continuityIssues || [],
             runSegment: segmentRun,
             maxCalls: rewriteMaxCalls,
             callCount: segmented.callCount,
@@ -2117,11 +2156,14 @@ router.post('/chat', async (req, res) => {
                 ...(segmented.skippedGroups || []),
                 ...(rewrite.skippedGroups || []),
               ],
+              // 重写后重新跑一次连续性检查：仍存在就如实留在 beatCheck 里。
+              continuityIssues: segmentWriter.detectContinuityIssues({ groups: rewrite.groups }),
 
               truncated: rewrite.truncated,
               originalChars: rewrite.originalChars,
               chars: rewrite.chars,
             };
+            if (beatCheck) beatCheck.continuityIssues = segmented.continuityIssues;
 
             beatRewrite = rewrite.rewroteGroups > 0;
             if (rewrite.degraded || rewrite.failedGroups.length) beatRewriteFailed = true;
@@ -2140,6 +2182,7 @@ router.post('/chat', async (req, res) => {
                 contentLength: rewrite.content.length,
                 rewriteReverted: rewrite.rewriteReverted || [],
                 groupDeltas: rewrite.groupDeltas || [],
+                continuityIssues: segmented.continuityIssues || [],
                 usage: segmentWriter.usageSum(rewrite.calls),
               })
             );
@@ -2229,6 +2272,7 @@ router.post('/chat', async (req, res) => {
                 mustWithholdUnmapped: withholdCheck.unmapped || [],
                 mustWithholdPassed: withholdCheck.passed === true,
                 invariantConflicts: invariantCheck.violations.map((v) => `${v.beatId}:${v.label}:${v.actual}`),
+                continuityIssues: segmented.continuityIssues || [],
                 wordShareOutOfRange: beatCheck ? beatCheck.wordShareOutOfRange : [],
                 rewrote: true,
                 usage: recheckOut.usage || null,

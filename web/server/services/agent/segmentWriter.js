@@ -617,12 +617,232 @@ function avoidRepeatBlock(plan) {
 }
 
 /**
+ * 前情账本（P2）。
+ *
+ * 尾三段只能记住「上一组最后写了什么」，记不住已经发生过的事件、用过的道具、
+ * 说过的原话和当前时间地点。写手于是在下一组重演同一件事，或者把时间倒回去
+ * 重新交代。这里在每组写完后从已写正文与节拍里提炼一份短账本，随下一组指令传入；
+ * 尾三段照旧保留，但不再是唯一记忆。
+ */
+const LEDGER_MAX_EVENTS = 6;
+const LEDGER_MAX_PROPS = 8;
+const LEDGER_MAX_QUOTES = 3;
+const LEDGER_MAX_PERSONS = 6;
+const LEDGER_QUOTE_RE = /[“"]([^”"\n]{4,40})[”"]|「([^」\n]{4,40})」/g;
+
+function normalizeEntityName(value) {
+  return String(value || '').replace(/\s+/g, '').trim();
+}
+
+/** 最近一次明确的时间/地点转场提示语；找不到就返回空串。 */
+function latestSceneShift(text) {
+  const paragraphs = splitParagraphs(text);
+  for (let i = paragraphs.length - 1; i >= 0; i -= 1) {
+    if (SCENE_SHIFT_RE.test(paragraphs[i])) return paragraphs[i].slice(0, 24);
+  }
+  return '';
+}
+
+/** 已写正文里的关键原话：只留全角/半角引号内 4–40 字、去重后的最后三条。 */
+function recentQuotes(text) {
+  const quotes = [];
+  const seen = new Set();
+  LEDGER_QUOTE_RE.lastIndex = 0;
+  let match;
+  while ((match = LEDGER_QUOTE_RE.exec(String(text || '')))) {
+    const quote = (match[1] || match[2] || '').trim();
+    if (!quote || seen.has(quote)) continue;
+    seen.add(quote);
+    quotes.push(quote);
+  }
+  return quotes.slice(-LEDGER_MAX_QUOTES);
+}
+
+/**
+ * 为下一组生成账本。没有已写组时返回 null（第一组不需要前情）。
+ *
+ * @param {Object} params
+ * @param {Array} params.groups 分组快照（含已写 content）
+ * @param {number} params.groupIndex 即将写的组序号
+ * @param {string[]} [params.characters] 人物卡里的姓名/别名，用来区分人物与道具
+ */
+function buildGroupLedger({ groups, groupIndex, characters = [] }) {
+  const done = (groups || []).filter((g) => g.index < groupIndex && String(g.content || '').trim());
+  if (!done.length) return null;
+
+  const events = done
+    .flatMap((group) =>
+      group.beats.map((beat) => `${beat.id}：${String(beat.goal || '').trim()}`)
+    )
+    .filter((line) => normalizedParagraph(line).length > 4)
+    .slice(-LEDGER_MAX_EVENTS);
+
+  const names = (characters || [])
+    .map(normalizeEntityName)
+    .filter((name) => name.length >= 2);
+  const nameSet = new Set(names);
+  const transcripts = done.map((group) => group.content).join('\n\n');
+
+  // 道具/细节只记「确实在正文里出现过」的拍实体，避免把没写的计划当成已发生。
+  const props = [];
+  const propSeen = new Set();
+  for (const group of done) {
+    for (const beat of group.beats) {
+      for (const entity of beat.entities || []) {
+        const name = normalizeEntityName(entity);
+        if (!name || name.length > 16 || nameSet.has(name) || propSeen.has(name)) continue;
+        if (!transcripts.includes(name)) continue;
+        propSeen.add(name);
+        props.push(name);
+      }
+    }
+  }
+
+  const lastGroup = done[done.length - 1];
+  const lastText = String(lastGroup.content || '');
+  const present = names.filter((name) => lastText.includes(name)).slice(0, LEDGER_MAX_PERSONS);
+  // 人物卡没收录、但最后一组确实在写的实体：只收够短的，避免把整句台词当人名。
+  const extra = (lastGroup.beats || [])
+    .flatMap((beat) => beat.entities || [])
+    .map(normalizeEntityName)
+    .filter(
+      (name) =>
+        name.length >= 2 &&
+        name.length <= 4 &&
+        !present.includes(name) &&
+        !propSeen.has(name) &&
+        lastText.includes(name)
+    )
+    .slice(0, Math.max(0, LEDGER_MAX_PERSONS - present.length));
+
+  return {
+    events,
+    props: props.slice(-LEDGER_MAX_PROPS),
+    quotes: recentQuotes(transcripts),
+    timePlace: latestSceneShift(transcripts),
+    present: [...present, ...extra],
+  };
+}
+
+/** 账本转成指令块；没有账本就返回空串。 */
+function ledgerBlock(ledger) {
+  if (!ledger) return '';
+  const lines = [
+    '## 前情账本（已经发生，不得重演、不得倒回）',
+    '- 已完成事件：',
+    ...(ledger.events.length ? ledger.events.map((item) => `  - ${item}`) : ['  - （无）']),
+    `- 已用过的道具与细节：${ledger.props.length ? ledger.props.join('、') : '（暂无新增）'}`,
+  ];
+  if (ledger.quotes.length) {
+    lines.push('- 说过的关键原话：');
+    lines.push(...ledger.quotes.map((quote) => `  - “${quote}”`));
+  } else {
+    lines.push('- 说过的关键原话：（暂无）');
+  }
+  lines.push(
+    `- 当前时间地点：${ledger.timePlace || '沿用上文，未标注新的时间地点'}`,
+    `- 在场人物：${ledger.present.length ? ledger.present.join('、') : '未标注'}`,
+    '本组从账本最后的状态接着写；以上内容已经发生，不要重讲，也不要回到更早的时间点。'
+  );
+  return lines.join('\n');
+}
+
+/** 重复判定只认够长的整句：短句（「陈默没动。」）可能是有意重复。 */
+const MIN_REPEAT_SENTENCE_CHARS = 16;
+/** 与上一组尾段相似到这个比例，就算重演了已经写过的动作。 */
+const REPEAT_SIMILARITY = 0.7;
+/**
+ * 后一组开头的倒叙/时间倒回标志。
+ *
+ * 只认明确的回溯说法；「第二天」「回到办公室」这类正常顺叙与地点转移不算。
+ */
+const TIME_REVERSAL_RE =
+  /^(?:时间(?:回到|倒回)|闪回|倒叙|镜头(?:回到|倒回)|话说|多年(?:前|以前)|几年(?:前|以前)|几天前|前一天|昨天|昨晚|上周|上个月|去年|当年|那时|彼时|小时候|[一二三四五六七八九十百两几\d]+(?:小时|天|日|周|星期|个月|年)前|回到[一二三四五六七八九十百两几\d]+(?:小时|天|日|周|星期|个月|年)前)/;
+
+function splitSentences(text) {
+  return String(text || '')
+    .split(/(?<=[。！？!?…])/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
+/** 组内第 N 段属于哪一拍；映射不出来时退回本组第一拍。 */
+function beatIdAtParagraph(group, paragraphIndex) {
+  const paragraphs = splitParagraphs(group.content);
+  const ranges = beatParagraphRanges(group.beats, paragraphs.length);
+  const beatIndex = ranges.findIndex(([from, to]) => paragraphIndex >= from && paragraphIndex < to);
+  const beat = beatIndex >= 0 ? group.beats[beatIndex] : group.beats[0];
+  return beat ? beat.id : '';
+}
+
+/**
+ * 拼接后检查两类连续性问题（P2）。
+ *
+ *   ① 后一组的前两段里，出现与前面任意一组尾段高度相似的整句——已完成的动作被重演。
+ *   ② 后一组第一段以倒叙/时间倒回标志开头——回到了前一组之前的时间点。
+ *
+ * 只返回问题与受影响拍；重写交给现有的 rewriteMissingGroups，不在这里改正文。
+ */
+function detectContinuityIssues({ groups }) {
+  const sorted = [...(groups || [])].sort((a, b) => a.index - b.index);
+  const issues = [];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const next = sorted[i];
+    const paragraphs = splitParagraphs(next.content);
+    if (!paragraphs.length) continue;
+    const head = paragraphs.slice(0, 2);
+    const earlier = sorted.slice(0, i).map((group) => ({
+      index: group.index,
+      paragraphs: splitParagraphs(group.content),
+    }));
+
+    let repeat = null;
+    for (let p = 0; p < head.length && !repeat; p += 1) {
+      for (const sentence of splitSentences(head[p])) {
+        if (normalizedParagraph(sentence).length < MIN_REPEAT_SENTENCE_CHARS) continue;
+        const hit = earlier.find((group) => {
+          const matches = group.paragraphs.filter(
+            (paragraph) => paragraphSimilarity(sentence, paragraph) >= REPEAT_SIMILARITY
+          );
+          // 同一句在上一组里反复出现，是环境/套话式的重复描写，不是「动作被重演」；
+          // 只认在上一组尾段里只说过一次的整句。
+          return matches.length === 1 && group.paragraphs.slice(-3).includes(matches[0]);
+        });
+        if (hit) {
+          repeat = {
+            group: next.index,
+            beatIds: [beatIdAtParagraph(next, p)].filter(Boolean),
+            kind: 'repeat',
+            evidence: sentence.slice(0, 60),
+            against: hit.index,
+          };
+          break;
+        }
+      }
+    }
+    if (repeat) issues.push(repeat);
+
+    const opening = head[0].trim();
+    if (TIME_REVERSAL_RE.test(opening)) {
+      issues.push({
+        group: next.index,
+        beatIds: [(next.beats[0] || {}).id].filter(Boolean),
+        kind: 'timeline',
+        evidence: opening.slice(0, 40),
+        against: sorted[i - 1].index,
+      });
+    }
+  }
+  return issues;
+}
+
+/**
  * 某一组的起稿指令。
  *
  * 完整节拍表已经在 system 里（每次调用都会带上），所以这里不再重贴 JSON，
  * 只标清楚「本组写哪几拍、哪些已写完、哪些还没到」。
  */
-function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null }) {
+function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null, ledger = null }) {
   const completed = groups
     .filter((g) => g.index < group.index)
     .flatMap((g) => g.beatIds);
@@ -631,6 +851,7 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     .flatMap((g) => g.beatIds);
   const briefBlock = briefWriterBlock(brief);
   const avoidBlock = avoidRepeatBlock(plan);
+  const ledgerText = ledgerBlock(ledger);
 
   const lines = [
     `## 分段写作任务（第 ${group.index + 1}/${groups.length} 组）`,
@@ -660,6 +881,8 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null 
     '## 本组节拍',
     beatSummary(group.beats),
     '',
+    ledgerText,
+    ledgerText ? '' : null,
     '## 已写正文结尾（仅供衔接，不要重抄）',
     tail || '（暂无已写正文，这是本章开头）',
     '',
@@ -765,6 +988,7 @@ function buildBeatRewriteInstruction({
   invariantConflicts = [],
   shapeViolations = [],
   expandShots = [],
+  continuityIssues = [],
   tail,
   nextHead,
   brief = null,
@@ -795,6 +1019,14 @@ function buildBeatRewriteInstruction({
     conflicts.set(conflict.beatId, rows);
   }
   const handoverBeat = brief && typeof brief.handoverBeat === 'string' ? brief.handoverBeat.trim() : '';
+  const continuity = new Map();
+  for (const issue of continuityIssues || []) {
+    for (const id of issue.beatIds || []) {
+      const rows = continuity.get(id) || [];
+      rows.push(issue);
+      continuity.set(id, rows);
+    }
+  }
   const briefBlock = briefWriterBlock(brief);
   const revealLines = (mustReveal || []).map((fact) => `- ${fact}`);
   const flagged = (beat) =>
@@ -804,6 +1036,7 @@ function buildBeatRewriteInstruction({
     withhold.has(beat.id) ||
     conflicts.has(beat.id) ||
     shape.has(beat.id) ||
+    continuity.has(beat.id) ||
     expand.has(beat.id);
   const beats = group.beats.filter(flagged);
   const ids = beats.map((beat) => beat.id);
@@ -836,6 +1069,17 @@ function buildBeatRewriteInstruction({
           (weak.has(b.id) ? '写到了事件但没写出变化，这一遍要把变化写实。' : '')
       );
     }
+    if (continuity.has(b.id)) {
+      const rows = continuity.get(b.id).map((issue) =>
+        issue.kind === 'timeline'
+          ? `本组开头把时间倒回了前文之前（证据：「${issue.evidence}」）`
+          : `重演了前文已经写过的动作（证据：「${issue.evidence}」，与第 ${Number(issue.against) + 1} 组重复）`
+      );
+      clauses.push(
+        `${rows.join('；')}；删掉重演/倒回的部分，改成从上一组结束的时间点顺叙推进，` +
+          '已经发生的事件只用一句话交代后果。'
+      );
+    }
     if (shape.has(b.id)) {
       const planned = Number(b.paragraphs) || 3;
       clauses.push(
@@ -862,7 +1106,9 @@ function buildBeatRewriteInstruction({
     `## 重写第 ${group.index + 1}/${groups.length} 组中的 ${ids.join('、')}（其他拍原样保留）`,
     hasCoverageGap
       ? '覆盖自检发现这些拍没有落地。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
-      : '这些拍节拍齐全，只是篇幅不足。只补指定拍的细节，其他拍与其他组保持原样。',
+      : continuity.size
+        ? '这些拍与前文重复、或把时间倒回了前文之前。只重写这一组里的指定拍，其他拍与其他组保持原样，不要整章重来。'
+        : '这些拍节拍齐全，只是篇幅不足。只补指定拍的细节，其他拍与其他组保持原样。',
     `完整节拍表见 system 中的「本章节拍表」，全章共 ${plan.beats.length} 拍。`,
     avoidBlock || null,
     '',
@@ -1606,6 +1852,7 @@ async function draftInSegments({
   maxCalls = MAX_SEGMENT_CALLS,
   mergeScenes = true,
   brief = null,
+  characters = [],
   log = () => {},
   progress = () => {},
 }) {
@@ -1619,6 +1866,8 @@ async function draftInSegments({
   let boundaryTrimmed = 0;
   let boundaryConflicts = 0;
   let continuationDropped = 0;
+  // 前情账本注入次数：第 2 组起每次起稿都带一份。
+  let ledgerGroups = 0;
   // 起稿当场收段：合并次数与合不动的拍（后者留给交付自检兜底，不整组回滚）。
   let draftTrimmed = 0;
   const draftOverflow = [];
@@ -1675,7 +1924,11 @@ async function draftInSegments({
 
     progress({ phase: 'segment', index: group.index, total: groups.length, beatIds: group.beatIds });
     const tail = tailParagraphs(stitchGroups(groups, existingBody), 3);
-    const instruction = buildSegmentInstruction({ plan, group, groups, tail, brief });
+    // 每组写完后把已发生的事实整理成账本，随下一组指令传入。
+    // 尾三段仍然保留，但只负责衔接语气，不再是唯一记忆。
+    const ledger = buildGroupLedger({ groups, groupIndex: group.index, characters });
+    if (ledger) ledgerGroups += 1;
+    const instruction = buildSegmentInstruction({ plan, group, groups, tail, brief, ledger });
 
     let out;
     try {
@@ -1758,6 +2011,8 @@ async function draftInSegments({
   const composed = composeChapterContent({ groups, existingBody, mergeScenes });
   const normalized = normalizeChapterShape(composed.content);
   const beforeNormalized = normalizeChapterShape(composed.contentBeforeMerge);
+  // 拼接后立刻检查：重复描写与时间倒序只记问题，重写交给 rewriteMissingGroups。
+  const continuityIssues = detectContinuityIssues({ groups });
   return {
     groups,
     content: normalized.content,
@@ -1773,6 +2028,9 @@ async function draftInSegments({
     continuationSkipped,
     continuations: groups.filter((g) => g.continued).length,
     continuationDropped,
+    // 前情账本注入次数与拼接后检出的连续性问题。
+    ledgerGroups,
+    continuityIssues,
     // 起稿收段：draftTrimmed 是合并次数；draftOverflow 是合不动、仍超计划 ±2 的拍。
     draftTrimmed,
     draftOverflow,
@@ -1822,6 +2080,7 @@ async function rewriteMissingGroups({
   invariantConflicts = [],
   shapeViolations = [],
   expandShots = [],
+  continuityIssues = [],
   log = () => {},
   progress = () => {},
 }) {
@@ -1842,6 +2101,10 @@ async function rewriteMissingGroups({
   const dupIds = coverage?.handoverDuplicated || [];
   const conflictIds = (invariantConflicts || []).map((conflict) => conflict.beatId);
   const shapeIds = [...new Set((shapeViolations || []).map((row) => row && row.beatId).filter(Boolean))];
+  // 连续性问题只点名受影响的拍：重演/倒回所在的组重写，其他组原样保留。
+  const continuityIds = [
+    ...new Set((continuityIssues || []).flatMap((issue) => issue.beatIds || []).filter(Boolean)),
+  ];
   const missingIds = [
     ...(coverage?.missing || []),
     ...weakIds,
@@ -1849,6 +2112,7 @@ async function rewriteMissingGroups({
     ...(mustWithholdIds || []),
     ...conflictIds,
     ...shapeIds,
+    ...continuityIds,
     ...(expandShots || []).map((shot) => shot && shot.id).filter(Boolean),
   ];
   const wanted = new Set(missingIds);
@@ -1892,6 +2156,7 @@ async function rewriteMissingGroups({
       invariantConflicts: factsOnly ? [] : (invariantConflicts || []),
       shapeViolations: factsOnly ? [] : (shapeViolations || []),
       expandShots: factsOnly ? [] : (expandShots || []),
+      continuityIssues: factsOnly ? [] : (continuityIssues || []),
       tail: tailParagraphs(before || existingBody, 3),
       nextHead,
       brief,
@@ -1919,6 +2184,7 @@ async function rewriteMissingGroups({
     if (beats.some((beat) => shapeSet.has(beat.id))) reasons.push('shape');
     if (!factsOnly && beats.some((beat) => (coverage?.missing || []).includes(beat.id) || weakIds.includes(beat.id) || dupIds.includes(beat.id))) reasons.push('missing');
     if (!factsOnly && beats.some((beat) => (mustWithholdIds || []).includes(beat.id) || conflictIds.includes(beat.id))) reasons.push('forbidden');
+    if (!factsOnly && beats.some((beat) => continuityIds.includes(beat.id))) reasons.push('continuity');
     const entry = {
       call: count,
       kind: 'rewrite',
@@ -2822,6 +3088,9 @@ module.exports = {
   buildHandoffRules,
   planSegments,
   buildSegmentInstruction,
+  buildGroupLedger,
+  ledgerBlock,
+  detectContinuityIssues,
   buildContinuationInstruction,
   buildBeatRewriteInstruction,
   stripClosingTail,

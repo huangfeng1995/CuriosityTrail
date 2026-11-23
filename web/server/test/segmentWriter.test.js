@@ -1797,3 +1797,124 @@ test('Y3.2 重写按组留痕：低于原稿 85% 的组进 rewriteReverted，正
     '每个重写组都要有前后字数'
   );
 });
+
+// ---- P2：前情账本与拼接后连续性检查 ----
+
+/** 两组的计划：每拍都带实体，用来验证账本只收「正文里真的出现过」的道具。 */
+function ledgerPlan() {
+  const plan = makePlan(6, 3);
+  plan.beats.forEach((beat) => {
+    beat.entities = ['陈默', '技校证明'];
+  });
+  return plan;
+}
+
+test('P2 前情账本记录事件/道具/原话/时间地点/人物，并从第二组起注入指令', async () => {
+  const plan = ledgerPlan();
+  const groups = segmentWriter.planSegments(plan);
+  groups[0].content = [
+    '“把门关上，别让风进来。”陈默把技校证明塞进内袋，指节还在发抖。',
+    '第二天，雨停了。老周没有回答，只把炉子上的水壶挪开，壶底压着一张折过的旧报纸。',
+  ].join('\n\n');
+
+  const ledger = segmentWriter.buildGroupLedger({
+    groups,
+    groupIndex: 1,
+    characters: ['陈默', '老周'],
+  });
+
+  assert.ok(ledger, '第二组必须拿到账本');
+  assert.deepStrictEqual(ledger.events, ['B1：本拍目标1', 'B2：本拍目标2', 'B3：本拍目标3']);
+  assert.deepStrictEqual(ledger.props, ['技校证明'], '人物卡里的人物不算道具');
+  assert.deepStrictEqual(ledger.quotes, ['把门关上，别让风进来。']);
+  assert.match(ledger.timePlace, /^第二天/, '要记住最近一次明确的时间/地点转场');
+  assert.deepStrictEqual(ledger.present, ['陈默', '老周'], '在场人物只认最后一段里出现过的人名');
+  assert.strictEqual(
+    segmentWriter.buildGroupLedger({ groups, groupIndex: 0, characters: ['陈默'] }),
+    null,
+    '第一组没有前情，不应生成账本'
+  );
+
+  const runner = makeRunner([body('甲', 6), body('乙', 6)]);
+  const draft = await segmentWriter.draftInSegments({
+    plan,
+    runSegment: runner,
+    characters: ['陈默'],
+  });
+
+  assert.strictEqual(draft.ledgerGroups, 1, '只有第二组起才注入账本');
+  const secondGroupCall = runner.seen.find((meta) =>
+    /## 分段写作任务（第 2\/2 组）/.test(meta.instruction)
+  );
+  assert.ok(secondGroupCall, '第二组必须发起一次起稿调用');
+  assert.match(secondGroupCall.instruction, /## 前情账本/);
+  assert.match(secondGroupCall.instruction, /已完成事件：/);
+  assert.match(secondGroupCall.instruction, /当前时间地点：/);
+  assert.match(secondGroupCall.instruction, /已经发生，不要重讲，也不要回到更早的时间点/);
+});
+
+test('P2 拼接后拦下重演：后一组开头复用前一组尾段整句，只点名该组该拍', () => {
+  const plan = makePlan(4, 3);
+  const groups = segmentWriter.planSegments(plan);
+  const repeated = '陈默把技校证明折好塞进内袋，抬头看见老周正把门帘掀开一条缝。';
+  groups[0].content = `${repeated}\n\n老周把炉钩子立在墙边，炉膛里的火已经压成一层暗红。`;
+  groups[1].content = `${repeated}\n\n另一段完全不同的正文，写的是雨停之后巷口的脚步声。`;
+
+  const issues = segmentWriter.detectContinuityIssues({ groups });
+
+  assert.strictEqual(issues.length, 1, '只应报一条重演');
+  assert.strictEqual(issues[0].kind, 'repeat');
+  assert.strictEqual(issues[0].group, 1);
+  assert.deepStrictEqual(issues[0].beatIds, [groups[1].beats[0].id], '问题段落属于第二组的第一拍');
+  assert.strictEqual(issues[0].against, 0);
+  assert.ok(issues[0].evidence.includes('技校证明'));
+});
+
+test('P2 拼接后拦下时间倒序：后一组以「三天前」开头就算倒回', () => {
+  const plan = makePlan(4, 3);
+  const groups = segmentWriter.planSegments(plan);
+  groups[0].content = '陈默推门进院，老周正蹲在台阶上修一只坏掉的收音机。';
+  groups[1].content = '三天前，陈默还不认识老周。\n\n那天他第一次走进这条巷子，只带了一只旧包。';
+
+  const issues = segmentWriter.detectContinuityIssues({ groups });
+
+  assert.strictEqual(issues.length, 1);
+  assert.strictEqual(issues[0].kind, 'timeline');
+  assert.strictEqual(issues[0].group, 1);
+  assert.deepStrictEqual(issues[0].beatIds, [groups[1].beats[0].id]);
+  assert.match(issues[0].evidence, /^三天前/);
+});
+
+test('P2 顺叙且不重演的相邻两组不误报', () => {
+  const plan = makePlan(4, 3);
+  const groups = segmentWriter.planSegments(plan);
+  groups[0].content = '陈默推门进院，老周正蹲在台阶上修一只坏掉的收音机，焊锡味混着雨气。';
+  groups[1].content = '老周把螺丝刀放下，抬手指了指屋里那盏一直没亮的灯，示意陈默自己进去看。';
+
+  assert.deepStrictEqual(segmentWriter.detectContinuityIssues({ groups }), []);
+});
+
+test('P2 连续性问题只重写问题组，沿用既有 85% 回滚与调用记账', async () => {
+  const { plan, groups } = rewriteFixture();
+  const runner = parsedRunner([
+    beatReply('B2', Array.from({ length: 5 }, () => '改'.repeat(100))),
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: [], weak: [] },
+    continuityIssues: [
+      { group: 0, beatIds: ['B2'], kind: 'repeat', evidence: '陈默把技校证明折好', against: 0 },
+    ],
+    runSegment: runner,
+    callCount: 0,
+    maxCalls: 8,
+  });
+
+  assert.strictEqual(runner.seen.length, 1, '只重写问题组一次');
+  assert.match(runner.seen[0].instruction, /重演了前文已经写过的动作/);
+  assert.match(runner.seen[0].instruction, /与前文重复、或把时间倒回了前文之前/);
+  assert.ok(out.calls[0].reasons.includes('continuity'), '重写原因要记成 continuity');
+  assert.strictEqual(out.callCount, 1);
+});
