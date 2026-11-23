@@ -532,6 +532,41 @@ function findShortShots(plan, report, ratio = SHOT_FILL_RATIO) {
 }
 
 /**
+ * 全章字数低于 5000 时要扩写的拍。
+ *
+ * 旧逻辑只看单拍是否低于目标的 85%：全章 4735 字（94.7%）时每一拍都可能
+ * 刚好达标，扩写一次都不会触发，最后靠一次起稿定输赢。这里补一层全章闸门：
+ * 总字数不足 5000，就按「缺口 / 该拍剩余额度」挑出最该补的拍，交给同一套
+ * 追加式扩写；各拍都已到目标（计划本身配额不足）时，挑字数最多的一拍
+ * 把整段缺口记在它头上，仍然要真跑一次扩写。
+ *
+ * @returns {Array<{id: string, chars: number, target: number}>}
+ */
+function findChapterDeficitShots(plan, report, floor = TARGET_CHAPTER_CHARS) {
+  const rows = shotCharStats(plan, report);
+  const total = rows.reduce((sum, row) => sum + row.chars, 0);
+  if (total >= floor) return [];
+  let gap = floor - total;
+
+  const picked = [];
+  const headroom = rows
+    .map((row) => ({ ...row, room: Math.max(0, row.target - row.chars) }))
+    .filter((row) => row.room > 0)
+    .sort((a, b) => b.room - a.room);
+  for (const row of headroom) {
+    if (gap <= 0) break;
+    picked.push({ id: row.id, chars: row.chars, target: row.target });
+    gap -= row.room;
+  }
+
+  if (!picked.length && rows.length) {
+    const biggest = [...rows].sort((a, b) => b.chars - a.chars)[0];
+    picked.push({ id: biggest.id, chars: biggest.chars, target: biggest.chars + gap });
+  }
+  return picked;
+}
+
+/**
  * 交付时的篇幅自检。
  *
  * 扩写过的拍：低于目标 95% 才记（95%–100% 的尾差不再打扰作者）；
@@ -3678,6 +3713,7 @@ module.exports = {
   beatTargetChars,
   shotCharStats,
   findShortShots,
+  findChapterDeficitShots,
   underFilledShots,
   buildExpandInstruction,
   expandedBeatsFrom,

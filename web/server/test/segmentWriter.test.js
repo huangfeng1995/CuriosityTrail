@@ -1395,6 +1395,54 @@ test('A1 引号片段密度与对白占比各自有独立阈值', () => {
   );
 });
 
+test('A5 全章不足 5000 时按缺口挑扩写拍，单拍刚好达标也要真扩', () => {
+  // 两拍各自 2360/2375，都过了单拍 85% 线，但全章只有 4735。
+  const plan = {
+    beats: [
+      { id: 'B1', targetChars: 2500 },
+      { id: 'B2', targetChars: 2500 },
+    ],
+  };
+  const report = {
+    beats: [
+      { id: 'B1', chars: 2360 },
+      { id: 'B2', chars: 2375 },
+    ],
+  };
+  const shots = segmentWriter.findChapterDeficitShots(plan, report);
+  assert.ok(shots.length > 0, '全章低于 5000 必须挑出扩写拍');
+  const headroom = shots.reduce((sum, shot) => sum + (shot.target - shot.chars), 0);
+  assert.ok(headroom >= 5000 - 4735, '挑出的拍要覆盖全章缺口');
+
+  // 各拍都已到目标、合计仍不足：兜底挑字数最多的一拍，把缺口记在它头上。
+  const fullPlan = {
+    beats: [
+      { id: 'B1', targetChars: 2400 },
+      { id: 'B2', targetChars: 2400 },
+    ],
+  };
+  const fullReport = {
+    beats: [
+      { id: 'B1', chars: 2400 },
+      { id: 'B2', chars: 2400 },
+    ],
+  };
+  const fallback = segmentWriter.findChapterDeficitShots(fullPlan, fullReport);
+  assert.strictEqual(fallback.length, 1, '配额本身不足也要真跑一次，不能凑不出拍就跳过');
+  assert.strictEqual(fallback[0].target, 2400 + 200);
+
+  // 已够 5000 不再扩写。
+  assert.deepStrictEqual(
+    segmentWriter.findChapterDeficitShots(plan, {
+      beats: [
+        { id: 'B1', chars: 2500 },
+        { id: 'B2', chars: 2500 },
+      ],
+    }),
+    []
+  );
+});
+
 test('A3 比喻堆叠与泛称指代各自有范文阈值', () => {
   const plan = makePlan(2, 15);
   const imagery = Array.from(

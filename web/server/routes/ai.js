@@ -2782,20 +2782,33 @@ router.post('/chat', async (req, res) => {
       && beatPlan
       && beatCheck
       && wordSharesReport
-      && wordSharesReport.applicable
+      && Array.isArray(wordSharesReport.beats)
+      && wordSharesReport.beats.length
       && !roundSignal.aborted
     ) {
       // 目标必须是该拍的计划汉字数（targetChars），不是 wordShare 百分比：
       // B3 的 30 表示 30%，拿它乘 0.85 永远小于实际字数，扩写会判不触发。
-      const shortShots = segmentWriter.findShortShots(beatPlan, wordSharesReport);
+      const shortShotRows = segmentWriter.findShortShots(beatPlan, wordSharesReport);
+      // 全章不足 5000 时即使每拍都「刚好达标」也要真跑扩写：
+      // 旧逻辑只按单拍 85% 触发，4735 字可以一拍都不扩，最后靠起稿定输赢。
+      const chapterShotRows = segmentWriter.findChapterDeficitShots(beatPlan, wordSharesReport);
+      const shotMap = new Map();
+      for (const shot of [...shortShotRows, ...chapterShotRows]) shotMap.set(shot.id, shot);
+      const shortShots = [...shotMap.values()];
       const affectedGroups = segmentWriter.groupsForIds(segmented.groups, shortShots.map((shot) => shot.id));
       const remainingMs = ROUND_BUDGET_MS - (Date.now() - startedAt);
       const cheapest = affectedGroups.length * SEGMENT_CALL_TIMEOUT_MS + CHECK_TIMEOUT_MS;
 
       if (shortShots.length && affectedGroups.length && remainingMs >= cheapest) {
+        const chapterChars = Number(wordSharesReport.total) || 0;
         send({
           type: 'agent_thinking',
-          label: `第 ${shortShots.map((shot) => shot.id).join('、')} 拍篇幅不足，正在扩写细节`,
+          label:
+            chapterChars < segmentWriter.TARGET_CHAPTER_CHARS
+              ? `全章 ${chapterChars} 字低于 ${segmentWriter.TARGET_CHAPTER_CHARS}，正在扩写第 ${shortShots
+                  .map((shot) => shot.id)
+                  .join('、')} 拍`
+              : `第 ${shortShots.map((shot) => shot.id).join('、')} 拍篇幅不足，正在扩写细节`,
         });
         try {
           const expandStartedAt = Date.now();
@@ -2933,7 +2946,7 @@ router.post('/chat', async (req, res) => {
     }
 
     // 扩写后仍不足 85% 的拍：交付，但必须把差距写进 beatCheck，不能静默。
-    if (beatCheck && wordSharesReport && wordSharesReport.applicable) {
+    if (beatCheck && wordSharesReport && Array.isArray(wordSharesReport.beats) && wordSharesReport.beats.length) {
       const expandedIds = shotExpand
         ? [...shotExpand.before, ...(shotExpand.supplement || [])].map((shot) => shot.id)
         : [];
@@ -2943,6 +2956,8 @@ router.post('/chat', async (req, res) => {
         expandedIds
       );
       beatCheck.shotExpanded = Boolean(shotExpand);
+      beatCheck.chapterChars = Number(wordSharesReport.total) || 0;
+      beatCheck.chapterFloor = segmentWriter.TARGET_CHAPTER_CHARS;
     }
 
     // 编排结果必须以作者看得见的方式落地：reason 前挂一个徽标，

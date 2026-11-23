@@ -1199,6 +1199,10 @@ test('大纲模式：范文功能份额验收不适用', () => {
   assert.strictEqual(report.applicable, false);
   assert.strictEqual(report.reason, 'outline_mode');
   assert.deepStrictEqual(report.outOfRange, []);
+  // 不验配比，但每拍字数与总字数必须算出来：扩写闸门要看它。
+  assert.ok(report.total > 0);
+  assert.strictEqual(report.beats.length, plan.beats.length);
+  assert.ok(report.beats.every((row) => row.chars > 0));
 });
 
 test('A2 规划阶段给对白占比目标：缺省 18%，越界夹到 27%', () => {

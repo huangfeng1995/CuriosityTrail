@@ -1616,18 +1616,9 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
   }
 
   // 按大纲拆拍时不套范文的功能份额：function 是自由标签，没有「discussion 25%」
-  // 这种目标。份额验收只在无大纲的六类兜底模式里生效。
-  if (plan && plan.planMode === 'outline') {
-    return {
-      applicable: false,
-      reason: 'outline_mode',
-      total: 0,
-      beats: [],
-      roleShares: emptyRoleShares,
-      outOfRange: [],
-      shareMissing: [],
-    };
-  }
+  // 这种目标。份额验收只在无大纲的六类兜底模式里生效；但每拍的字数与总字数
+  // 仍要算出来——扩写判断靠它，不能因为不验配比就看不到「全章只有 4735 字」。
+  const outlineMode = Boolean(plan && plan.planMode === 'outline');
 
   const ranges = shareParagraphRanges(beats, paragraphs.length);
   const rows = [];
@@ -1650,6 +1641,18 @@ function checkWordShares(plan, body, tolerance = SHARE_TOLERANCE) {
       hit: hasTarget ? Math.abs(share - target) <= tolerance : false,
       chars,
     });
+  }
+
+  if (outlineMode) {
+    return {
+      applicable: false,
+      reason: 'outline_mode',
+      total,
+      beats: rows,
+      roleShares: emptyRoleShares,
+      outOfRange: [],
+      shareMissing: [],
+    };
   }
 
   // 按功能汇总：检查表要的是「discussion 25%、farewell 18%」这类实测配比，
