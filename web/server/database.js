@@ -49,8 +49,11 @@ let db = new sqlite3.Database(config.dbPath);
  *              查询走既有的 idx_chapters_work，不需要新建索引。
  * 版本 18 → 19：设定压力测试风险清单（setting_risks）。新表只增不改，
  *              老库建空表即可；索引放在 ensureColumn 之后统一补建。
+ * 版本 19 → 20：章节拍表落库（chapter_plans）。plan 存节拍表 JSON，
+ *              outline_hash / body_hash 记规划时的大纲与正文指纹，用于判断
+ *              计划是否过期；老库建空表，不碰任何已有业务表。
  */
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 
 /**
  * 版本号之前的老库遗留表。
@@ -692,6 +695,27 @@ CREATE TABLE IF NOT EXISTS setting_risks (
   modified_at   TEXT NOT NULL
 );
 
+-- 章节拍表落库（HP11 / P.8.2）。
+--
+-- 同一章只保留最近一次规划：重进同一章或重开写时直接复用，
+-- 只有大纲或正文指纹变化（计划已过期）才重新规划。
+-- HP11 只落 plan 与 brief；options/chosen 留给 HP12 的暂停点使用。
+CREATE TABLE IF NOT EXISTS chapter_plans (
+  id           TEXT PRIMARY KEY,
+  work_id      TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+  chapter_id   TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+  plan         TEXT NOT NULL,
+  brief        TEXT,
+  status       TEXT NOT NULL DEFAULT 'draft'
+               CHECK (status IN ('draft','awaiting_choice','confirmed','abandoned')),
+  options      TEXT NOT NULL DEFAULT '[]',
+  chosen       TEXT,
+  outline_hash TEXT NOT NULL DEFAULT '',
+  body_hash    TEXT NOT NULL DEFAULT '',
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+
 `;
 
 /**
@@ -724,6 +748,9 @@ CREATE INDEX IF NOT EXISTS idx_card_proposals_origin
 -- v19：设定风险清单。新表本身由 SCHEMA 建好，索引按约定统一放在补列之后。
 CREATE INDEX IF NOT EXISTS idx_setting_risks_work
   ON setting_risks (work_id, status, created_at);
+-- v20：章节拍表。按章取最近一次规划，索引同样放在补列之后。
+CREATE INDEX IF NOT EXISTS idx_chapter_plans_chapter
+  ON chapter_plans (chapter_id, updated_at);
 `;
 
 /** 需要 user_id 的业务表。 */

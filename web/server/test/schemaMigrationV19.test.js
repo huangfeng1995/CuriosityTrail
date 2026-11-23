@@ -110,7 +110,7 @@ test.after(() => {
 
 test('v18 真实形态：新增 setting_risks，老作品/章节/摘要逐项不变', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 19, '迁移后版本应为 19');
+  assert.strictEqual(version.user_version, 20, '迁移后版本应为 20');
 
   const table = await db.get(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'setting_risks'"
@@ -121,6 +121,11 @@ test('v18 真实形态：新增 setting_risks，老作品/章节/摘要逐项不
     "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_setting_risks_work'"
   );
   assert.ok(index, '索引必须在补列之后建好');
+
+  const planTable = await db.get(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_plans'"
+  );
+  assert.ok(planTable, 'chapter_plans 必须存在（v20 与 v19 一并执行）');
 
   const chapter = await db.get('SELECT * FROM chapters WHERE id = ?', [CHAPTER_ID]);
   assert.strictEqual(chapter.content, CHAPTER_BODY, '正文必须逐字保留');
@@ -153,7 +158,7 @@ test('v18 真实形态：二次启动幂等，摘要与风险表不被清空', a
 
   assert.ok(!logs.some((line) => line.includes('执行增量迁移')), '二次启动不应再迁移');
   const version = await db.all('PRAGMA user_version');
-  assert.strictEqual(version[0].user_version, 19);
+  assert.strictEqual(version[0].user_version, 20);
 
   const risk = await db.get('SELECT title FROM setting_risks WHERE id = ?', ['r1']);
   assert.strictEqual(risk.title, '时间线冲突');

@@ -46,6 +46,7 @@ const {
   DANGER_TYPE,
 } = require('../services/agent/beatPlan');
 const planBrief = require('../services/agent/planBrief');
+const planStore = require('../services/agent/planStore');
 const backgroundFacts = require('../services/pipeline/backgroundFacts');
 const referenceAnchor = require('../services/agent/referenceAnchor');
 const segmentWriter = require('../services/agent/segmentWriter');
@@ -1121,6 +1122,8 @@ router.post('/chat', async (req, res) => {
     const planningEnabled = roleKey === 'writer' && Boolean(chapterId);
     let beatPlan = null;
     let planDegraded = '';
+    // 非空表示本轮直接复用了已落库的拍表：不跑 brief、不跑规划模型调用。
+    let reusedPlan = null;
     let brief = null;
     let briefCoverageResult = null;
     let backgroundFactRows = [];
@@ -1208,13 +1211,43 @@ router.post('/chat', async (req, res) => {
           ? await loadPreviousMainType(workId, chapterId)
           : '';
 
+        // ---- 复用已落库的拍表（HP11）----
+        //
+        // 同一章的大纲与正文都没变时，直接采用上一次的拍表与 brief，
+        // 省掉 brief + 规划 + 重排的全部模型调用。指纹对不上（正文或大纲
+        // 改过）就当作过期，照常重排；旧行保留在库里，便于排查。
+        try {
+          const reusable = await planStore.loadReusablePlan({ workId, chapterId });
+          if (reusable && reusable.plan) {
+            reusedPlan = reusable.plan;
+            beatPlan = reusable.plan;
+            brief = reusable.brief || null;
+            planDegraded = 'reused';
+            send({ type: 'agent_thinking', label: '复用本章已有节拍表' });
+          } else if (reusable && reusable.stale) {
+            console.log(
+              JSON.stringify({
+                event: 'ai_plan_stale',
+                traceId,
+                userId: req.userId,
+                chapterId,
+                reason: reusable.reason,
+              })
+            );
+          }
+        } catch (err) {
+          console.error('[ai] 读取已落库拍表失败，按重新规划处理:', err.message);
+        }
+
         // ---- 分场 brief（先于节拍规划）----
         //
         // 粗提纲只能排进提纲里已有的东西：没写「交弓/托付」，规划器就排不出。
         // 这里先把「本章必须发生的动作」补成分场级清单，再交给规划器硬覆盖。
         // 失败一律回落到无 brief 的旧链路，不因为多一步而拖挂整轮。
-        let briefSystemPrompt = planContext.messages[0].content;
-        try {
+        let briefSystemPrompt = '';
+        if (!reusedPlan) {
+          briefSystemPrompt = planContext.messages[0].content;
+          try {
           const missingMaterials = await all(
             `SELECT title FROM materials
              WHERE user_id = ? AND (work_id = ? OR work_id IS NULL OR work_id = '')
@@ -1321,6 +1354,7 @@ router.post('/chat', async (req, res) => {
         } catch (err) {
           console.error('分场 brief 失败，沿用无 brief 链路：', err.message);
         }
+        }
 
         const makePlanOptions = () => ({
           temperature: role?.temperature,
@@ -1332,22 +1366,27 @@ router.post('/chat', async (req, res) => {
           signal: AbortSignal.any([roundSignal, AbortSignal.timeout(PLAN_TIMEOUT_MS)]),
         });
 
-        const planOut = await generateBeatPlan({
-          provider,
-          systemPrompt: briefSystemPrompt,
-          instruction: String(message),
-          options: makePlanOptions(),
-          planMode,
-          ground: planGround,
-          allowedTypes: allowedBeatTypes,
-          previousMainType,
-        });
+        let planOut;
+        if (reusedPlan) {
+          planOut = { plan: reusedPlan, raw: '', errors: [], reason: 'reused', usage: null };
+        } else {
+          planOut = await generateBeatPlan({
+            provider,
+            systemPrompt: briefSystemPrompt,
+            instruction: String(message),
+            options: makePlanOptions(),
+            planMode,
+            ground: planGround,
+            allowedTypes: allowedBeatTypes,
+            previousMainType,
+          });
+        }
 
         const planMs = Date.now() - planStartedAt;
         if (planOut.plan) {
           beatPlan = planOut.plan;
           const planNotes = [];
-          if (beatPlan.salvaged) {
+          if (!reusedPlan && beatPlan.salvaged) {
             // R4：结构校验失败时按「最接近合法」的版本交付，但必须记账缺什么。
             planNotes.push(
               `plan_salvaged:${(planOut.errors || []).slice(0, 3).join('；') || '结构不合格'}`
@@ -1385,7 +1424,7 @@ router.post('/chat', async (req, res) => {
           const briefMissing = gap.coverage
             ? gap.coverage.missing.filter((item) => item.slot !== 'opening')
             : [];
-          if ((needFunction || briefMissing.length) && replans < 2 && !roundSignal.aborted) {
+          if (!reusedPlan && (needFunction || briefMissing.length) && replans < 2 && !roundSignal.aborted) {
             const parts = [];
             if (needFunction) {
               parts.push(
@@ -1424,7 +1463,7 @@ router.post('/chat', async (req, res) => {
 
           // R2：对手没落进开场拍时，只重排开场一次，其余拍要求原样保留。
           // 有大纲时不套 opening 功能拍，这条重排不适用。
-          if (planMode !== 'outline' && gap.oppMissing && replans < 2 && !roundSignal.aborted) {
+          if (!reusedPlan && planMode !== 'outline' && gap.oppMissing && replans < 2 && !roundSignal.aborted) {
             send({ type: 'agent_thinking', label: '正在把外部对手落进开场拍' });
             const replanOut = await generateBeatPlan({
               provider,
@@ -1511,7 +1550,25 @@ router.post('/chat', async (req, res) => {
                 .join('|')}`
             );
           }
-          planDegraded = degradedParts.join('|');
+          planDegraded = [reusedPlan ? 'reused' : '', degradedParts.join('|')]
+            .filter(Boolean)
+            .join('|');
+
+          // 落库最终采用的拍表与 brief。放在重排与 brief 落位之后，
+          // 存的是写手真正会看到的那一版；复用轮次不重写，避免无谓刷新时间戳。
+          if (!reusedPlan) {
+            try {
+              await planStore.saveChapterPlan({
+                workId,
+                chapterId,
+                plan: beatPlan,
+                brief,
+                status: 'confirmed',
+              });
+            } catch (err) {
+              console.error('[ai] 拍表落库失败，本轮照常写作:', err.message);
+            }
+          }
 
           // 把「本章计划揭示的事实」真正接进知情边界。
           //
@@ -1557,6 +1614,7 @@ router.post('/chat', async (req, res) => {
             briefMissing: briefCoverageResult ? briefCoverageResult.missing.map((x) => x.id) : [],
             plotCards: plotCardRows.length,
             pipeline: pipelineEnabled,
+            reused: Boolean(reusedPlan),
             previousMainType,
             dangerBeats: beatPlan
               ? beatPlan.beats.filter((beat) => beat.type === DANGER_TYPE).map((beat) => beat.id)

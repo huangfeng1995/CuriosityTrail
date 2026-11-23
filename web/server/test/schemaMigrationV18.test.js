@@ -101,7 +101,7 @@ test.after(() => {
 
 test('v17 真实形态：补上摘要三列，老章节正文与字段逐项不变', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 19, '迁移后版本应为 19');
+  assert.strictEqual(version.user_version, 20, '迁移后版本应为 20');
 
   const columns = await db.all('PRAGMA table_info(chapters)');
   const names = columns.map((c) => c.name);
@@ -158,7 +158,7 @@ test('v17 真实形态：二次启动幂等，摘要不被清空', async () => {
   assert.ok(!logs.some((line) => line.includes('执行增量迁移')), '二次启动不应再迁移');
 
   const version = await db.all('PRAGMA user_version');
-  assert.strictEqual(version[0].user_version, 19);
+  assert.strictEqual(version[0].user_version, 20);
 
   const row = await db.get('SELECT summary, summary_words FROM chapters WHERE id = ?', [CHAPTER_ID]);
   assert.match(row.summary, /旧案/, '二次启动后摘要不能丢');
