@@ -455,3 +455,44 @@ test('C 只共享同场人物/地名不算同一条信息，不能误压背景�
   );
   assert.strictEqual(merged.backgroundWithheld, undefined, '不能误判成冲突');
 });
+
+test('C 关键词包含与 9 字公共子串都能认出「征辟-牵制河北」是同一条信息', () => {
+  const facts = [
+    {
+      id: 'f2',
+      fact_type: 'background',
+      content: '杨俊此次被司空征辟，实为曹操借河内豪族牵制河北；这层用意在抵达许都之前不得点破。',
+      keywords: '司空征辟,河内豪族,牵制河北',
+    },
+    {
+      id: 'f1',
+      fact_type: 'background',
+      content: '杨平今年十八岁，生于光和四年，自幼寄养在温县司马防家。',
+      keywords: '十八岁,光和四年,寄养,温县',
+    },
+  ];
+  const brief = {
+    items: [
+      {
+        id: 'MW2',
+        kind: 'mustWithhold',
+        text: '不得点破曹操征辟杨俊是为借河内豪族牵制河北的用意',
+        keywords: ['征辟', '河内'],
+      },
+      {
+        id: 'MW3',
+        kind: 'mustWithhold',
+        text: '不得解释司马防在温县所忧的具体是哪一方势力，也不得让杨平此时明白许都的局势',
+        keywords: ['许都', '局势'],
+      },
+    ],
+  };
+  const merged = backgroundFacts.mergeIntoBrief(brief, facts);
+  assert.strictEqual(merged.backgroundWithheld.length, 1);
+  assert.strictEqual(merged.backgroundWithheld[0].factId, 'f2');
+  assert.strictEqual(merged.backgroundWithheld[0].withholdId, 'MW2');
+  assert.ok(
+    merged.items.some((item) => item.kind === 'mustReveal' && item.text.includes('十八岁')),
+    '年龄/寄养事实照常交代'
+  );
+});

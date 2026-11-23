@@ -491,10 +491,18 @@ function withholdConflict(fact, item) {
 
   const factKeys = splitKeywords(fact.keywords);
   const itemKeys = splitKeywords(item.keywords);
-  const shared = itemKeys.filter((key) => factKeys.includes(key));
+  // 关键词允许包含关系：「征辟」命中事实关键词「司空征辟」，
+  // 「河内」命中「河内豪族」。只比关键词，不把事实正文里出现的专名
+  // 当成命中，否则「司马防/温县」会把同场人物误判成同一条信息。
+  const shared = itemKeys.filter((key) =>
+    factKeys.some((factKey) => factKey.includes(key) || key.includes(factKey))
+  );
   if (shared.length >= 2) return true;
 
-  return longestCommonSubstringLength(factText, itemCore) >= 10;
+  // 关键词缺失或模型换写时，用去掉禁止语后的最长公共子串兜底：
+  // 「借河内豪族牵制河北」9 字已足够说明是同一条信息；
+  // 同场人物只会共享 3–6 字的专名，不会被误判。
+  return longestCommonSubstringLength(factText, itemCore) >= 8;
 }
 
 /** brief 里被 mustWithhold 压住的背景事实（按 id 与原文两种键）。 */
