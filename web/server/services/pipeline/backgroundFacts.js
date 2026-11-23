@@ -113,6 +113,17 @@ function beatParagraphRanges(beats, paragraphCount) {
   return ranges;
 }
 
+/** 只保留仍需在本章交代的背景事实；被 mustWithhold 压住的不再计入。 */
+function activeBackgroundFacts(facts, brief) {
+  const keys = withheldFactKeys(brief);
+  return (facts || []).filter((fact) => {
+    if (normalizeText(fact.fact_type) !== FACT_TYPE_BACKGROUND) return false;
+    if (keys.ids.has(normalizeText(fact.id))) return false;
+    if (keys.contents.has(normalizeText(fact.content))) return false;
+    return true;
+  });
+}
+
 /**
  * 信息释放时间表：每条背景事实最早允许在第几拍说。
  *
@@ -122,9 +133,7 @@ function beatParagraphRanges(beats, paragraphCount) {
 function revealSchedule({ facts = [], plan = null, brief = null } = {}) {
   const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
   if (!beats.length) return null;
-  const background = (facts || []).filter(
-    (fact) => normalizeText(fact.fact_type) === FACT_TYPE_BACKGROUND
-  );
+  const background = activeBackgroundFacts(facts, brief);
   if (!background.length) return null;
 
   const items = brief && Array.isArray(brief.items)
@@ -274,9 +283,7 @@ async function upgradeBackgroundFacts({ userId, workId, materialIds = [], facts 
  */
 function checkMustReveal({ facts = [], body = '', plan = null, brief = null }) {
   const text = normalizeText(body);
-  const background = (facts || []).filter(
-    (fact) => normalizeText(fact.fact_type) === FACT_TYPE_BACKGROUND
-  );
+  const background = activeBackgroundFacts(facts, brief);
   const beats = plan && Array.isArray(plan.beats) ? plan.beats : [];
   const schedule = revealSchedule({ facts: background, plan, brief });
   const paragraphs = splitParagraphs(text);
@@ -330,6 +337,7 @@ function checkMustReveal({ facts = [], body = '', plan = null, brief = null }) {
     covered,
     missing,
     premature,
+    withheld: (brief && Array.isArray(brief.backgroundWithheld) && brief.backgroundWithheld) || [],
   };
 }
 
@@ -370,7 +378,7 @@ function mustRevealForChapter({
   brief = null,
 }) {
   const protagonist = pickProtagonist(characters);
-  const empty = { applicable: false, protagonist, total: 0, covered: 0, missing: [], premature: [] };
+  const empty = { applicable: false, protagonist, total: 0, covered: 0, missing: [], premature: [], withheld: [] };
   if (!protagonist) return empty;
 
   const variants = characterVariants(protagonist);
@@ -385,6 +393,19 @@ function mustRevealForChapter({
   // 库里一条背景事实都没有时，不能因为「没有可检查项」就静默放过：
   // 主角出场章必须让作者看见「背景事实还没入库」，否则正文会继续缺年龄/籍贯/寄养原因。
   if (check.total === 0) {
+    // 有背景事实、但全部被 mustWithhold 压住：这是明确的「本章不交代」，
+    // 不能报成「尚未入库」，否则写手会被逼着点破悬念。
+    if (check.withheld.length) {
+      return {
+        applicable: true,
+        protagonist,
+        total: 0,
+        covered: 0,
+        missing: [],
+        premature: [],
+        withheld: check.withheld,
+      };
+    }
     return {
       applicable: true,
       protagonist,
@@ -399,6 +420,7 @@ function mustRevealForChapter({
         },
       ],
       premature: [],
+      withheld: [],
     };
   }
 
@@ -414,10 +436,48 @@ function mustRevealBadge(missing = []) {
 }
 
 /**
+ * background 与 mustWithhold 撞同一条信息时，谁优先。
+ *
+ * 口径：**mustWithhold 优先**。
+ *
+ *   - background 的语义是「读者需要知道」；mustWithhold 的语义是
+ *     「本章不能点破」。两者落在同一信息上时，点破会直接毁掉本章的悬念钩子，
+ *     代价远大于晚一章交代；所以这条事实不再进本章的 mustReveal，
+ *     写手只按 mustWithhold 处理（可以暗示，不得解释）。
+ *   - 不是静默丢弃：冲突项写进 brief.backgroundWithheld（事实/withhold 双方 id 与原文），
+ *     mustReveal 自检也不再拿它报「未交代」，作者能在数据里看到这条冲突，
+ *     要提前交代就去掉/放宽对应的 mustWithhold。
+ *
+ * 判定只做「同信息」而非「同场景」：事实正文与 withhold 正文/关键词
+ * 至少共享一个 ≥2 字的词，或一方正文包含另一方。
+ */
+function withholdConflict(fact, item) {
+  const factText = normalizeText(fact.content).replace(/\s+/g, '');
+  const itemText = normalizeText(item.text).replace(/\s+/g, '');
+  if (!factText || !itemText) return false;
+  if (factText.includes(itemText) || itemText.includes(factText)) return true;
+  const keys = [
+    ...splitKeywords(item.keywords),
+    ...deriveKeywords(itemText),
+  ];
+  return keys.some((key) => key && factText.includes(key));
+}
+
+/** brief 里被 mustWithhold 压住的背景事实（按 id 与原文两种键）。 */
+function withheldFactKeys(brief) {
+  const rows = brief && Array.isArray(brief.backgroundWithheld) ? brief.backgroundWithheld : [];
+  return {
+    ids: new Set(rows.map((row) => normalizeText(row.factId)).filter(Boolean)),
+    contents: new Set(rows.map((row) => normalizeText(row.content)).filter(Boolean)),
+  };
+}
+
+/**
  * 把背景事实并进分场 brief 的 mustReveal。
  *
  * 这是确定性合并：模型没给、漏给，背景事实也不能漏。
  * 没有背景事实时原样返回（null 仍是 null，保证旧链路逐字不变）。
+ * 与 mustWithhold 撞同一条信息时不并 mustReveal，改记 backgroundWithheld。
  *
  * @param {Object|null} brief
  * @param {Array} facts
@@ -430,14 +490,32 @@ function mergeIntoBrief(brief, facts = []) {
   if (!background.length) return brief || null;
 
   const items = brief && Array.isArray(brief.items) ? [...brief.items] : [];
+  const withholds = items.filter((item) => item && item.kind === 'mustWithhold');
   const existing = new Set(items.map((item) => `${item.kind}|${item.text}`));
   // 与 planBrief 的 id 前缀一致：背景事实一律落在 mustReveal，用 MR 计数。
   let revealCount = items.filter((item) => item.kind === 'mustReveal').length;
+  const withheld = brief && Array.isArray(brief.backgroundWithheld)
+    ? [...brief.backgroundWithheld]
+    : [];
 
   for (const fact of background) {
     const content = normalizeText(fact.content);
+    if (!content) continue;
+    const conflict = withholds.find((item) => withholdConflict(fact, item));
+    if (conflict) {
+      if (!withheld.some((row) => normalizeText(row.factId) === normalizeText(fact.id))) {
+        withheld.push({
+          factId: fact.id || '',
+          content,
+          withholdId: conflict.id || '',
+          withholdText: normalizeText(conflict.text),
+          reason: 'mustWithhold 优先：同一信息本章不得点破',
+        });
+      }
+      continue;
+    }
     const key = `mustReveal|${content}`;
-    if (!content || existing.has(key)) continue;
+    if (existing.has(key)) continue;
     existing.add(key);
     revealCount += 1;
     items.push({
@@ -450,7 +528,12 @@ function mergeIntoBrief(brief, facts = []) {
     });
   }
 
-  return { ...(brief || {}), items, dropped: (brief && brief.dropped) || [] };
+  return {
+    ...(brief || {}),
+    items,
+    dropped: (brief && brief.dropped) || [],
+    ...(withheld.length ? { backgroundWithheld: withheld } : {}),
+  };
 }
 
 module.exports = {

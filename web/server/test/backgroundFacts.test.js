@@ -331,3 +331,94 @@ test('agent 抽取入库：同一内容幂等，接口可一次写入多条', as
   const rows = await db.all("SELECT * FROM story_facts WHERE work_id = ? AND fact_type = 'background'", [work.id]);
   assert.strictEqual(rows.length, 2);
 });
+
+// ---------------------------------------------------------------------------
+// C：background 与 mustWithhold 撞同一条信息 → mustWithhold 优先
+// ---------------------------------------------------------------------------
+
+test('C 冲突事实不进 mustReveal，记入 backgroundWithheld；非冲突事实照常交代', () => {
+  const facts = [
+    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北' },
+    { id: 'f10', fact_type: 'background', content: '杨平今年十八岁', keywords: '十八岁' },
+  ];
+  const brief = {
+    items: [
+      {
+        id: 'MW1',
+        kind: 'mustWithhold',
+        text: '不得解释父亲被司空征辟的用意',
+        keywords: ['征辟', '牵制'],
+        source: '本章大纲',
+      },
+    ],
+  };
+
+  const merged = backgroundFacts.mergeIntoBrief(brief, facts);
+  const reveals = merged.items.filter((item) => item.kind === 'mustReveal').map((item) => item.text);
+  assert.ok(
+    !reveals.some((text) => text.includes('牵制河北')),
+    '与 mustWithhold 冲突的事实不能同时要求交代'
+  );
+  assert.ok(reveals.some((text) => text.includes('十八岁')), '非冲突事实仍要交代');
+  assert.strictEqual(merged.backgroundWithheld.length, 1);
+  assert.strictEqual(merged.backgroundWithheld[0].factId, 'f9');
+  assert.strictEqual(merged.backgroundWithheld[0].withholdId, 'MW1');
+  assert.match(merged.backgroundWithheld[0].reason, /mustWithhold 优先/);
+});
+
+test('C 自检不再把被 withhold 压住的事实报成「未交代」', () => {
+  const facts = [
+    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北' },
+    { id: 'f10', fact_type: 'background', content: '杨平今年十八岁', keywords: '十八岁' },
+  ];
+  const brief = backgroundFacts.mergeIntoBrief(
+    {
+      items: [
+        {
+          id: 'MW1',
+          kind: 'mustWithhold',
+          text: '不得解释父亲被司空征辟的用意',
+          keywords: ['征辟', '牵制'],
+        },
+      ],
+    },
+    facts
+  );
+  const body = '杨平十八岁那年，头一回走进许都。';
+
+  const check = backgroundFacts.checkMustReveal({ facts, body, plan: null, brief });
+  assert.strictEqual(check.total, 1, '只检查没被压住的那条');
+  assert.strictEqual(check.covered, 1);
+  assert.deepStrictEqual(check.missing, []);
+  assert.strictEqual(check.withheld.length, 1);
+});
+
+test('C 全部背景事实都被 withhold 压住时，不报「尚未入库」', () => {
+  const facts = [
+    { id: 'f9', fact_type: 'background', content: '杨俊被司空征辟，实为曹操借河内豪族牵制河北', keywords: '征辟,河北' },
+  ];
+  const brief = backgroundFacts.mergeIntoBrief(
+    {
+      items: [
+        {
+          id: 'MW1',
+          kind: 'mustWithhold',
+          text: '不得解释父亲被司空征辟的用意',
+          keywords: ['征辟', '牵制'],
+        },
+      ],
+    },
+    facts
+  );
+  const check = backgroundFacts.mustRevealForChapter({
+    facts,
+    characters: [PROTAGONIST],
+    chapterText: '杨平随父亲走进司空府。',
+    body: '杨平没有说话。',
+    plan: null,
+    brief,
+  });
+  assert.strictEqual(check.applicable, true);
+  assert.deepStrictEqual(check.missing, [], '不能报成 notIngested');
+  assert.strictEqual(check.withheld.length, 1);
+});

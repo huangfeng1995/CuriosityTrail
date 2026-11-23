@@ -2967,6 +2967,11 @@ router.post('/chat', async (req, res) => {
     const revealBadge = revealCheck.applicable
       ? backgroundFacts.mustRevealBadge(revealCheck.missing)
       : '';
+    // background 与 mustWithhold 撞同一条信息时按 mustWithhold 优先：
+    // 事实不进本章 mustReveal，但必须让作者在 beatCheck 里看见这条冲突。
+    if (beatCheck && Array.isArray(revealCheck.withheld) && revealCheck.withheld.length) {
+      beatCheck.backgroundWithheld = revealCheck.withheld;
+    }
     if (revealCheck.applicable) {
       console.log(
         JSON.stringify({
@@ -2977,6 +2982,7 @@ router.post('/chat', async (req, res) => {
           total: revealCheck.total,
           covered: revealCheck.covered,
           missing: revealCheck.missing.map((item) => item.content),
+          withheld: (revealCheck.withheld || []).map((item) => item.content),
           rewrote: beatRewrite,
         })
       );
