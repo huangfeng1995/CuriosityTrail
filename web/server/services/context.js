@@ -423,7 +423,22 @@ async function findPreviousChapterWithBody(workId, seq) {
 }
 
 /**
- * 上一章末尾的「落点」：时间地点、在场人物、末句语气。
+ * 粗判上一章的叙述人称。
+ *
+ * 只数叙述句里的「我/我们」与「他/她/他们」，先剥掉引号内对白：
+ * 历史悬疑里人物说「我」很常见，不能因此把第三人称误判成第一人称。
+ * 判不准时按第三人称处理——这是该类作品的主流，也是范文 sample.md 的口径。
+ */
+function detectNarrativePerson(body) {
+  const narration = String(body || '').replace(/[“"「『][^”"」』]*[”"」』]/g, '');
+  const first = (narration.match(/我们|我/g) || []).length;
+  const third = (narration.match(/他们|她们|他|她/g) || []).length;
+  if (first >= 5 && first > third) return '第一人称';
+  return '第三人称';
+}
+
+/**
+ * 上一章末尾的「落点」：时间地点、在场人物、视角、末句语气。
  *
  * 数据来源只有两处：上一章已生成的摘要（setting/characters）与原文最后 800 字。
  * 不调模型、不做推测：摘要缺字段就退回原文匹配，原文也匹配不到就如实写「未标注」。
@@ -464,6 +479,7 @@ async function buildPreviousHandoffLines(previousChapter, workId) {
 
   const timePlace = summary && summary.setting ? String(summary.setting) : '';
   const openThreads = summary && summary.open_threads ? String(summary.open_threads) : '';
+  const person = detectNarrativePerson(body);
   const lastSentence = (() => {
     const clean = body.replace(/\s+/g, ' ').trim();
     if (!clean) return '';
@@ -475,6 +491,7 @@ async function buildPreviousHandoffLines(previousChapter, workId) {
     `上一章：第 ${previousChapter.seq} 章《${previousChapter.title}》`,
     `时间地点：${timePlace || '未标注，沿用上一章结尾原文，不要重新交代场景'}`,
     `在场人物：${present.length ? present.join('、') : '未标注，按原文结尾判断'}`,
+    `视角：${person}（沿用上一章，不要中途切换）`,
   ];
   if (openThreads) lines.push(`未解：${openThreads}`);
   if (lastSentence) lines.push(`末句（语气参照，不要照抄）：${lastSentence}`);

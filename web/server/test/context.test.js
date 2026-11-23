@@ -424,6 +424,7 @@ test('跨章承接：写作上下文注入上一章原文结尾', async () => {
   assert.ok(system.includes('## 跨章承接：第 1 章《第一章》落点与原文'));
   assert.ok(system.includes(prevTail), '上一章原文必须真的进 prompt');
   assert.ok(system.includes('末句（语气参照，不要照抄）'), '要给出末句语气锚点');
+  assert.ok(system.includes('视角：第三人称（沿用上一章，不要中途切换）'));
   assert.strictEqual(meta.previousChapter, prevId);
 });
 
@@ -534,6 +535,7 @@ test('跨章承接块：时间地点与在场人物来自上一章摘要，原�
 
   assert.ok(system.includes('时间地点：雪夜，城隍庙后殿'));
   assert.ok(system.includes('在场人物：周岑'));
+  assert.ok(system.includes('视角：第三人称（沿用上一章，不要中途切换）'));
   assert.ok(system.includes('未解：密诏被谁取走'));
   assert.ok(system.includes('末句（语气参照，不要照抄）：他把灯挑亮，说密诏已经不在了。'));
 });
@@ -620,6 +622,61 @@ test('默认文风基线：写手上下文注入 sample.md 实测口径，其他
   });
   assert.strictEqual(editor.meta.styleBaseline, false);
   assert.ok(!editor.messages[0].content.includes('## 文风基线'), '基线只给写手');
+});
+
+test('跨章承接：第一人称叙述被识别并沿用，对白里的「我」不误判', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-person-detect';
+  const prevId = 'person-1';
+  const chapterId = 'person-2';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, '人称测试', '', '', '', 0, ?, ?)`,
+    [workId, userId, now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第一章', 1, '', 'done', ?, '[]', '', 0, ?, ?)`,
+    [
+      prevId,
+      workId,
+      '我推门进去，看见灯还亮着。我把伞收起，听见脚步。我停在屏风后，不敢出声。我数着更鼓，手心出汗。我知道有人来过。',
+      now,
+      now,
+    ]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第二章', 2, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, now, now]
+  );
+
+  const { messages } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+  assert.ok(messages[0].content.includes('视角：第一人称（沿用上一章，不要中途切换）'));
+
+  // 第三人称叙述 + 对白里的「我」：不能误判成第一人称。
+  await db.run(
+    'UPDATE chapters SET content = ? WHERE id = ?',
+    ['他推门进去，说：「我看见了。」他把伞收起，听见脚步，停在屏风后。', prevId]
+  );
+  const second = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+  assert.ok(second.messages[0].content.includes('视角：第三人称（沿用上一章，不要中途切换）'));
 });
 
 test.after(async () => {
