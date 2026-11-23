@@ -5,6 +5,7 @@
  *
  *   GET    /api/chapters/:id            章节详情
  *   PUT    /api/chapters/:id            更新章节（blocks 为权威数据）
+ *   POST   /api/chapters/:id/summary    手动重生成章节摘要
  *   DELETE /api/chapters/:id            删除章节
  */
 
@@ -14,6 +15,7 @@ const { ownedChapter } = require('../services/scope');
 const versions = require('../services/versions');
 const { countBlockWords, countWords } = require('../services/wordCount');
 const progress = require('../services/progress');
+const chapterSummary = require('../services/summaries/chapterSummary');
 const memory = require('../services/memory/indexer');
 
 const router = express.Router();
@@ -106,9 +108,49 @@ router.put('/:id', async (req, res) => {
         sourceType: 'chapter',
         sourceId: req.params.id,
       });
+
+      // 排一次章节摘要：服务内部按章去抖、按篇幅阈值判断是否真的调用模型。
+      // 失败静默，摘要只服务后续章节的上下文，不能影响保存。
+      chapterSummary.scheduleChapterSummary({
+        userId: req.userId,
+        workId: existing.work_id,
+        chapterId: req.params.id,
+      });
     }
 
     res.json(await ownedChapter(req.params.id, req.userId));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 手动重生成章节摘要。
+ *
+ * 跳过「篇幅变化阈值」，但空章不调用模型。
+ * 失败返回 200 + ok:false，作者看到的是可重试的提示，不是服务器错误。
+ */
+router.post('/:id/summary', async (req, res) => {
+  try {
+    const chapter = await ownedChapter(req.params.id, req.userId);
+    if (!chapter) return res.status(404).json({ error: '章节不存在' });
+
+    const result = await chapterSummary.summarizeChapter({
+      userId: req.userId,
+      workId: chapter.work_id,
+      chapterId: chapter.id,
+      force: true,
+    });
+
+    if (!result.summary) {
+      return res.json({ ok: false, reason: result.reason || 'failed' });
+    }
+    res.json({
+      ok: true,
+      summary: result.summary,
+      words: result.words,
+      generatedAt: result.generatedAt,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

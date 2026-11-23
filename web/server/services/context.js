@@ -24,6 +24,8 @@ const { getRole } = require('./roles');
 const skills = require('./skills');
 const style = require('./style');
 const plotCards = require('./plotCards');
+const bookProgress = require('./bookProgress');
+const chapterSummary = require('./summaries/chapterSummary');
 const { isPipelineEnabled } = require('./pipeline/gate');
 const { knowledgeAt } = require('./pipeline/knowledge');
 
@@ -442,6 +444,10 @@ async function assembleContext(params = {}) {
     knowledgeCount: 0,
     // 本轮注入的情节卡条数。没有卡、非写手角色、或不在章节里时都是 0。
     plotCards: 0,
+    // 全书进度（推断层级 / 第几幕 / 第几卷）。无法推断时为 null。
+    bookProgress: null,
+    // 本轮注入的最近章节摘要条数。
+    recentSummaries: 0,
   };
 
   if (styleText) {
@@ -489,6 +495,42 @@ async function assembleContext(params = {}) {
       // 不注入的话，规划和写作都只能从标题猜，很容易写偏。
       if (chapter.outline) lines.push(`大纲：\n${truncate(chapter.outline, OUTLINE_LIMIT)}`);
       addPart(lines.join('\n'), PRIORITY.CONTENT);
+    }
+  }
+
+  // ---- 2.2 全书进度与前几章摘要 ----
+  //
+  // 只给写手（规划步同样走 writer），别的角色读全书位置意义不大，也省预算。
+  //
+  // 进度优先按大纲里的幕/卷推断；没有就只给章号这类确定事实（见 bookProgress）。
+  // 摘要只取本章之前的最近 4 章：够模型接上前情，又不至于挤掉本章正文。
+  if (roleKey === 'writer' && work && chapter && workId) {
+    try {
+      const listed = await all(
+        'SELECT id, title, seq, volume, status, word_count FROM chapters WHERE work_id = ? ORDER BY seq, created_at',
+        [workId]
+      );
+      const progressInfo = bookProgress.describeBookProgress({ work, chapter, chapters: listed });
+      if (progressInfo) {
+        addPart(progressInfo.text, PRIORITY.CONTENT);
+        meta.bookProgress = progressInfo;
+      }
+
+      const recent = await chapterSummary.recentSummaries({
+        workId,
+        beforeSeq: chapter.seq,
+        limit: chapterSummary.RECENT_LIMIT,
+      });
+      if (recent.length) {
+        addPart(
+          `## 前几章摘要（按时间顺序）\n${recent.map(chapterSummary.formatSummaryLine).join('\n')}`,
+          PRIORITY.CONTENT
+        );
+        meta.recentSummaries = recent.length;
+      }
+    } catch (e) {
+      // 进度/摘要都是辅助信息：取不到就跳过，不能让整轮写作失败。
+      console.error('[context] 全书进度或章节摘要加载失败:', e.message);
     }
   }
 

@@ -44,8 +44,11 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 16 → 17：卡片提案支持第四种「灵感」（kind='inspiration'）。
  *              SQLite 不能改 CHECK 约束，只能重建 card_proposals 并原样搬运数据；
  *              两个索引在重建后补建，老库的提案与状态一条不动。
+ * 版本 17 → 18：章节摘要（chapters.summary 存 JSON，另记生成时的字数与时间）。
+ *              摘要只加空列，老章保持 NULL，正文与既有字段一条不动；
+ *              查询走既有的 idx_chapters_work，不需要新建索引。
  */
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 
 /**
  * 版本号之前的老库遗留表。
@@ -118,6 +121,12 @@ CREATE TABLE IF NOT EXISTS chapters (
   content      TEXT,
   blocks       TEXT,
   outline      TEXT,
+  -- 章节摘要（v18）。JSON：{progress, open_threads, setting, characters}。
+  -- 只给后续章节的上下文用；作者直接写的正文才是权威数据。
+  summary      TEXT,
+  -- 生成摘要时的章节字数快照：正文变化超过阈值才重算，避免每次保存都调模型。
+  summary_words INTEGER DEFAULT 0,
+  summary_updated_at TEXT,
   word_count   INTEGER DEFAULT 0,
   created_at   TEXT NOT NULL,
   modified_at  TEXT NOT NULL
@@ -892,6 +901,11 @@ async function migrate(fromVersion) {
     await ensureColumn('prompt_overrides', 'thinking', 'INTEGER');
     await ensureColumn('chapters', 'outline', 'TEXT');
     await ensureColumn('chapters', 'word_count', 'INTEGER DEFAULT 0');
+    // 17 → 18：章节摘要。只加空列，老章不回填、正文不动；
+    // 依赖的查询走既有 idx_chapters_work，不需要补建索引。
+    await ensureColumn('chapters', 'summary', 'TEXT');
+    await ensureColumn('chapters', 'summary_words', 'INTEGER DEFAULT 0');
+    await ensureColumn('chapters', 'summary_updated_at', 'TEXT');
     await ensureColumn('works', 'target_words', 'INTEGER DEFAULT 0');
     // 6 → 7：卡片来源。老库不会因为 SCHEMA 里的新列自动补上，必须单独 ALTER。
     await ensureColumn('characters', 'source_chapter_id', 'TEXT');

@@ -82,7 +82,7 @@ test.after(() => {
 
 test('v13 真实形态：messages 补上 status，老消息落在 complete，行数不变', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 17, '迁移后版本应为 17（v14–v17 一并执行）');
+  assert.strictEqual(version.user_version, 18, '迁移后版本应为 18（v14–v18 一并执行）');
 
   const columns = await db.all('PRAGMA table_info(messages)');
   const statusCol = columns.find((c) => c.name === 'status');
@@ -116,7 +116,7 @@ test('v13 真实形态：二次启动幂等，不再迁移且行数不变', asyn
   assert.ok(!logs.some((line) => line.includes('执行增量迁移')), '二次启动不应再迁移');
 
   const version = await db.all('PRAGMA user_version');
-  assert.strictEqual(version[0].user_version, 17);
+  assert.strictEqual(version[0].user_version, 18);
 
   const count = await db.get('SELECT COUNT(*) AS c FROM messages');
   assert.strictEqual(count.c, LEGACY_MESSAGE_COUNT, '二次启动后 messages 行数不能变化');

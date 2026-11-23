@@ -35,6 +35,8 @@ function setupTempEnv() {
   // 生成即记录的草稿提案默认关闭：后台识别会挤占假模型的响应队列。
   // 需要测这条链路的用例显式传 provider，绕过这个开关。
   process.env.CARD_PROPOSALS_AUTO = 'off';
+  // 保存后自动生成章节摘要同理：默认关闭，用例显式传 provider 直接测生成逻辑。
+  process.env.CHAPTER_SUMMARY_AUTO = 'off';
 
   return {
     dataDir,

@@ -13,6 +13,42 @@ import api from '../../api/client';
 import { useWorkspace } from '../../store/workspace';
 
 /**
+ * 章节行的悬停提示：有摘要就顺带把摘要摊开，没有就只显示标题。
+ *
+ * 摘要存的是 JSON（推进 / 未解 / 时间地点 / 人物），这里只做展示，
+ * 解析失败一律退回标题，不让坏数据影响导航。
+ */
+function chapterTooltip(chapter) {
+  let summary = null;
+  try {
+    summary = JSON.parse(chapter.summary || 'null');
+  } catch (e) {
+    summary = null;
+  }
+  if (!summary || !summary.progress) return chapter.title;
+
+  const lines = [chapter.title, summary.progress];
+  if (summary.open_threads) lines.push(`未解：${summary.open_threads}`);
+  if (summary.setting) lines.push(`时间地点：${summary.setting}`);
+  if (Array.isArray(summary.characters) && summary.characters.length) {
+    lines.push(`人物：${summary.characters.join('、')}`);
+  }
+  return lines.join('\n');
+}
+
+/** 手动生成摘要失败时，把服务端 reason 翻成作者能懂的一句话。 */
+function summaryFailureText(reason) {
+  const map = {
+    chapter: '章节不存在',
+    provider: '没有可用的 AI 配置，请到设置页检查',
+    request: '模型请求失败，请稍后重试',
+    parse: '模型返回格式不对，请稍后重试',
+    'auto-off': '摘要功能未启用',
+  };
+  return map[reason] || '摘要生成失败，请稍后重试';
+}
+
+/**
  * 作品与章节的导航树。
  */
 export default function WorkTree({
@@ -223,7 +259,7 @@ function ChapterList({ workId, currentChapterId, issueCounts, onShowIssues }) {
             type="button"
             className="ct-tree-label"
             onClick={() => loadChapter(chapter.id)}
-            title={chapter.title}
+            title={chapterTooltip(chapter)}
           >
             {chapter.title}
           </button>
@@ -246,6 +282,27 @@ function ChapterList({ workId, currentChapterId, issueCounts, onShowIssues }) {
           <Dropdown
             menu={{
               items: [
+                {
+                  key: 'summary',
+                  icon: <FileTextOutlined />,
+                  label: chapter.summary ? '重新生成摘要' : '生成摘要',
+                  onClick: async () => {
+                    const hide = message.loading('正在生成摘要…', 0);
+                    try {
+                      const res = await api.post(`/chapters/${chapter.id}/summary`, {});
+                      hide();
+                      if (res.data?.ok) {
+                        message.success('摘要已更新');
+                        await loadWork(workId);
+                      } else {
+                        message.warning(summaryFailureText(res.data?.reason));
+                      }
+                    } catch (e) {
+                      hide();
+                      message.error(e.response?.data?.error || '摘要生成失败');
+                    }
+                  },
+                },
                 {
                   key: 'rename',
                   icon: <EditOutlined />,

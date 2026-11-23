@@ -139,7 +139,7 @@ test.after(() => {
 
 test('v16 真实形态：重建后放开 inspiration，老提案一行不丢', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 17, '迁移后版本应为 17');
+  assert.strictEqual(version.user_version, 18, '迁移后版本应为 18');
 
   const table = await db.get(
     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'card_proposals'"
@@ -206,7 +206,7 @@ test('v16 真实形态：二次启动幂等，不重复重建也不丢行', asyn
   assert.ok(!logs.some((line) => line.includes('执行增量迁移')), '二次启动不应再迁移');
 
   const version = await db.all('PRAGMA user_version');
-  assert.strictEqual(version[0].user_version, 17);
+  assert.strictEqual(version[0].user_version, 18);
 
   const count = await db.get('SELECT COUNT(*) AS c FROM card_proposals');
   assert.strictEqual(count.c, OLD_PROPOSALS.length + 1, '二次启动后提案行数不能变化');
