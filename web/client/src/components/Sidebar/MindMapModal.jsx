@@ -69,7 +69,10 @@ function removeNode(node, id) {
   const children = node.children
     .filter((c) => c.id !== id)
     .map((c) => removeNode(c, id));
-  const same = children.every((c, i) => c === node.children[i]);
+  // 删末尾元素时新数组正好是旧数组的前缀，只比元素会误判成「没变化」
+  const same =
+    children.length === node.children.length &&
+    children.every((c, i) => c === node.children[i]);
   return same ? node : { ...node, children };
 }
 
