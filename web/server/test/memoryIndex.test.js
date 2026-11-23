@@ -113,6 +113,40 @@ test('索引：章节入库后台账与向量都有', async () => {
   });
 });
 
+test('并发：两个索引任务同时写台账不会触发嵌套 BEGIN', async () => {
+  await withSidecar(async () => {
+    const userId = require('crypto').randomUUID();
+    const first = await seedWork(userId, '林昭握着一枚青铜令牌，站在雨夜的巷口。');
+    const second = await seedWork(userId, '沈砚把伞留在门外，独自走进巷子深处。');
+
+    // 后台队列默认并发 2（config.memoryIndexConcurrency），两个任务会同时
+    // 走到「台账落 pending」那一步。旧实现各自执行 BEGIN，后一个会撞进前一个
+    // 还没提交的事务里：SQLITE_ERROR: cannot start a transaction within a transaction。
+    await Promise.all([
+      indexer.indexSource({
+        userId,
+        workId: first.workId,
+        sourceType: 'chapter',
+        sourceId: first.chapterId,
+      }),
+      indexer.indexSource({
+        userId,
+        workId: second.workId,
+        sourceType: 'chapter',
+        sourceId: second.chapterId,
+      }),
+    ]);
+
+    const rows = await all(
+      'SELECT source_id, status FROM memory_chunks WHERE user_id = ?',
+      [userId]
+    );
+    assert.strictEqual(rows.length, 2, '两个来源都该进台账');
+    assert.ok(rows.every((row) => row.status === 'indexed'), '两个来源都该索引成功');
+    assert.strictEqual(fake.store.size, 2, '两条向量都该写入');
+  });
+});
+
 test('一致性：改章节后旧块被替换，新内容在向量里', async () => {
   await withSidecar(async () => {
     const userId = require('crypto').randomUUID();

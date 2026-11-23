@@ -19,7 +19,7 @@
 const crypto = require('crypto');
 
 const config = require('../../config');
-const { all, get, run, transaction } = require('../../database');
+const { all, get, run } = require('../../database');
 const client = require('./client');
 const chunker = require('./chunker');
 const sources = require('./sources');
@@ -50,6 +50,87 @@ const idleWaiters = [];
  * 什么时候算"完"？等队列里这个用户的重建任务全部跑完的那一刻。
  */
 const rebuildPending = new Map();
+
+/**
+ * 记忆索引自己的写事务队列。
+ *
+ * 为什么不能直接用 database.transaction()：它无条件执行 BEGIN。
+ * node-sqlite3 只有一条连接，后台队列默认并发 2（config.memoryIndexConcurrency），
+ * 两个索引任务会同时走到写台账那一步；后一个的 BEGIN 落进前一个还没提交的
+ * 事务里，就抛出 SQLITE_ERROR: cannot start a transaction within a transaction，
+ * 而且失败那一方还会把前一个事务的状态搞乱。
+ *
+ * 这里统一用 SAVEPOINT：
+ *   - 没有外层事务时，最外层 SAVEPOINT 自己开事务，RELEASE 即提交；
+ *   - 外层已经有事务（别的模块开的，或本模块可重入进来的）时，SAVEPOINT 只做
+ *     嵌套，不会再发一次 BEGIN；
+ *   - 模块内再加一道串行队列，避免两个并发事务的 SAVEPOINT 交替出现、释放顺序错乱。
+ */
+let txTail = Promise.resolve();
+
+/** SAVEPOINT 名字序号。 */
+let txSeq = 0;
+
+/**
+ * 在事务里执行一段工作。可重入：已经有事务句柄时用嵌套 SAVEPOINT。
+ *
+ * @param {Function} work 收到事务句柄；内部要再开事务就把句柄传下去
+ * @param {object} [parent] 已有事务句柄
+ * @returns {Promise<any>}
+ */
+async function inTransaction(work, parent = null) {
+  const name = `memory_idx_${++txSeq}`;
+
+  // 可重入：外层已经开着事务，只加一层 SAVEPOINT。
+  if (parent) {
+    await run(`SAVEPOINT ${name}`);
+    try {
+      const result = await work(parent);
+      await run(`RELEASE SAVEPOINT ${name}`);
+      return result;
+    } catch (err) {
+      await run(`ROLLBACK TO SAVEPOINT ${name}`).catch(() => {});
+      await run(`RELEASE SAVEPOINT ${name}`).catch(() => {});
+      throw err;
+    }
+  }
+
+  // 顶层事务：先排队，保证同一时刻只有一个逻辑事务占用连接。
+  const previous = txTail;
+  let release;
+  txTail = new Promise((resolve) => {
+    release = resolve;
+  });
+  await previous;
+
+  const tx = { name };
+  try {
+    await run(`SAVEPOINT ${name}`);
+    const result = await work(tx);
+    await run(`RELEASE SAVEPOINT ${name}`);
+    return result;
+  } catch (err) {
+    await run(`ROLLBACK TO SAVEPOINT ${name}`).catch(() => {});
+    await run(`RELEASE SAVEPOINT ${name}`).catch(() => {});
+    throw err;
+  } finally {
+    release();
+  }
+}
+
+/**
+ * 在事务里执行一组语句。
+ *
+ * @param {Array<{sql: string, params?: any[]}>} statements
+ * @param {object} [parent] 已有事务句柄（可重入时传入）
+ */
+function writeTransaction(statements, parent) {
+  return inTransaction(async () => {
+    for (const stmt of statements) {
+      await run(stmt.sql, stmt.params || []);
+    }
+  }, parent);
+}
 
 /**
  * 生成台账主键。
@@ -373,7 +454,7 @@ async function indexSource(task) {
   });
   const todoNos = new Set(todo.map((item) => item.chunkNo));
 
-  await transaction(
+  await writeTransaction(
     prepared.map((item) => {
       // 没变化的块保持原状态，别把 indexed 打回 pending
       const status = todoNos.has(item.chunkNo) ? 'pending' : 'indexed';
@@ -811,7 +892,7 @@ async function readMeta(userId) {
  */
 async function writeMeta(userId, values) {
   const now = new Date().toISOString();
-  await transaction(
+  await writeTransaction(
     Object.entries(values).map(([key, value]) => ({
       sql: `INSERT INTO memory_index_meta (key, value) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
