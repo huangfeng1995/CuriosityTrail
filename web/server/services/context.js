@@ -33,6 +33,15 @@ const { knowledgeAt } = require('./pipeline/knowledge');
 const OUTLINE_LIMIT = 4000;
 /** 上一场景结尾最多注入的字符数 */
 const CONTINUITY_LIMIT = 500;
+/**
+ * 跨章写作时注入的上一章原文上限。
+ *
+ * 比规划用的 500 字长：写作要接住上一章的场面、语气与最后动作，
+ * 只给一句「前情摘要」不够。上限仍压在 1200 字，避免挤掉本章正文。
+ */
+const PREVIOUS_BODY_LIMIT = 1200;
+/** 回退查找最近有正文的前章时最多回看的章数 */
+const PREVIOUS_LOOKBACK = 8;
 /** 单章正文全文注入的字符上限 */
 const CONTENT_LIMIT = 12000;
 /** 灵感速记最多注入多少条 */
@@ -369,6 +378,28 @@ function chapterBody(chapter) {
 }
 
 /**
+ * 找最近一个有正文的前章。
+ *
+ * 作者常会先建空章再回头补；直接取「紧邻上一章」会拿到空正文，
+ * 模型就断掉了跨章承接。这里往前回看有限章数，跳过空章，
+ * 不为了一个空章把整本书都翻一遍。
+ *
+ * @param {string} workId
+ * @param {number} seq 当前章序号
+ * @returns {Promise<Object|null>}
+ */
+async function findPreviousChapterWithBody(workId, seq) {
+  if (!workId || !seq || seq <= 1) return null;
+  const rows = await all(
+    `SELECT * FROM chapters
+     WHERE work_id = ? AND seq < ?
+     ORDER BY seq DESC LIMIT ?`,
+    [workId, seq, PREVIOUS_LOOKBACK]
+  );
+  return rows.find((row) => chapterBody(row).trim()) || null;
+}
+
+/**
  * 装配上下文消息数组。
  *
  * @param {Object} params
@@ -498,6 +529,20 @@ async function assembleContext(params = {}) {
     }
   }
 
+  // ---- 2.1 跨章承接：最近一个有正文的前章 ----
+  //
+  // 规划和写作都要用：规划拿它的结尾拆本章开场，写作拿它接语气与场面。
+  // 空章会跳过，回退到更早的有正文章节，而不是把「上一章为空」当没有前文。
+  let previousChapter = null;
+  if (roleKey === 'writer' && chapter && chapter.seq > 1) {
+    try {
+      previousChapter = await findPreviousChapterWithBody(workId, chapter.seq);
+      if (previousChapter) meta.previousChapter = previousChapter.id;
+    } catch (e) {
+      console.error('[context] 前章正文加载失败:', e.message);
+    }
+  }
+
   // ---- 2.2 全书进度与前几章摘要 ----
   //
   // 只给写手（规划步同样走 writer），别的角色读全书位置意义不大，也省预算。
@@ -576,19 +621,12 @@ async function assembleContext(params = {}) {
 
     if (!chapterBodyText.trim()) {
       meta.emptyChapter = true;
-      const prevChapter = await get(
-        `SELECT * FROM chapters
-         WHERE work_id = ? AND seq < ?
-         ORDER BY seq DESC LIMIT 1`,
-        [workId, chapter.seq]
-      );
-      if (prevChapter) {
-        meta.previousChapter = prevChapter.id;
+      if (previousChapter) {
         relevanceText = [
           chapter.title,
           work && work.outline,
           chapter.outline,
-          chapterBody(prevChapter),
+          chapterBody(previousChapter),
         ]
           .filter(Boolean)
           .join('\n');
@@ -757,14 +795,8 @@ async function assembleContext(params = {}) {
     if (!includeChapterBody) {
       // 规划步：不塞整章正文（省预算，也避免模型把原文复述一遍）。
       // 只给上一章结尾作前情摘要——下一章该接什么，答案在那里。
-      if (chapter.seq > 1) {
-        const prev = await get(
-          `SELECT * FROM chapters
-           WHERE work_id = ? AND seq < ?
-           ORDER BY seq DESC LIMIT 1`,
-          [workId, chapter.seq]
-        );
-        const tail = prev ? chapterBody(prev) : '';
+      if (previousChapter) {
+        const tail = chapterBody(previousChapter);
         if (tail.trim()) {
           addPart(
             `## 上一章结尾（前情摘要）\n${truncate(tail, CONTINUITY_LIMIT)}`,
@@ -773,6 +805,20 @@ async function assembleContext(params = {}) {
         }
       }
     } else {
+      // 写作步：跨章承接必须看到上一章原文，而不只是 500 字摘要。
+      // 空章会回退到最近一个有正文的前章，标题里写清是哪一章。
+      if (previousChapter) {
+        const previousBody = chapterBody(previousChapter);
+        if (previousBody.trim()) {
+          addPart(
+            `## 上一章结尾（第 ${previousChapter.seq} 章《${previousChapter.title}》原文，供本章承接）\n` +
+              '以下是上一章最后的内容，只用来接住场面、语气与最后动作；已经发生，不要重演。\n' +
+              truncate(previousBody, PREVIOUS_BODY_LIMIT),
+            PRIORITY.CONTENT
+          );
+        }
+      }
+
       const body = chapterBodyText;
       if (body) {
         addPart(

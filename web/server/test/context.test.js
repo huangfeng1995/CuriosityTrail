@@ -379,6 +379,147 @@ test('上下文预算：超预算先丢低优先级分区，角色提示词不�
   assert.ok(fitted[1].text.length > 0, '正文保留');
 });
 
+test('跨章承接：写作上下文注入上一章原文结尾', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-prev-body';
+  const prevId = 'prev-body-1';
+  const chapterId = 'prev-body-2';
+  const prevTail = '他把门闩上，雪声一下子隔在屋外。';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, '承接测试', '', '', '', 0, ?, ?)`,
+    [workId, userId, now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第一章', 1, '', 'done', ?, ?, '', 0, ?, ?)`,
+    [
+      prevId,
+      workId,
+      prevTail,
+      JSON.stringify([{ id: 'p1', type: 'paragraph', content: prevTail }]),
+      now,
+      now,
+    ]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第二章', 2, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, now, now]
+  );
+
+  const { messages, meta } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+  const system = messages[0].content;
+
+  assert.ok(system.includes('## 上一章结尾（第 1 章《第一章》原文，供本章承接）'));
+  assert.ok(system.includes(prevTail), '上一章原文必须真的进 prompt');
+  assert.strictEqual(meta.previousChapter, prevId);
+});
+
+test('跨章承接：紧邻上一章为空时回退到最近有正文的前章', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-prev-fallback';
+  const firstId = 'fallback-1';
+  const emptyId = 'fallback-2';
+  const chapterId = 'fallback-3';
+  const firstTail = '灯芯爆了一下，他把密诏压进砚台底下。';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, '回退测试', '', '', '', 0, ?, ?)`,
+    [workId, userId, now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第一章', 1, '', 'done', ?, ?, '', 0, ?, ?)`,
+    [
+      firstId,
+      workId,
+      firstTail,
+      JSON.stringify([{ id: 'f1', type: 'paragraph', content: firstTail }]),
+      now,
+      now,
+    ]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第二章', 2, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [emptyId, workId, now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第三章', 3, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, now, now]
+  );
+
+  const { messages, meta } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+  const system = messages[0].content;
+
+  assert.strictEqual(meta.previousChapter, firstId, '应跳过空章回退到第一章');
+  assert.ok(system.includes('第 1 章《第一章》'), '标题必须指明回退到了哪一章');
+  assert.ok(system.includes(firstTail), '回退后的正文必须进 prompt');
+  assert.ok(!system.includes('第 2 章《第二章》'), '不能把空章当成承接对象');
+});
+
+test('跨章承接：规划上下文只给上一章结尾摘要，不注入整章', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-prev-plan';
+  const prevId = 'plan-prev-1';
+  const chapterId = 'plan-prev-2';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, '规划承接测试', '', '', '', 0, ?, ?)`,
+    [workId, userId, now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第一章', 1, '', 'done', ?, ?, '', 0, ?, ?)`,
+    [prevId, workId, '雪压着屋脊，他数到第三声更鼓才合眼。', '[]', now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第二章', 2, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, now, now]
+  );
+
+  const { messages } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+    includeChapterBody: false,
+  });
+  const system = messages[0].content;
+
+  assert.ok(system.includes('## 上一章结尾（前情摘要）'));
+  assert.ok(system.includes('更鼓'), '规划也要能看到上一章结尾原文');
+  assert.ok(!system.includes('## 当前章节正文'), '规划不注入整章正文');
+});
+
 test.after(async () => {
   env.cleanup();
 });
