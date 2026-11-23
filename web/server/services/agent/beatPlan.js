@@ -93,6 +93,14 @@ const MAX_TOTAL_PARAGRAPHS = 80;
 
 /** 范文口径的全章目标字数（仅用于把份额换算成每拍目标字数）。 */
 const CHAPTER_TARGET_CHARS = 5000;
+/**
+ * 范文段均字数（docs/superpowers/baseline/measure.py 实测 sample.md）。
+ *
+ * 段落数必须由目标字数反推，而不是让模型凭感觉给 3–12 段：
+ * 5000 字的章节约 45 段，和范文的 45 段一致。写死 112 也避免
+ * 「计划 26 段、正文 6328 字」这种平均 243 字一段的交付。
+ */
+const SAMPLE_MEAN_CHARS = 112.16;
 
 /** 空钩子话术，出现即判不合格 */
 const EMPTY_HOOKS = ['且听下回分解', '欲知后事', '下回分解'];
@@ -165,23 +173,25 @@ function classifyShareRole(beat) {
 }
 
 /**
- * 把每拍的份额换回「目标字数」，并在份额偏差较大时就地调整段落数。
+ * 把每拍的份额换回「目标字数」，并由目标字数反推该给的段落数。
  *
  * R3 的约束只允许调这一拍的 paragraphs 与目标字数，不许为配比重排整章。
- * 目标段数按 120 字/段估算：范文最大的议论拍 25.2% ≈ 1260 字 → 11 段，
- * 身世拍 16.2% ≈ 810 字 → 7 段；都落在范文的段长分布内。
+ * 段数一律按范文段均 112 字（measure.py 实测）折算：1345 字约 12 段，
+ * 960 字约 9 段。以前只对 reference 模式的 shareRole 拍做校正，
+ * 大纲模式完全交给模型，于是出现「26 段 / 6328 字」——写手只能靠合并硬凑段数。
  */
 function applyTargetChars(beats) {
   for (const beat of beats) {
     const share = Number(beat.wordShare);
     if (!Number.isFinite(share)) continue;
     beat.targetChars = Math.round((share / 100) * CHAPTER_TARGET_CHARS);
-    if (!beat.shareRole) continue;
     const desired = Math.min(
       MAX_PARAGRAPHS,
-      Math.max(MIN_PARAGRAPHS, Math.round(beat.targetChars / 120))
+      Math.max(MIN_PARAGRAPHS, Math.round(beat.targetChars / SAMPLE_MEAN_CHARS))
     );
     beat.targetParagraphs = desired;
+    // 差 1 段属于模型正常的取整抖动，不必推翻它；差 2 段以上才说明
+    // 「段数」和「目标字数」真的对不上，才校正。
     if (Math.abs(desired - (Number(beat.paragraphs) || 0)) >= 2) {
       beat.paragraphs = desired;
     }
@@ -726,13 +736,18 @@ function validateBeatPlan(candidate, options = {}) {
   // 六类功能是「5000 字长章 6–8 拍」的结构要求。短章（<6 拍）本来就排不下
   // 六类，不拿它判降级；功能字段仍按拍使用，只是不做全覆盖硬校验。
   const requireFunctions = !outlineMode && beats.length >= MIN_BEATS_WITH_FUNCTIONS;
-  applyTargetChars(beats);
+  // 先按模型给的原始段数卡 20–80，再按目标字数反推段数。
+  // 顺序不能反：反推后的段数几乎总在区间内，会把「模型给 96 段」这种
+  // 明显越界的输入悄悄洗成合格计划。
+  const rawParagraphs = beats.reduce((sum, beat) => sum + (Number(beat.paragraphs) || 0), 0);
+  const rawParagraphsValid =
+    rawParagraphs >= MIN_TOTAL_PARAGRAPHS && rawParagraphs <= MAX_TOTAL_PARAGRAPHS;
+  if (beats.length && !rawParagraphsValid) {
+    errors.push(`全章段落数必须在 ${MIN_TOTAL_PARAGRAPHS}–${MAX_TOTAL_PARAGRAPHS} 之间，收到 ${rawParagraphs}`);
+  }
+  if (rawParagraphsValid) applyTargetChars(beats);
   const adjustedParagraphs = beats.reduce((sum, beat) => sum + (beat.paragraphs || 0), 0);
   totalParagraphs = adjustedParagraphs;
-
-  if (beats.length && (totalParagraphs < MIN_TOTAL_PARAGRAPHS || totalParagraphs > MAX_TOTAL_PARAGRAPHS)) {
-    errors.push(`全章段落数必须在 ${MIN_TOTAL_PARAGRAPHS}–${MAX_TOTAL_PARAGRAPHS} 之间，收到 ${totalParagraphs}`);
-  }
   if (mainType && beats.length && !beats.some((b) => b.type === mainType)) {
     errors.push('mainType 必须与某一个节拍的 type 相同');
   }

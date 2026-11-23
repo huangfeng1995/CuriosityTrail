@@ -683,13 +683,13 @@ test('V1 重写后本组低于原稿 85%：整组回滚，正文等于原稿并�
   assert.strictEqual(out.rewroteGroups, 0, '回滚的组不算重写成功');
 });
 
-test('Y3.3 重写段数超计划 ±2：按拍合并瘦身，不整组回滚', async () => {
+test('Y3.3 重写段数超计划：合并不越过 160，超出如实记溢出不回滚', async () => {
   const { plan, groups } = rewriteFixture();
   const beforeCount = segmentWriter.splitParagraphs(groups[0].content).length;
-  // B2 被拆成 14 段（计划 5，上限 7）——组内段落按计划比例重新分配后
-  // B2 仍会超上限，必须合并而不是回滚。
+  // B2 被拆成 20 段（每段 90 字）：90+90=180，超过 160 的合并上限，
+  // 宁可记溢出也不把两段粘成 180 字的长段，更不整组回滚。
   const runner = parsedRunner([
-    beatReply('B2', Array.from({ length: 14 }, () => '改'.repeat(90))),
+    beatReply('B2', Array.from({ length: 20 }, () => '改'.repeat(90))),
   ]);
 
   const out = await segmentWriter.rewriteMissingGroups({
@@ -701,21 +701,19 @@ test('Y3.3 重写段数超计划 ±2：按拍合并瘦身，不整组回滚', as
     maxCalls: 8,
   });
 
-  assert.strictEqual(out.rewriteReverted.length, 0, '能合并救回来的不许整组回滚');
+  assert.strictEqual(out.rewriteReverted.length, 0, '段数超出不再作为回滚理由');
   assert.strictEqual(out.rewroteGroups, 1);
-  assert.ok(out.groupDeltas[0].trimmed > 0, '要记合并了几次');
+  assert.strictEqual(out.groupDeltas[0].trimmed, 0, '90+90 超过合并上限，不许合');
+  assert.ok(out.groupDeltas[0].overflow > 0, '合不动的段数要记在 overflow 里');
   const paragraphs = segmentWriter.splitParagraphs(groups[0].content);
-  assert.ok(paragraphs.length < beforeCount + 14, '合并必须真的减少段数');
-  const ranges = segmentWriter.beatParagraphRanges(groups[0].beats, paragraphs.length);
-  assert.ok(ranges[1][1] - ranges[1][0] <= 7, 'B2 段数必须落回计划 ±2');
+  assert.strictEqual(paragraphs.length, beforeCount + 15, '保留重写结果，不退回长段版本');
 });
 
-test('Y3.4 段数瘦不动（每对合并都超 320）：回滚并写明是段数导致', async () => {
+test('Y3.4 段数瘦不动：不再按段数回滚，超出记 overflow', async () => {
   const { plan, groups } = rewriteFixture();
-  const original = groups[0].content;
-  // 14 段 × 200 字：字数没缩水，但任意两段合并都超过 320，合不回容差。
+  // 20 段 × 200 字：任意两段合并都超过 160 的合并上限，合不回容差。
   const runner = parsedRunner([
-    beatReply('B2', Array.from({ length: 14 }, () => '长'.repeat(200))),
+    beatReply('B2', Array.from({ length: 20 }, () => '长'.repeat(200))),
   ]);
 
   const out = await segmentWriter.rewriteMissingGroups({
@@ -727,11 +725,10 @@ test('Y3.4 段数瘦不动（每对合并都超 320）：回滚并写明是段�
     maxCalls: 8,
   });
 
-  assert.strictEqual(out.rewriteReverted.length, 1);
-  assert.match(out.rewriteReverted[0].reason, /段数仍超出计划/);
-  assert.doesNotMatch(out.rewriteReverted[0].reason, /低于原稿 85%/, '别把段数问题写成缩水');
-  assert.strictEqual(out.rewriteReverted[0].trimmed, 0, '一段都合不动');
-  assert.strictEqual(groups[0].content, original, '回滚后正文等于原稿');
+  assert.strictEqual(out.rewriteReverted.length, 0, '段数不再触发回滚');
+  assert.strictEqual(out.rewroteGroups, 1);
+  assert.strictEqual(out.groupDeltas[0].trimmed, 0, '一段都合不动');
+  assert.ok(out.groupDeltas[0].overflow > 0);
 });
 
 test('Y3.5 expandRejected 区分「本拍没名额」与「新增段不合格」', async () => {
@@ -1125,17 +1122,18 @@ test('W1 三组起稿只拿 4 次：3 次初稿 + 最多 1 次续写，续写让
   assert.ok(draft.content.includes('丙第1段'), '续写不能挤掉第三组初稿');
 });
 
-test('起稿就按拍收段：一拍写成十段时当场合并回计划，不等到交付', async () => {
-  // 2 组 × 2 拍，每拍计划 5 段。第一组给 20 段（每拍 10 段），必须收到 10 段。
+test('起稿按拍收段但不越过 160：宁可记溢出也不把两段粘成长段', async () => {
+  // 2 组 × 2 拍，每拍计划 5 段。第一组给 20 段（每拍 10 段）。
+  // 每段约 150 字，两段合并 = 300 字，超过 160 的合并上限：不许合。
   const plan = makePlan(4, 5);
   const runner = makeRunner([body('甲', 20), body('乙', 10)]);
 
   const draft = await segmentWriter.draftInSegments({ plan, runSegment: runner });
 
-  assert.strictEqual(segmentWriter.splitParagraphs(draft.groups[0].content).length, 10, '第一组收到计划 10 段');
+  assert.strictEqual(segmentWriter.splitParagraphs(draft.groups[0].content).length, 20, '超上限就不合');
   assert.strictEqual(segmentWriter.splitParagraphs(draft.groups[1].content).length, 10, '合规的组一个字不碰');
-  assert.strictEqual(draft.draftTrimmed, 10, '合并次数要记账');
-  assert.deepStrictEqual(draft.draftOverflow, [], '能合回来的不许记溢出');
+  assert.strictEqual(draft.draftTrimmed, 0, '一段都没合，不许硬凑段数');
+  assert.ok(draft.draftOverflow.length > 0, '合不动的段数必须记溢出');
 
   const lengths = segmentWriter.splitParagraphs(draft.content).map((p) => countWords(p));
   assert.ok(lengths.every((n) => n <= 320), '合并不得造出 >320 的段');
@@ -1146,6 +1144,36 @@ test('起稿就按拍收段：一拍写成十段时当场合并回计划，不�
     longestShortRun = Math.max(longestShortRun, run);
   }
   assert.ok(longestShortRun < 3, '合并不得造出连续 3 段 <40 字');
+});
+
+test('交付前段落节奏校正：210 字长段拆到段均区间，一个字不改', () => {
+  const sentence = `${'甲'.repeat(69)}。`;
+  const text = Array.from({ length: 6 }, () => `${sentence}${sentence}${sentence}`).join('\n\n');
+  const out = segmentWriter.rebalanceParagraphShape(text);
+
+  assert.ok(out.split > 0, '210 字段落必须被拆');
+  assert.strictEqual(out.merged, 0, '段均偏高时不许再合');
+  assert.ok(
+    out.meanAfter >= segmentWriter.SHAPE_MEAN_MIN && out.meanAfter <= segmentWriter.SHAPE_MEAN_MAX,
+    `段均要回到 ${segmentWriter.SHAPE_MEAN_MIN}–${segmentWriter.SHAPE_MEAN_MAX}，实际 ${out.meanAfter}`
+  );
+  // 只拆不加字：去掉空白后与原文逐字相同。
+  const strip = (value) => value.replace(/\s+/g, '');
+  assert.strictEqual(strip(out.content), strip(text), '拆段不得增删正文');
+});
+
+test('交付前段落节奏校正：150 字段落在句子边界拆成 100+50，不制造碎段', () => {
+  const sentence = `${'乙'.repeat(49)}。`;
+  const text = Array.from({ length: 4 }, () => `${sentence}${sentence}${sentence}`).join('\n\n');
+  const out = segmentWriter.rebalanceParagraphShape(text);
+
+  assert.ok(out.split > 0, '150 字段落在句号处拆开');
+  assert.ok(
+    out.meanAfter >= segmentWriter.SHAPE_MEAN_MIN && out.meanAfter <= segmentWriter.SHAPE_MEAN_MAX,
+    `段均要回到区间，实际 ${out.meanAfter}`
+  );
+  const lengths = segmentWriter.splitParagraphs(out.content).map((p) => countWords(p));
+  assert.ok(lengths.every((n) => n >= segmentWriter.SHAPE_SHORT_FRAGMENT_MAX), '不得拆出 <40 字的碎段');
 });
 
 test('起稿收段合不动时如实记账，不删字也不整组失败', async () => {

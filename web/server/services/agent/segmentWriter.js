@@ -143,6 +143,13 @@ const SHAPE_BUCKETS = Object.freeze([
 
 /** 硬拦只有一条：单段 >320（范文最长 314，留 6 字余量）。 */
 const SHAPE_HARD_MAX = 320;
+/**
+ * 合并上限（含标点）：范文段均 112，单段超过 160 就已经离开主力区间。
+ *
+ * 起稿收段只能合到 160；再往上不允许靠「粘两段」凑计划段数，
+ * 那是把 300 字的段落交付给作者。超出部分走拆段，而不是继续合。
+ */
+const SHAPE_MERGE_MAX = 160;
 /** 段均允许偏离范文 ±15%。 */
 const SHAPE_MEAN_TOLERANCE = 0.15;
 /** 40–79 段占比允许比范文高 10pp。 */
@@ -1810,6 +1817,110 @@ function trimToChars(text, maxChars) {
 }
 
 /**
+ * 交付前的段落节奏校正：只拆/合，不改一个字。
+ *
+ * 规划段数已按范文段均 112 字反推，但模型仍可能写超（实测一章 6328 字）。
+ * 这时不许把 200–300 字的长段直接交给作者：
+ *   1. 段均 > 129：挑最长的多句段对半拆，直到回到 ±15% 区间；
+ *   2. 段均 < 95.3：在不超过 160 字的前提下合并最短的相邻段；
+ *   3. 拆到只剩单句段仍超标时停手，交给形态自检如实报告。
+ *
+ * 拆分点在句子边界，正文一个字不增删；与「静默改写作者文字」是两回事。
+ */
+function rebalanceParagraphShape(text) {
+  const paragraphs = splitParagraphs(text);
+  const meanOf = (rows) =>
+    rows.length
+      ? Math.round((rows.reduce((sum, row) => sum + countWords(row), 0) / rows.length) * 100) / 100
+      : 0;
+  const meanBefore = meanOf(paragraphs);
+  let split = 0;
+  let merged = 0;
+  let guard = 0;
+
+  // 先拆：段均超标时，挑最长的多句段对半拆。
+  while (guard < 400) {
+    if (meanOf(paragraphs) <= SHAPE_MEAN_MAX) break;
+    let bestIndex = -1;
+    let bestChars = 0;
+    paragraphs.forEach((paragraph, index) => {
+      const chars = countWords(paragraph);
+      if (sentenceCount(paragraph) < 2 || chars < SHAPE_PARAGRAPH_MAX) return;
+      if (chars > bestChars) {
+        bestChars = chars;
+        bestIndex = index;
+      }
+    });
+    if (bestIndex < 0) break;
+    const sentences = splitSentences(paragraphs[bestIndex]);
+    if (sentences.length < 2) break;
+    const half = bestChars / 2;
+    let acc = 0;
+    let cut = 1;
+    for (let i = 0; i < sentences.length - 1; i += 1) {
+      acc += countWords(sentences[i]);
+      if (acc >= half) {
+        cut = i + 1;
+        break;
+      }
+    }
+    const left = sentences.slice(0, cut).join('');
+    const right = sentences.slice(cut).join('');
+    if (!left || !right) break;
+    // 拆完若段均反而掉到下限以下，说明这一段本来就不该拆（例如 150 字拆成 75+75）。
+    // 宁可留着 150 字让自检如实报「偏高」，也不制造一堆 75 字的碎段。
+    const next = paragraphs.slice();
+    next.splice(bestIndex, 1, left, right);
+    if (meanOf(next) < SHAPE_MEAN_MIN) break;
+    paragraphs.splice(bestIndex, 1, left, right);
+    split += 1;
+    guard += 1;
+  }
+
+  // 再合：只有段均偏低时才合，且合完不超过段均上限 129。
+  // 用 129 而不是 160，避免「合到 150 → 又超均 → 再拆」来回震荡。
+  while (guard < 400 && paragraphs.length > 1) {
+    if (meanOf(paragraphs) >= SHAPE_MEAN_MIN) break;
+    let best = null;
+    for (let i = 0; i < paragraphs.length - 1; i += 1) {
+      const combined = countWords(paragraphs[i]) + countWords(paragraphs[i + 1]);
+      if (combined > SHAPE_MEAN_MAX) continue;
+      if (!best || combined < best.combined) best = { i, combined };
+    }
+    if (!best) break;
+    paragraphs.splice(best.i, 2, `${paragraphs[best.i]}${paragraphs[best.i + 1]}`);
+    merged += 1;
+    guard += 1;
+  }
+
+  return {
+    content: paragraphs.join('\n\n'),
+    split,
+    merged,
+    meanBefore,
+    meanAfter: meanOf(paragraphs),
+  };
+}
+
+/** 交付形态 = 跑飞截断 + 段落节奏校正；截断与拆合都写进 stats。 */
+function finalizeChapterShape(text) {
+  const normalized = normalizeChapterShape(text);
+  const rebalanced = rebalanceParagraphShape(normalized.content);
+  return {
+    content: rebalanced.content,
+    truncated: normalized.truncated,
+    originalChars: normalized.originalChars,
+    chars: countWords(rebalanced.content),
+    rebalance: {
+      split: rebalanced.split,
+      merged: rebalanced.merged,
+      meanBefore: rebalanced.meanBefore,
+      meanAfter: rebalanced.meanAfter,
+    },
+  };
+}
+
+/**
  * 交付前的安全兜底：只挡 7000 字以上的跑飞，不做任何段落合并或拆分。
  *
  * @param {string} text
@@ -2038,7 +2149,12 @@ async function draftInSegments({
   }
 
   const composed = composeChapterContent({ groups, existingBody, mergeScenes });
-  const normalized = normalizeChapterShape(composed.content);
+  // 作者明确关掉场景合并（mergeScenes=false）时，也不做交付前的拆合：
+  // 那等于绕过开关改了正文段落。形态不合只会如实报在自检里。
+  const normalized =
+    mergeScenes === false
+      ? normalizeChapterShape(composed.content)
+      : finalizeChapterShape(composed.content);
   const beforeNormalized = normalizeChapterShape(composed.contentBeforeMerge);
   // 拼接后立刻检查：重复描写与时间倒序只记问题，重写交给 rewriteMissingGroups。
   const continuityIssues = detectContinuityIssues({ groups });
@@ -2065,6 +2181,7 @@ async function draftInSegments({
     draftOverflow,
     boundaryTrimmed,
     boundaryConflicts,
+    shapeRebalance: normalized.rebalance,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
@@ -2311,7 +2428,12 @@ async function rewriteMissingGroups({
     const countReason = trim.overflow > 0
       ? `重写后段数仍超出计划 ±${SHAPE_BEAT_TOLERANCE}（多 ${trim.overflow} 段，无法再合并）`
       : '';
-    if (groupBeforeChars > 0 && (shrinkReason || shapeProblems.length || countReason)) {
+    // 缩水只在「没把形态改好」时才算问题：一次重写如果确实修好了本轮点名的
+    // 形态问题，就该保留，不能因为比原稿短就回滚成那份明知不合格的长稿。
+    // 段数超出计划也不算回滚理由：合并上限 160 之后，合不动是设计使然，
+    // 把稿子退回长段版本只会更差；超出如实记在 draftOverflow / countReason 里。
+    const shapeImproved = afterDelivery.blocking.length < beforeDelivery.blocking.length;
+    if (groupBeforeChars > 0 && (shapeProblems.length || (shrinkReason && !shapeImproved))) {
       group.content = snapshot;
       rewriteReverted.push({
         group: group.index,
@@ -2323,6 +2445,7 @@ async function rewriteMissingGroups({
         reason: [shrinkReason, countReason, ...shapeProblems].filter(Boolean).join('；'),
         shapeProblems,
         trimmed: trim.merged,
+        overflow: trim.overflow,
       });
       groupDeltas.push({
         group: group.index,
@@ -2344,13 +2467,19 @@ async function rewriteMissingGroups({
       delta: groupDelta,
       ratio: groupRatio,
       trimmed: trim.merged,
+      overflow: trim.overflow,
       reverted: false,
     });
     rewroteGroups += 1;
   }
 
   const composed = composeChapterContent({ groups, existingBody, mergeScenes });
-  const normalized = normalizeChapterShape(composed.content);
+  // 作者明确关掉场景合并（mergeScenes=false）时，也不做交付前的拆合：
+  // 那等于绕过开关改了正文段落。形态不合只会如实报在自检里。
+  const normalized =
+    mergeScenes === false
+      ? normalizeChapterShape(composed.content)
+      : finalizeChapterShape(composed.content);
   const beforeNormalized = normalizeChapterShape(composed.contentBeforeMerge);
   return {
     groups,
@@ -2368,6 +2497,7 @@ async function rewriteMissingGroups({
     boundaryTrimmed,
     groupDeltas,
     rewriteReverted,
+    shapeRebalance: normalized.rebalance,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
@@ -2610,8 +2740,9 @@ function trimBeatParagraphs(group, plan, rewrittenBeatIds, options = {}) {
       const left = countWords(paragraphs[i]);
       const right = countWords(paragraphs[i + 1]);
       const combined = left + right;
-      // 合完不能超 320 字（交付硬拦），也不能还是碎段（<40 字）。
-      if (combined > SHAPE_HARD_MAX || combined < SHAPE_SHORT_FRAGMENT_MAX) continue;
+      // 合完不能超合并上限（160）：超了就不许再合，交给拆段处理。
+      // 也不能还是碎段（<40 字）。
+      if (combined > SHAPE_MERGE_MAX || combined < SHAPE_SHORT_FRAGMENT_MAX) continue;
       // 优先合出 80–140 字的段（范文主力区间），其次合短的。
       const score = [combined > SHAPE_PARAGRAPH_MAX ? 1 : 0, combined];
       if (
@@ -2991,7 +3122,7 @@ async function expandMissingBeats({
   }
 
   const composed = composeChapterContent({ groups, mergeScenes });
-  const normalized = normalizeChapterShape(composed.content);
+  const normalized = finalizeChapterShape(composed.content);
   return {
     groups,
     content: normalized.content,
@@ -3011,6 +3142,7 @@ async function expandMissingBeats({
     expandIneffective,
     refundedCalls,
     microPatched,
+    shapeRebalance: normalized.rebalance,
     truncated: normalized.truncated,
     originalChars: normalized.originalChars,
     chars: normalized.chars,
@@ -3140,6 +3272,8 @@ module.exports = {
   stitchGroups,
   trimToChars,
   normalizeChapterShape,
+  rebalanceParagraphShape,
+  SHAPE_MERGE_MAX,
   needsContinuation,
   usageSum,
   draftInSegments,

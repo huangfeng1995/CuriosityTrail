@@ -1142,3 +1142,27 @@ test('大纲提示词：要求 4–8 拍与每拍目标/阻碍/转折/代价', (
   assert.doesNotMatch(OUTLINE_PLAN_PROMPT, /六类必须各出现至少一次/);
 });
 
+
+test('大纲模式：段数按目标字数 ÷ 范文段均 112 反推', () => {
+  // 这是 HP14 验收里「计划 26 段、正文 6328 字」的回归：
+  // 份额 26.9/23.1/30.8/19.2 对应 1345/1155/1540/960 字，
+  // 按 112 字/段应是 12/10/14/9；单拍上限 12 把第三拍压到 12，共 43 段。
+  const plan = makePlan();
+  const shares = [26.9, 23.1, 30.8, 19.2];
+  plan.beats.forEach((beat, index) => {
+    beat.paragraphs = 7;
+    beat.wordShare = shares[index];
+    beat.entities = [];
+  });
+
+  const result = validateBeatPlan(plan, { mode: 'outline' });
+  assert.strictEqual(result.ok, true, (result.errors || []).join('；'));
+  assert.deepStrictEqual(
+    result.plan.beats.map((beat) => beat.targetChars),
+    [1345, 1155, 1540, 960]
+  );
+  assert.deepStrictEqual(
+    result.plan.beats.map((beat) => beat.paragraphs),
+    [12, 10, 12, 9]
+  );
+});
