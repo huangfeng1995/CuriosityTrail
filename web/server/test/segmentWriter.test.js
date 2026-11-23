@@ -2465,3 +2465,68 @@ test('具名地点写进起稿与重写指令：地点/官署首次出现用全�
   assert.match(instruction, /本章具名人物/);
   assert.match(instruction, /不要用「那座官署」/);
 });
+
+test('W1 重写配额不够时形态组优先保留，不被缺拍组全部占走', async () => {
+  // 8 拍分 3 组：B1–B3 / B4–B6 / B7–B8。缺拍在组 0、组 1，比喻违规在组 2；
+  // 重写只剩 2 次，按组序会先吃掉组 0、组 1，组 2 的比喻永远轮不到。
+  const plan = makePlan(8);
+  const groups = segmentWriter.planSegments(plan);
+  groups.forEach((group) => {
+    group.content = body(`原${group.index}`, 8);
+  });
+  const runner = parsedRunner([
+    beatReply('B1', Array.from({ length: 3 }, () => '改'.repeat(180))),
+    beatReply('B7', Array.from({ length: 3 }, () => '改'.repeat(180))),
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: ['B1', 'B4'], weak: [] },
+    shapeViolations: [
+      { beatId: 'B7', kind: 'imagery_density', perKilo: 2.37, limit: 2.1, sample: '像雾一样' },
+    ],
+    priorityIds: ['B7'],
+    runSegment: runner,
+    callCount: segmentWriter.SEGMENT_CALL_BUDGET.draft,
+    maxCalls: segmentWriter.SEGMENT_CALL_BUDGET.draft + segmentWriter.SEGMENT_CALL_BUDGET.rewrite,
+  });
+
+  assert.deepStrictEqual(
+    runner.seen.map((meta) => meta.group.index),
+    [0, 2],
+    '缺拍组与形态组各保留一次，形态组不再被挤掉'
+  );
+  assert.deepStrictEqual(out.rewriteAllocation.priorityGroups, [2]);
+  assert.deepStrictEqual(out.rewriteAllocation.keptGroups, [0, 2]);
+  assert.deepStrictEqual(out.rewriteAllocation.droppedGroups, [1], '被挤掉的组必须记账');
+  assert.deepStrictEqual(out.skippedGroups, [1]);
+  assert.strictEqual(out.budgetExhaustedBy, 'rewrite');
+  assert.match(runner.seen[1].instruction, /B7/);
+  assert.match(runner.seen[1].instruction, /比喻/);
+});
+
+test('W1 没有形态优先项时仍按组序先到先得（旧行为不变）', async () => {
+  const plan = makePlan(8);
+  const groups = segmentWriter.planSegments(plan);
+  groups.forEach((group) => {
+    group.content = body(`原${group.index}`, 8);
+  });
+  const runner = parsedRunner([
+    beatReply('B1', Array.from({ length: 3 }, () => '改'.repeat(180))),
+    beatReply('B4', Array.from({ length: 3 }, () => '改'.repeat(180))),
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: ['B1', 'B4', 'B7'], weak: [] },
+    runSegment: runner,
+    callCount: segmentWriter.SEGMENT_CALL_BUDGET.draft,
+    maxCalls: segmentWriter.SEGMENT_CALL_BUDGET.draft + segmentWriter.SEGMENT_CALL_BUDGET.rewrite,
+  });
+
+  assert.deepStrictEqual(runner.seen.map((meta) => meta.group.index), [0, 1]);
+  assert.strictEqual(out.rewriteAllocation, null, '没有形态优先项时不做额外分配');
+  assert.deepStrictEqual(out.skippedGroups, [2]);
+});

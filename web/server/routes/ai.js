@@ -2437,6 +2437,9 @@ router.post('/chat', async (req, res) => {
             mustWithholdIds: withholdIds,
             invariantConflicts,
             shapeViolations: shapeCheck.violations,
+            // 形态类问题优先保住至少一组：比喻/短句所在组常排在缺拍与揭示组之后，
+            // 不预留配额就永远轮不到（轮 1 比喻 2.37，上限 2.1）。
+            priorityIds: shapeIds,
             continuityIssues: [
               ...(segmented.continuityIssues || []),
               ...(chapterContinuity.blocking || []),
@@ -2520,6 +2523,7 @@ router.post('/chat', async (req, res) => {
                 degraded: rewrite.degraded,
                 finishReason: rewrite.finishReason || '',
                 contentLength: rewrite.content.length,
+                rewriteAllocation: rewrite.rewriteAllocation || null,
                 rewriteReverted: rewrite.rewriteReverted || [],
                 groupDeltas: rewrite.groupDeltas || [],
                 continuityIssues: segmented.continuityIssues || [],

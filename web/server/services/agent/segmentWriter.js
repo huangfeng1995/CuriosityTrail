@@ -2785,6 +2785,8 @@ async function rewriteMissingGroups({
   mustWithholdIds = [],
   invariantConflicts = [],
   shapeViolations = [],
+  // 形态类问题（比喻/短句/对白/引号）的拍号：配额不够时不能被覆盖类问题一直压住。
+  priorityIds = [],
   expandShots = [],
   continuityIssues = [],
   mustRevealIds = [],
@@ -2832,7 +2834,52 @@ async function rewriteMissingGroups({
   ];
   const wanted = new Set(missingIds);
   const factsOnly = !groupsForIds(groups, missingIds).length && (mustReveal || []).length > 0;
-  const affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
+  let affected = factsOnly ? groups.slice(0, 1) : groupsForIds(groups, missingIds);
+
+  // 配额不够时按类别分配，而不是按组号先到先得。
+  //
+  // 旧行为：affected 按组顺序处理，预算一满就跳过后面的组。线上实测缺拍与揭示
+  // 组总在前面，比喻/短句所在的后组一次都轮不到——轮 1 比喻 2.37（上限 2.1）
+  // 到交付都没被重写。这里在进入循环前就把配额切好：
+  //   - 覆盖类（缺拍/禁写/揭示/连续性）最多占 room-1 组；
+  //   - 形态类至少保 1 组，选中的组仍按原顺序处理，保证改写顺序不乱。
+  // 分配结果与被挤掉的组都记账，不能静默。
+  let allocation = null;
+  const room = Math.max(0, maxCalls - count);
+  const prioritySet = new Set((priorityIds || []).filter(Boolean));
+  const hasPriorityBeat = (group) => group.beatIds.some((id) => prioritySet.has(id));
+  const priorityGroups = prioritySet.size ? affected.filter(hasPriorityBeat) : [];
+  if (!factsOnly && priorityGroups.length && affected.length > room && room > 0) {
+    const coverageGroups = affected.filter((group) => !hasPriorityBeat(group));
+    const picked = new Set();
+    const keepCoverage = Math.max(0, room - 1);
+    for (const group of coverageGroups) {
+      if (picked.size >= keepCoverage) break;
+      picked.add(group.index);
+    }
+    for (const group of priorityGroups) {
+      if (picked.size >= room) break;
+      picked.add(group.index);
+    }
+    for (const group of affected) {
+      if (picked.size >= room) break;
+      picked.add(group.index);
+    }
+    const dropped = affected.filter((group) => !picked.has(group.index));
+    affected = affected.filter((group) => picked.has(group.index));
+    allocation = {
+      room,
+      priorityBeatIds: [...prioritySet],
+      priorityGroups: affected.filter(hasPriorityBeat).map((group) => group.index),
+      keptGroups: affected.map((group) => group.index),
+      droppedGroups: dropped.map((group) => group.index),
+    };
+    if (dropped.length) {
+      degraded = 'call_limit';
+      budgetExhaustedBy = 'rewrite';
+      for (const group of dropped) skippedGroups.push(group.index);
+    }
+  }
 
   for (const group of affected) {
     const beats = factsOnly ? group.beats : group.beats.filter((beat) => wanted.has(beat.id));
@@ -3057,6 +3104,7 @@ async function rewriteMissingGroups({
     degraded,
     budgetExhaustedBy,
     skippedGroups,
+    rewriteAllocation: allocation,
     rewroteGroups,
     failedGroups,
     boundaryTrimmed,
