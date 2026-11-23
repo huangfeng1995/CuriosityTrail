@@ -352,13 +352,12 @@ function pickProtagonist(characters = []) {
  * 主角出场章的背景交代检查。
  *
  * 不再限定「主角首次出场章」：第二章起仍按本章 revealAt 检查提前与缺失，
- * 只是更早章节已经交代过的事实不再重复要求——没交代的会一直守到交代为止。
+ * 不会因为主角在前文出现过就把整项检查关掉（HP14 修复三）。
  *
  * @param {Object} params
  * @param {Array} params.facts
  * @param {Array} params.characters
  * @param {string} params.chapterText 本章大纲 + 已有正文（用于判断主角是否出场）
- * @param {Array<string>} params.priorBodies 更早章节的正文
  * @param {string} params.body 本章现有正文
  * @returns {{applicable:boolean, protagonist:Object|null, total:number, covered:number, missing:Array}}
  */
@@ -366,7 +365,6 @@ function mustRevealForChapter({
   facts = [],
   characters = [],
   chapterText = '',
-  priorBodies = [],
   body = '',
   plan = null,
   brief = null,
@@ -382,30 +380,7 @@ function mustRevealForChapter({
   const current = `${chapterText || ''}\n${body || ''}`;
   if (!variants.some((name) => current.includes(name))) return empty;
 
-  // 第二章起不再看「主角是不是第一次出场」：更早章节交代过的事实不再重复要求，
-  // 没交代的继续按本章 revealAt 检查提前与缺失（HP14 修复三）。
-  const background = (facts || []).filter(
-    (fact) => normalizeText(fact.fact_type) === FACT_TYPE_BACKGROUND
-  );
-  const prior = (priorBodies || []).join('\n');
-  const pending = prior
-    ? background.filter((fact) => !factHitInText(fact, prior))
-    : background;
-
-  // 更早章节已全部交代完：本章没有要守的项，但也不能误报成「尚未入库」。
-  if (background.length && !pending.length) {
-    return {
-      applicable: true,
-      protagonist,
-      total: 0,
-      covered: 0,
-      missing: [],
-      premature: [],
-      allRevealed: true,
-    };
-  }
-
-  const check = checkMustReveal({ facts: pending, body, plan, brief });
+  const check = checkMustReveal({ facts, body, plan, brief });
 
   // 库里一条背景事实都没有时，不能因为「没有可检查项」就静默放过：
   // 主角出场章必须让作者看见「背景事实还没入库」，否则正文会继续缺年龄/籍贯/寄养原因。

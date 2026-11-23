@@ -219,42 +219,20 @@ test('信息释放时间表：在 revealAt 之后交代才算覆盖', () => {
   assert.ok(!check.missing.some((item) => item.content.includes('十四岁')), '到点说了就不算缺');
 });
 
-test('第二章节起继续守：更早章节出现主角但没交代 → 仍逐项报缺', () => {
+test('第二章节起继续守：主角在前文出现过也仍逐项报缺', () => {
   const chapter = backgroundFacts.mustRevealForChapter({
     facts: factRows(),
     characters: [PROTAGONIST],
     chapterText: '杨平随父亲离城。',
-    priorBodies: ['上一章：杨平在县衙门口站了很久。'],
+    priorBodies: ['上一章：杨平在县衙门口站了很久，今年十四岁，是河内获嘉人。'],
     body: '杨平跟着父亲上车。',
   });
   assert.strictEqual(chapter.applicable, true, '主角再次出场不再是免检理由');
   assert.deepStrictEqual(
     chapter.missing.map((item) => item.content),
-    ['杨平今年十四岁', '杨平是河内获嘉人', '杨平因战乱寄养在司马防家']
+    ['杨平今年十四岁', '杨平是河内获嘉人', '杨平因战乱寄养在司马防家'],
+    '缺失只看本章正文；前章交代过也不能把本章的检查关掉'
   );
-});
-
-test('第二章节起继续守：更早章节已交代过的事实不再重复要求', () => {
-  const chapter = backgroundFacts.mustRevealForChapter({
-    facts: factRows(),
-    characters: [PROTAGONIST],
-    chapterText: '杨平随父亲离城。',
-    priorBodies: ['上一章：杨平今年十四岁，是河内获嘉人。'],
-    body: '杨平跟着父亲上车。',
-  });
-  assert.strictEqual(chapter.applicable, true);
-  assert.deepStrictEqual(chapter.missing.map((item) => item.content), ['杨平因战乱寄养在司马防家']);
-
-  const allRevealed = backgroundFacts.mustRevealForChapter({
-    facts: factRows(),
-    characters: [PROTAGONIST],
-    chapterText: '杨平随父亲离城。',
-    priorBodies: ['上一章：杨平今年十四岁，是河内获嘉人，因战乱寄养在司马防家。'],
-    body: '杨平跟着父亲上车。',
-  });
-  assert.strictEqual(allRevealed.applicable, true);
-  assert.deepStrictEqual(allRevealed.missing, [], '全部交代过就不再报缺');
-  assert.strictEqual(allRevealed.allRevealed, true);
 });
 
 test('第二章节起继续守：更早章节已出现主角，本章提前释放照样报 premature', () => {

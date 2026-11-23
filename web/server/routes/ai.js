@@ -2165,7 +2165,6 @@ router.post('/chat', async (req, res) => {
           facts: backgroundFactRows,
           characters: characterRows,
           chapterText: `${chapterRow.outline || ''}\n${String(message)}`,
-          priorBodies: prior.map((row) => row.content || ''),
           body,
           // 按拍释放：有节拍表与 brief 时，每条背景事实只在 revealAt 之后才允许说；
           // 更早出现即判「底牌提前释放」，交给下面的重写删掉。
