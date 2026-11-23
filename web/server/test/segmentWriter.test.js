@@ -1351,7 +1351,7 @@ test('W2 形态违规按类型计数，总数与违规数组一致', () => {
   assert.strictEqual(shape.summary.avg, 1, '段均 81.4 低于 95.3');
   assert.strictEqual(
     Object.keys(shape.summary).sort().join(','),
-    'avg,corner_quote,count,dialogue_ratio,dialogue_stack,fragment_ratio,quote_density,short_run,short_sentence,too_long,total'
+    'avg,corner_quote,count,dialogue_ratio,dialogue_stack,fragment_ratio,imagery_density,quote_density,short_run,short_sentence,too_long,total'
   );
 });
 
@@ -1395,16 +1395,52 @@ test('A1 引号片段密度与对白占比各自有独立阈值', () => {
   );
 });
 
+test('A3 比喻堆叠有范文阈值，正常叙述不误报', () => {
+  const plan = makePlan(2, 15);
+  const imagery = Array.from(
+    { length: 30 },
+    () => '他像一块石头，站得像一根桩子，风吹过来，院里的灯晃了一晃。'
+  ).join('\n\n');
+  const imageShape = segmentWriter.checkParagraphShape(plan, imagery);
+  assert.strictEqual(imageShape.summary.imagery_density, 1, '每段两个明喻，密度远超 2.1 处/千字');
+  const imageRow = imageShape.violations.find((item) => item.kind === 'imagery_density');
+  assert.strictEqual(imageRow.limit, segmentWriter.IMAGERY_LIMIT);
+  assert.ok(imageRow.perKilo > segmentWriter.IMAGERY_LIMIT);
+
+  const clean = Array.from(
+    { length: 20 },
+    () => '杨平沿着廊下往前走，杨俊在他身后半步，砖缝里的雪水还没有干，靴底踩上去留下两行深浅不一的印子。'
+  ).join('\n\n');
+  const cleanShape = segmentWriter.checkParagraphShape(plan, clean);
+  assert.strictEqual(cleanShape.summary.imagery_density, 0);
+});
+
 test('A1 文字质感三项只拦新造出来的超限，原本超标的好转不被回滚', () => {
   const cap = segmentWriter.SHORT_SENTENCE_RATIO_LIMIT;
   const before = {
     blocking: [{ kind: 'short_sentence', ratio: 40 }],
-    dialogue: { limits: { shortSentenceRatio: cap, quotePerKilo: 12.2, dialogueRatio: 27 } },
+    quality: {
+      limits: {
+        shortSentenceRatio: cap,
+        quotePerKilo: 12.2,
+        dialogueRatio: 27,
+        imageryPerKilo: 2.1,
+        genericPerKilo: 1,
+      },
+    },
     distribution: {},
   };
   const improved = {
     blocking: [{ kind: 'short_sentence', ratio: 30 }],
-    dialogue: { limits: { shortSentenceRatio: cap, quotePerKilo: 12.2, dialogueRatio: 27 } },
+    quality: {
+      limits: {
+        shortSentenceRatio: cap,
+        quotePerKilo: 12.2,
+        dialogueRatio: 27,
+        imageryPerKilo: 2.1,
+        genericPerKilo: 1,
+      },
+    },
     distribution: {},
   };
   assert.deepStrictEqual(
@@ -1415,12 +1451,28 @@ test('A1 文字质感三项只拦新造出来的超限，原本超标的好转�
 
   const cleanBefore = {
     blocking: [],
-    dialogue: { limits: { shortSentenceRatio: cap, quotePerKilo: 12.2, dialogueRatio: 27 } },
+    quality: {
+      limits: {
+        shortSentenceRatio: cap,
+        quotePerKilo: 12.2,
+        dialogueRatio: 27,
+        imageryPerKilo: 2.1,
+        genericPerKilo: 1,
+      },
+    },
     distribution: {},
   };
   const regressed = {
     blocking: [{ kind: 'short_sentence', ratio: 25 }],
-    dialogue: { limits: { shortSentenceRatio: cap, quotePerKilo: 12.2, dialogueRatio: 27 } },
+    quality: {
+      limits: {
+        shortSentenceRatio: cap,
+        quotePerKilo: 12.2,
+        dialogueRatio: 27,
+        imageryPerKilo: 2.1,
+        genericPerKilo: 1,
+      },
+    },
     distribution: {},
   };
   const problems = segmentWriter.shapeAcceptProblems(cleanBefore, regressed, ['B1']);
@@ -1724,7 +1776,7 @@ test('全章超过 7000 字安全上限时截到最后一个完整段并标记',
 
 function shapeRows(count = 12, mutate = () => {}) {
   const longSentence =
-    '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里有人轻轻咳了一声。';
+    '风雪压着庙檐，他把手按在门环上，指腹能摸到一层薄冰，门里传来一声轻咳。';
   const rows = Array.from({ length: count }, (_, i) => `第${i + 1}段：${longSentence}${longSentence}${longSentence}`);
   mutate(rows);
   return rows.join('\n\n');

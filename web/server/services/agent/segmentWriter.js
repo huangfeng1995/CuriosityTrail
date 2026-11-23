@@ -14,7 +14,7 @@
 
 const { countWords } = require('../wordCount');
 const { briefWriterBlock } = require('./planBrief');
-const { measureSentenceLength, measureDialogueRatio } = require('../style/metrics');
+const { measureSentenceLength, measureDialogueRatio, measureImageryDensity } = require('../style/metrics');
 
 /** 每组最多写的节拍数（设计上允许 2–4，取 3 让 8 拍的章也有 3 次推进） */
 const MAX_BEATS_PER_GROUP = 3;
@@ -78,6 +78,7 @@ const PARAGRAPH_SHAPE_RULES = [
   '- 对白必须与动作/叙述合并在同一段，不得连续独立成段；只有两句以内、且前后有动作句时才允许单独成段。',
   '- 对白写成有主语、有动作、有停顿的整段：同一轮交流合进一段，不要一句一引号、不要一句话配一个反应短句；说话人的动作、神态、对方的反应与停顿都放在同一段里。',
   '- 字数质感按范文控制：≤12 字短句不超过全章 18%（范文 12.3%）；引号片段不超过 12 处/千字（范文 8.1）；对白占比不超过全章 27%（范文 18%）。超出部分改成叙述、心理与动作，不许靠加标点把短句撑长。',
+  '- 比喻不堆叠：全章不超过 2.1 处/千字（范文 1.39），同一段最多一个明喻；删掉重复的「像/仿佛/如同」，改用动作、感官与细节。',
   '- 引号统一用全角 “”，禁止使用「」；关键交流必须写成直接引语：用人物原话，带说话人的动作、神态或对方的反应，不要用「他说他问我是否……」这类转述代替关键对话。',
   '- 每次对话都要推动一次变化：关系、立场、决定或信息，至少变一项；不写只为填充的寒暄。',
   '- 每一拍都要有变量变化、信息增量和代价；关键决定要写决定本身和它要付的代价。',
@@ -189,6 +190,17 @@ const DIALOGUE_RATIO_LIMIT = Math.round(SAMPLE_DIALOGUE_RATIO * 1.5 * 10) / 10;
 const QUOTE_SPAN_RE = /“[^“”]*”/g;
 /** 同一口径的非全局版本，供 test 使用（全局正则的 lastIndex 会串状态）。 */
 const QUOTE_SPAN_TEST_RE = /“[^“”]*”/;
+
+/**
+ * 比喻密度上限，同样来自范文实测。
+ *
+ *   - 比喻 1.39 处/千字（measure.py 标记词口径）→ 上限 2.1（×1.5）；
+ *     线上实测 2.32，主要是「像/仿佛/如同」在同一段里连用。
+ *
+ * 只压堆叠，不禁止使用。
+ */
+const SAMPLE_IMAGERY_PER_KILO = 1.39;
+const IMAGERY_LIMIT = Math.round(SAMPLE_IMAGERY_PER_KILO * 1.5 * 10) / 10;
 
 /** 交付与日志里显式写出的口径，避免「目标」和「段长」以后又被混用。 */
 const SHAPE_MEASURE = Object.freeze({
@@ -1355,6 +1367,7 @@ function buildBeatRewriteInstruction({
       const needsDialogueFix = shapeRows.some((row) =>
         ['short_sentence', 'quote_density', 'dialogue_ratio'].includes(row.kind)
       );
+      const needsStyleFix = shapeRows.some((row) => row.kind === 'imagery_density');
       clauses.push(
         `本拍段落形态不合规（${describeShapeViolations(shapeRows)}）：` +
           `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320，单段不超 320）；` +
@@ -1363,6 +1376,9 @@ function buildBeatRewriteInstruction({
           (needsDialogueFix
             ? '把微型对白合成有主语、有动作、有停顿的对白段：同一轮交流写在一段里，不要一句一引号、不要一句话配一个反应短句；' +
               '超出对白承载的背景、判断与情绪改成叙述、心理和动作，不许靠加标点或硬并句把短句撑长。'
+            : '') +
+          (needsStyleFix
+            ? '比喻不堆叠：同一段最多一个明喻，删掉重复的「像/仿佛/如同」，改用动作、感官与细节。'
             : '') +
           ` 先保本拍纯汉字目标，再调形状；重写后本拍段数优先落在 ${Math.max(1, planned - SHAPE_BEAT_TOLERANCE)}–${planned + SHAPE_BEAT_TOLERANCE} 段。`
       );
@@ -1685,7 +1701,7 @@ function checkParagraphShape(plan, body) {
       summary: summarizeShapeViolations([]),
       buckets: {},
       stats: null,
-      dialogue: null,
+      quality: null,
       distribution: null,
     };
   }
@@ -1732,17 +1748,20 @@ function checkParagraphShape(plan, body) {
   const quoteSpans = (text.match(QUOTE_SPAN_RE) || []).length;
   const quotePerKilo = totalChars ? Math.round((quoteSpans / totalChars) * 1000 * 10) / 10 : 0;
   const dialogueRatio = measureDialogueRatio(text);
-  const dialogueStats = {
+  const imageryPerKilo = measureImageryDensity(text);
+  const qualityStats = {
     shortSentenceRatio,
     shortSentenceCount,
     sentenceTotal,
     quoteSpans,
     quotePerKilo,
     dialogueRatio,
+    imageryPerKilo,
     limits: {
       shortSentenceRatio: SHORT_SENTENCE_RATIO_LIMIT,
       quotePerKilo: QUOTE_SPAN_LIMIT,
       dialogueRatio: DIALOGUE_RATIO_LIMIT,
+      imageryPerKilo: IMAGERY_LIMIT,
     },
   };
   if (sentenceTotal >= 20 && shortSentenceRatio > SHORT_SENTENCE_RATIO_LIMIT) {
@@ -1790,6 +1809,25 @@ function checkParagraphShape(plan, body) {
       kind: 'dialogue_ratio',
       ratio: dialogueRatio,
       limit: DIALOGUE_RATIO_LIMIT,
+    });
+  }
+  if (imageryPerKilo > IMAGERY_LIMIT) {
+    violations.push({
+      beatId: worstBeatFor(
+        paragraphs
+          .map((paragraph, index) =>
+            /像|如同|仿佛|宛如|好似|犹如/.test(paragraph) ? index : -1
+          )
+          .filter((index) => index >= 0),
+        ranges,
+        beats
+      ),
+      kind: 'imagery_density',
+      perKilo: imageryPerKilo,
+      limit: IMAGERY_LIMIT,
+      sample: paragraphSample(
+        paragraphs.find((paragraph) => /像|如同|仿佛|宛如|好似|犹如/.test(paragraph)) || ''
+      ),
     });
   }
 
@@ -1947,7 +1985,7 @@ function checkParagraphShape(plan, body) {
     summary: summarizeShapeViolations(violations),
     buckets,
     stats,
-    dialogue: dialogueStats,
+    quality: qualityStats,
     distribution: {
       hardMax: SHAPE_HARD_MAX,
       fragmentRatio: buckets['40to79'].ratio,
@@ -1960,7 +1998,7 @@ function checkParagraphShape(plan, body) {
   };
 }
 
-/** 违规按类型计数：分布校验下只保留这十类。 */
+/** 违规按类型计数：分布校验下只保留这十一类。 */
 const SHAPE_KINDS = [
   'count',
   'too_long',
@@ -1972,6 +2010,7 @@ const SHAPE_KINDS = [
   'short_sentence',
   'quote_density',
   'dialogue_ratio',
+  'imagery_density',
 ];
 
 function summarizeShapeViolations(violations) {
@@ -2015,6 +2054,7 @@ function evaluateShapeDelivery(shape) {
         'short_sentence',
         'quote_density',
         'dialogue_ratio',
+        'imagery_density',
       ].includes(row.kind)
     ) {
       return true;
@@ -2091,11 +2131,12 @@ function shapeAcceptProblems(before, after, ownedBeatIds) {
     return row ? Number(row[field]) || 0 : 0;
   };
   const limitOf = (field) =>
-    (after && after.dialogue && after.dialogue.limits && after.dialogue.limits[field]) || 0;
+    (after && after.quality && after.quality.limits && after.quality.limits[field]) || 0;
   for (const [kind, field, limitField, label, unit] of [
     ['short_sentence', 'ratio', 'shortSentenceRatio', '≤12 字短句占比', '%'],
     ['quote_density', 'perKilo', 'quotePerKilo', '引号片段密度', ' 处/千字'],
     ['dialogue_ratio', 'ratio', 'dialogueRatio', '对白占比', '%'],
+    ['imagery_density', 'perKilo', 'imageryPerKilo', '比喻密度', ' 处/千字'],
   ]) {
     const beforeValue = metricOf(beforeBlocking, kind, field);
     const afterValue = metricOf(afterBlocking, kind, field);
@@ -2136,6 +2177,12 @@ function describeShapeViolations(rows) {
   if (dialogueRatio) {
     parts.push(
       `对白占比 ${dialogueRatio.ratio}%（上限 ${dialogueRatio.limit}%，范文 ${SAMPLE_DIALOGUE_RATIO}%）`
+    );
+  }
+  const imagery = list.find((row) => row.kind === 'imagery_density');
+  if (imagery) {
+    parts.push(
+      `比喻 ${imagery.perKilo} 处/千字（上限 ${imagery.limit}，范文 ${SAMPLE_IMAGERY_PER_KILO}）`
     );
   }
   const tooLong = list.filter((row) => row.kind === 'too_long').length;
@@ -3611,6 +3658,8 @@ module.exports = {
   QUOTE_SPAN_LIMIT,
   SAMPLE_DIALOGUE_RATIO,
   DIALOGUE_RATIO_LIMIT,
+  SAMPLE_IMAGERY_PER_KILO,
+  IMAGERY_LIMIT,
   SAMPLE_TOTAL_PARAGRAPHS,
   SAMPLE_MEAN_CHARS,
   SAMPLE_MEDIAN_CHARS,
