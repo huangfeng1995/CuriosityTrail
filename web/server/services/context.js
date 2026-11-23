@@ -23,6 +23,7 @@ const { all, get } = require('../database');
 const { getRole } = require('./roles');
 const skills = require('./skills');
 const style = require('./style');
+const plotCards = require('./plotCards');
 const { isPipelineEnabled } = require('./pipeline/gate');
 const { knowledgeAt } = require('./pipeline/knowledge');
 
@@ -34,6 +35,10 @@ const CONTINUITY_LIMIT = 500;
 const CONTENT_LIMIT = 12000;
 /** 灵感速记最多注入多少条 */
 const INSPIRATION_LIMIT = 10;
+/** 情节卡单张标题/备注的裁剪长度，以及整块上限 */
+const PLOT_CARD_TITLE_LIMIT = 60;
+const PLOT_CARD_CONTENT_LIMIT = 120;
+const PLOT_CARD_BLOCK_LIMIT = 1400;
 /** 历史锚点分区上限：整段（含标题、脚注、省略提示）不超过 800 字 */
 const ANCHOR_LIMIT = 800;
 /** 历史锚点最多展示 12 条 */
@@ -256,6 +261,39 @@ function formatSetting(s) {
   return `【${s.name}·${s.category}】\n${s.content}`;
 }
 
+/** 从头截断：情节卡的标题与备注要把信息量最大的前半段留住。 */
+function clipHead(text, limit) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value) return '';
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+
+/**
+ * 本章情节卡的注入块。
+ *
+ * 只给写手（生成侧）看：卡里的节点是作者预先定好的事件来源，可以写进正文；
+ * 已完成的卡只允许承接，不能再演一遍；卡外的人名/物名/道具不得新增。
+ * 整块有硬上限，卡片再多也不会把上下文挤爆。
+ */
+function formatPlotCardBlock(cards) {
+  const lines = ['## 本章情节卡（作者预定的剧情节点，可作为事件来源）'];
+  for (const card of cards) {
+    const scope = card.chapter_id ? '本章' : '全书';
+    const kind = plotCards.KIND_LABELS[card.kind] || '情节';
+    const status = plotCards.STATUS_LABELS[card.status] || '待写';
+    const hint = card.status === 'done' ? '已完成：只承接，不重演' : `${status}：本章要写出`;
+    const title = clipHead(card.title, PLOT_CARD_TITLE_LIMIT);
+    const content = clipHead(card.content, PLOT_CARD_CONTENT_LIMIT);
+    lines.push(`- [${scope}/${kind}] ${title}（${hint}）${content ? `：${content}` : ''}`);
+  }
+  lines.push(
+    '「待写/进行中」的卡是本章可以排进正文的事件来源；「已完成」的节点只承接，不得重演。' +
+      '卡里没有的人名、物名、关键道具不得新增。'
+  );
+  const text = lines.join('\n');
+  return text.length <= PLOT_CARD_BLOCK_LIMIT ? text : `${text.slice(0, PLOT_CARD_BLOCK_LIMIT)}…`;
+}
+
 /**
  * 从 blocks 中找到上一场景的结尾。
  *
@@ -365,6 +403,7 @@ async function assembleContext(params = {}) {
     userId,
     includeChapterBody = true,
     beatPlan,
+    plotCards: providedPlotCards,
   } = params;
 
   const role = await getRole(roleKey, userId);
@@ -401,6 +440,8 @@ async function assembleContext(params = {}) {
     anchorCount: 0,
     // 本轮知情边界实际注入的角色数。关闭模板、矩阵为空、或没有可注入的角色时都是 0。
     knowledgeCount: 0,
+    // 本轮注入的情节卡条数。没有卡、非写手角色、或不在章节里时都是 0。
+    plotCards: 0,
   };
 
   if (styleText) {
@@ -448,6 +489,20 @@ async function assembleContext(params = {}) {
       // 不注入的话，规划和写作都只能从标题猜，很容易写偏。
       if (chapter.outline) lines.push(`大纲：\n${truncate(chapter.outline, OUTLINE_LIMIT)}`);
       addPart(lines.join('\n'), PRIORITY.CONTENT);
+    }
+  }
+
+  // ---- 2.5 情节卡层 ----
+  // 作者在面板里排好的剧情节点，是本章的「事件来源」。
+  // 只给写手读：规划和起稿都必须看得见，否则面板就只是摆设。
+  // 没有卡时这里什么都不加，原链路不感知、也不多消耗模型调用。
+  if (roleKey === 'writer' && workId && chapterId) {
+    const cards = Array.isArray(providedPlotCards)
+      ? providedPlotCards
+      : await plotCards.listForContext(workId, chapterId).catch(() => []);
+    if (cards.length) {
+      meta.plotCards = cards.length;
+      addPart(formatPlotCardBlock(cards), PRIORITY.CONTENT);
     }
   }
 
@@ -1364,6 +1419,7 @@ module.exports = {
   collectMatchText,
   formatCharacter,
   formatSetting,
+  formatPlotCardBlock,
   nameVariants,
   trimHistory,
   applyBudget,

@@ -30,6 +30,7 @@ const memoryClient = require('../services/memory/client');
 const indexer = require('../services/memory/indexer');
 const memoryConv = require('../services/memory/conversation');
 const memorySources = require('../services/memory/sources');
+const plotCards = require('../services/plotCards');
 const { parseModelJson } = require('../services/agent/parse');
 const { runAgentLoop } = require('../services/agent/loop');
 const {
@@ -889,6 +890,24 @@ router.post('/chat', async (req, res) => {
       scope: 'chat',
     });
 
+    // 生成侧的情节卡：本章卡 + 全书级卡。只给写手；没有卡时是空数组，
+    // 上下文装配与规划都原样走旧链路，不多一次模型调用。
+    const plotCardRows = roleKey === 'writer' && workId && chapterId
+      ? await plotCards.listForContext(workId, chapterId).catch(() => [])
+      : [];
+    if (plotCardRows.length) {
+      console.log(
+        JSON.stringify({
+          event: 'ai_plot_cards',
+          traceId,
+          userId: req.userId,
+          chapterId,
+          count: plotCardRows.length,
+          ids: plotCardRows.map((card) => card.id),
+        })
+      );
+    }
+
     // 上下文参数留一份：规划成功后要用同一份快照 + 节拍表重建，
     // 让本章知情边界看到「本章计划揭示的事实」。
     const contextParams = {
@@ -900,6 +919,8 @@ router.post('/chat', async (req, res) => {
       memoryRefs: memoryResult.refs,
       blocks,
       userId: req.userId,
+      // 同一份卡片既进上下文，也进实体接地语料，避免两处口径分叉。
+      plotCards: plotCardRows,
     };
     const { messages, meta } = await assembleContext(contextParams);
 
@@ -1123,6 +1144,9 @@ router.post('/chat', async (req, res) => {
           characters: groundCharacters || [],
           settings: groundSettings || [],
           materials: groundMaterials || [],
+          // 情节卡里的标题/备注也进实体接地语料：卡里的节点是合法出处，
+          // 卡外的新人名/新道具仍然找不到出处。
+          plotCards: plotCardRows,
         };
         // 姓名 + 别名（aliases 可能是逗号/顿号分隔的字符串），只做前情账本的人物识别用。
         planCharacterNames = [...new Set(
@@ -1480,6 +1504,7 @@ router.post('/chat', async (req, res) => {
             briefOpponent: briefCoverageResult ? briefCoverageResult.opponent : 'absent',
             briefHandover: briefCoverageResult ? briefCoverageResult.handover : 'absent',
             briefMissing: briefCoverageResult ? briefCoverageResult.missing.map((x) => x.id) : [],
+            plotCards: plotCardRows.length,
             errors: (planOut.errors || []).slice(0, 6),
             usage: planOut.usage || null,
           })

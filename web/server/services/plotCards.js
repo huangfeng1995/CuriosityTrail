@@ -65,6 +65,41 @@ async function listCardsByChapter(chapterId) {
 }
 
 /**
+ * 生成侧要读的情节卡：本章卡 + 全书级卡。
+ *
+ * 只给生成用，不改变面板的列表口径。本章卡全取（有上限），全书级卡只取前几张，
+ * 避免作品里卡片很多时把上下文挤满。没有卡片时返回空数组，调用方原样退回旧逻辑。
+ */
+const CONTEXT_CHAPTER_LIMIT = 8;
+const CONTEXT_WORK_LIMIT = 4;
+
+async function listForContext(workId, chapterId) {
+  if (!workId) return [];
+
+  const chapterCards = chapterId
+    ? await all(
+        `SELECT id, work_id, chapter_id, title, kind, content, seq, status
+         FROM plot_cards
+         WHERE work_id = ? AND chapter_id = ?
+         ORDER BY seq, created_at
+         LIMIT ?`,
+        [workId, chapterId, CONTEXT_CHAPTER_LIMIT]
+      )
+    : [];
+
+  const workCards = await all(
+    `SELECT id, work_id, chapter_id, title, kind, content, seq, status
+     FROM plot_cards
+     WHERE work_id = ? AND chapter_id IS NULL
+     ORDER BY seq, created_at
+     LIMIT ?`,
+    [workId, CONTEXT_WORK_LIMIT]
+  );
+
+  return [...chapterCards, ...workCards];
+}
+
+/**
  * 取一张卡片（含所属章节的标题与序号）。
  *
  * 带章节信息是为了让前端列表直接显示"挂在第几章"，
@@ -187,6 +222,7 @@ async function reorderCards(workId, cardIds) {
 module.exports = {
   listCards,
   listCardsByChapter,
+  listForContext,
   getCard,
   createCard,
   updateCard,

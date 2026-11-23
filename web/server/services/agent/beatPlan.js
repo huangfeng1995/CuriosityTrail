@@ -238,7 +238,8 @@ targetChars 与 wordShare 要能对上：targetChars ≈ wordShare × 5000 / 100
 不单独集中铺陈成长篇回忆；议论才是第二长拍（25%），靠一来一回的信息交换推进。
 回城/身世这一拍不能并进过渡拍，目标份额低于 16% 会被判不合格。
 每个节拍必须让至少一个变量发生改变，必须写出代价，禁止空转抒情段。
-mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不新增未提供的人物或设定。`;
+mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不新增未提供的人物或设定；
+情节卡里待写/进行中的节点要排进拍表，不要当作已发生事件写进 avoidRepeat；已完成的只承接不重演。`;
 
 /**
  * 有本章大纲时的规划提示词。
@@ -260,12 +261,14 @@ delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（
 1. 4–8 拍；每拍 3–12 段，全章合计 20–80 段。
 2. 每拍必须有主角的一个具体目标（他要做什么、想得到什么）、一个阻碍、一个转折、一个代价。
    主角不能只被事件推着走：他要主动做出至少一个选择，并承担选择的后果。
-3. entities 列出这一拍出现的人名、物名、关键道具。只能用「可用实体」清单与本章大纲里
-   已经出现过的名字；清单之外的人名、物名、关键道具一律不许出现。
+3. entities 列出这一拍出现的人名、物名、关键道具。只能用「可用实体」清单、本章大纲、
+   本章情节卡里已经出现过的名字；这些来源之外的人名、物名、关键道具一律不许出现。
    不许用「父亲/老师/领导/陌生人」这类新角色来补拍，也不许新增证明、信件、名额之类
-   大纲里没有的关键道具。
-4. 不得新增大纲没有的事件，不得改变事件结果；可以细化动作、对话与场面。
-5. 只依据给定资料，不新增人物或设定。
+   这些来源里没有的关键道具。
+4. 情节卡里 status=待写/进行中的节点是本章要发生的事件，应排进拍表，不要写进 avoidRepeat；
+   status=已完成的节点才是已经写过的内容，只能承接、不得重演。
+   不得新增本章大纲与情节卡都没有的事件，不得改变事件结果；可以细化动作、对话与场面。
+5. 只依据给定资料，不新增人物或设定；卡里没有的东西不要补。
 6. mainType 必须与某一个 beats[].type 相同。`;
 
 /** 代词与泛称：不算「新实体」，不需要在资料里有出处。 */
@@ -296,9 +299,9 @@ function normalizeEntity(value) {
 /**
  * 把 grounding 资料压成一段可做包含判断的语料。
  *
- * 来源：本章大纲、作者本次指令、作品信息、人物卡（名/别名）、设定名、素材标题。
- * 只做「是否出现过」的判断，不做语义匹配——宁可让模型多改一次，也不放行
- * 一个资料里根本不存在的「父亲」。
+ * 来源：本章大纲、作者本次指令、作品信息、人物卡（名/别名）、设定名、素材标题、
+ * 本章情节卡（标题/备注）。只做「是否出现过」的判断，不做语义匹配——宁可让模型
+ * 多改一次，也不放行一个资料里根本不存在的「父亲」。
  */
 function groundCorpus(ground) {
   if (!ground) return '';
@@ -311,6 +314,7 @@ function groundCorpus(ground) {
     ...(ground.characters || []).flatMap((row) => [row.name, row.aliases]),
     ...(ground.settings || []).map((row) => row.name),
     ...(ground.materials || []).map((row) => row.title),
+    ...(ground.plotCards || []).flatMap((row) => [row.title, row.content]),
   ];
   return normalizeEntity(parts.filter(Boolean).join('\n'));
 }
@@ -333,6 +337,19 @@ function ungroundedEntities(beat, corpus) {
   return (beat.entities || []).filter((entity) => !entityGrounded(entity, corpus));
 }
 
+const CARD_KIND_LABELS = Object.freeze({
+  plot: '情节',
+  character: '人物',
+  setting: '设定',
+  conflict: '冲突',
+  foreshadow: '伏笔',
+});
+const CARD_STATUS_LABELS = Object.freeze({
+  todo: '待写',
+  doing: '进行中',
+  done: '已完成',
+});
+
 /** 给规划提示词追加「可用实体」清单。 */
 function buildGroundBlock(ground) {
   if (!ground) return '';
@@ -341,12 +358,27 @@ function buildGroundBlock(ground) {
     ...(ground.settings || []).map((row) => row.name),
   ].filter(Boolean));
   const materials = unique((ground.materials || []).map((row) => row.title).filter(Boolean));
+  const cards = (ground.plotCards || []).filter((card) => card && card.title);
 
   const lines = ['## 可用实体（人名 / 物名 / 关键道具只能从这里取）'];
   if (ground.outline) lines.push(`本章大纲：${ground.outline}`);
   lines.push(`人物与设定：${names.length ? names.join('、') : '（未登记，只能使用大纲里已有的名字）'}`);
   if (materials.length) lines.push(`素材：${materials.join('、')}`);
-  lines.push('清单与大纲之外的人名、物名、关键道具一律不得出现。');
+  if (cards.length) {
+    lines.push(
+      '本章情节卡（「待写/进行中」是本章要排进拍表的事件来源；「已完成」只承接、不重演）：'
+    );
+    for (const card of cards) {
+      const kind = CARD_KIND_LABELS[card.kind] || '情节';
+      const status = CARD_STATUS_LABELS[card.status] || '待写';
+      const hint = card.status === 'done' ? '已完成：只承接，不重演' : `${status}：本章要写出`;
+      const content = String(card.content || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      lines.push(
+        `- [${kind}] ${String(card.title).slice(0, 60)}（${hint}）${content ? `：${content}` : ''}`
+      );
+    }
+  }
+  lines.push('清单、大纲与情节卡之外的人名、物名、关键道具一律不得出现。');
   return `\n\n---\n\n${lines.join('\n')}`;
 }
 

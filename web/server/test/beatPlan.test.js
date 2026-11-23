@@ -986,6 +986,75 @@ test('大纲模式：别名、设定名、素材标题都可以作为出处', ()
   assert.strictEqual(check.ok, true, check.errors.join('；'));
 });
 
+test('大纲模式：情节卡标题与备注也是实体出处，卡外的仍被拒', () => {
+  const ground = {
+    ...OUTLINE_GROUND,
+    plotCards: [
+      {
+        id: 'pc-1',
+        title: '档案室的第三份验尸报告',
+        content: '陈默用老周给的钥匙打开档案柜，发现报告末页被撕走。',
+        kind: 'plot',
+        status: 'todo',
+      },
+    ],
+  };
+
+  const withCardEntities = makeOutlinePlan();
+  withCardEntities.beats[0].entities = ['验尸报告', '钥匙'];
+  const ok = validateBeatPlan(withCardEntities, { mode: 'outline', ground });
+  assert.strictEqual(ok.ok, true, ok.errors.join('；'));
+
+  const withOutsideEntity = makeOutlinePlan();
+  withOutsideEntity.beats[0].entities = ['王警官'];
+  const rejected = validateBeatPlan(withOutsideEntity, { mode: 'outline', ground });
+  assert.strictEqual(rejected.ok, false);
+  assert.match(rejected.errors.join('；'), /王警官/);
+  assert.match(rejected.errors.join('；'), /找不到出处/);
+});
+
+test('大纲模式：规划提示词列出情节卡节点，卡外实体仍触发重排', async () => {
+  const calls = [];
+  const provider = {
+    async chat(options) {
+      calls.push(options);
+      return { content: JSON.stringify(makeOutlinePlan()) };
+    },
+  };
+  const ground = {
+    ...OUTLINE_GROUND,
+    plotCards: [
+      {
+        title: '档案室的第三份验尸报告',
+        content: '陈默用老周给的钥匙打开档案柜。',
+        kind: 'plot',
+        status: 'doing',
+      },
+      {
+        title: '周父当年在河内做过县吏',
+        content: '到第九章才收的伏笔。',
+        kind: 'foreshadow',
+        status: 'done',
+      },
+    ],
+  };
+
+  await generateBeatPlan({
+    provider,
+    systemPrompt: '## 作品上下文',
+    instruction: '按本章大纲写这一章',
+    planMode: 'outline',
+    ground,
+    options: {},
+  });
+
+  const system = calls[0].messages[0].content;
+  assert.match(system, /本章情节卡（「待写\/进行中」是本章要排进拍表的事件来源/);
+  assert.match(system, /\[情节\] 档案室的第三份验尸报告（进行中：本章要写出）/);
+  assert.match(system, /\[伏笔\] 周父当年在河内做过县吏（已完成：只承接，不重演）/);
+  assert.match(system, /清单、大纲与情节卡之外的人名、物名、关键道具一律不得出现/);
+});
+
 test('大纲模式：重排后仍带无出处实体时，salvage 拒绝该拍；不足 4 拍则放弃计划', () => {
   const five = makeOutlinePlan();
   five.beats = [

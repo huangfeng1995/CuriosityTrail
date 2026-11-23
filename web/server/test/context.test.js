@@ -186,6 +186,160 @@ test('空章节：按大纲与上一章出场注入人物卡，高重要性设�
   assert.ok(system.includes('本章还没有正文'), '仍要说明本章还没有正文');
 });
 
+test('情节卡进入写手上下文：本章卡与全书卡都可见，非写手不注入', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-plot-cards';
+  const chapterId = 'chapter-plot-cards';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, ?, '', '', '', 0, ?, ?)`,
+    [workId, userId, '情节卡测试', now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, ?, 1, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, '第七章', now, now]
+  );
+
+  await db.run(
+    `INSERT INTO plot_cards
+       (id, work_id, chapter_id, title, kind, content, seq, status, created_at, modified_at)
+     VALUES (?, ?, ?, ?, 'plot', ?, 0, 'todo', ?, ?)`,
+    [
+      'pc-chapter',
+      workId,
+      chapterId,
+      '档案室的第三份验尸报告',
+      '陈默用老周给的钥匙打开档案柜，发现报告末页被人撕走。',
+      now,
+      now,
+    ]
+  );
+  await db.run(
+    `INSERT INTO plot_cards
+       (id, work_id, chapter_id, title, kind, content, seq, status, created_at, modified_at)
+     VALUES (?, ?, NULL, ?, 'foreshadow', ?, 1, 'done', ?, ?)`,
+    ['pc-work', workId, '周父当年在河内做过县吏', '这条伏笔到第九章才收。', now, now]
+  );
+
+  const { messages, meta } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+  const system = messages[0].content;
+
+  assert.strictEqual(meta.plotCards, 2);
+  assert.ok(system.includes('## 本章情节卡'), '写手上下文必须有情节卡分区');
+  assert.ok(
+    system.includes('[本章/情节] 档案室的第三份验尸报告（待写：本章要写出）'),
+    '本章卡要标清来源与「本章要写出」'
+  );
+  assert.ok(system.includes('陈默用老周给的钥匙打开档案柜'), '卡里的备注要进 prompt');
+  assert.ok(
+    system.includes('[全书/伏笔] 周父当年在河内做过县吏（已完成：只承接，不重演）'),
+    '全书级卡也要进，并标明已完成只承接'
+  );
+  assert.ok(system.includes('「已完成」的节点只承接，不得重演'), '已完成节点要限制重演');
+  assert.ok(system.includes('卡里没有的人名、物名、关键道具不得新增'), '卡外实体要禁止新增');
+
+  const reviewer = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'reviewer',
+    scope: 'chapter',
+    userId,
+  });
+  assert.ok(!reviewer.messages[0].content.includes('## 本章情节卡'), '非写手角色不注入情节卡');
+  assert.strictEqual(reviewer.meta.plotCards, 0);
+});
+
+test('本章没有情节卡时退回旧上下文，不出现情节卡分区', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-no-plot-cards';
+  const chapterId = 'chapter-no-plot-cards';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, ?, '', '', '', 0, ?, ?)`,
+    [workId, userId, '无卡测试', now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, ?, 1, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, '第一章', now, now]
+  );
+
+  const { messages, meta } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+
+  assert.strictEqual(meta.plotCards, 0);
+  assert.ok(!messages[0].content.includes('## 本章情节卡'), '没卡时不应凭空出现分区');
+});
+
+test('情节卡读取上限：本章最多 8 张、全书最多 4 张', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-plot-card-limits';
+  const chapterId = 'chapter-plot-card-limits';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, ?, '', '', '', 0, ?, ?)`,
+    [workId, userId, '上限测试', now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, ?, 1, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, '第一章', now, now]
+  );
+
+  for (let i = 0; i < 10; i += 1) {
+    await db.run(
+      `INSERT INTO plot_cards
+         (id, work_id, chapter_id, title, kind, content, seq, status, created_at, modified_at)
+       VALUES (?, ?, ?, ?, 'plot', '', ?, 'todo', ?, ?)`,
+      [`pc-ch-${i}`, workId, chapterId, `本章卡${i}`, i, now, now]
+    );
+  }
+  for (let i = 0; i < 5; i += 1) {
+    await db.run(
+      `INSERT INTO plot_cards
+         (id, work_id, chapter_id, title, kind, content, seq, status, created_at, modified_at)
+       VALUES (?, ?, NULL, ?, 'plot', '', ?, 'todo', ?, ?)`,
+      [`pc-work-${i}`, workId, `全书卡${i}`, 100 + i, now, now]
+    );
+  }
+
+  const cards = await require('../services/plotCards').listForContext(workId, chapterId);
+
+  assert.strictEqual(cards.length, 12);
+  assert.deepStrictEqual(
+    cards.map((card) => card.id),
+    [
+      ...Array.from({ length: 8 }, (_, i) => `pc-ch-${i}`),
+      ...Array.from({ length: 4 }, (_, i) => `pc-work-${i}`),
+    ],
+    '先本章卡后全书卡，各自按上限截断'
+  );
+});
+
 test('历史裁剪：超预算时保留最近消息，并从 user 开始', () => {
   const history = [
     { role: 'user', content: 'q1' },
