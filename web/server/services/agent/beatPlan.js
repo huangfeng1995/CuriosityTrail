@@ -1682,8 +1682,10 @@ async function generateBeatPlan({
         ...options,
         jsonOutput: true,
         // 实测：6 拍 / 45 段的完整节拍表约 1558 tokens；加上 functionReason、
-        // targetChars 与 8 拍上限，2600 才留得住余量，2000 会在末拍截断。
-        maxTokens: 2600,
+        // targetChars、8 拍上限与具名人物/地点清单（6 人 + 4 地约 300–500），
+        // 2600 会在末拍截断成非法 JSON（线上实测 completion 正好卡在 2600）。
+        // 3600 留出余量，仍远低于正文预算。
+        maxTokens: 3600,
       });
 
       lastRaw = String(result.content || '');
