@@ -400,6 +400,65 @@ async function findPreviousChapterWithBody(workId, seq) {
 }
 
 /**
+ * 上一章末尾的「落点」：时间地点、在场人物、末句语气。
+ *
+ * 数据来源只有两处：上一章已生成的摘要（setting/characters）与原文最后 800 字。
+ * 不调模型、不做推测：摘要缺字段就退回原文匹配，原文也匹配不到就如实写「未标注」。
+ *
+ * @param {Object} previousChapter 上一章完整行（含 summary）
+ * @param {string} [workId]
+ * @returns {Promise<string[]>} 可直接拼进 prompt 的行
+ */
+async function buildPreviousHandoffLines(previousChapter, workId) {
+  if (!previousChapter) return [];
+  const body = chapterBody(previousChapter);
+  const tail = body.slice(-800);
+
+  let summary = null;
+  if (previousChapter.summary) {
+    try {
+      const parsed = JSON.parse(previousChapter.summary);
+      if (parsed && typeof parsed === 'object') summary = parsed;
+    } catch (e) {
+      summary = null;
+    }
+  }
+
+  let present = Array.isArray(summary && summary.characters)
+    ? summary.characters.map((name) => String(name || '').trim()).filter(Boolean)
+    : [];
+
+  if (!present.length && workId) {
+    // 摘要没有人物字段时，用人物卡姓名/别名在上一章末尾里贴一遍。
+    const characters = await all('SELECT name, aliases FROM characters WHERE work_id = ?', [workId]);
+    present = characters
+      .filter((character) =>
+        nameVariants(character).some((variant) => variant && tail.includes(variant))
+      )
+      .map((character) => character.name)
+      .slice(0, 8);
+  }
+
+  const timePlace = summary && summary.setting ? String(summary.setting) : '';
+  const openThreads = summary && summary.open_threads ? String(summary.open_threads) : '';
+  const lastSentence = (() => {
+    const clean = body.replace(/\s+/g, ' ').trim();
+    if (!clean) return '';
+    const sentences = clean.split(/(?<=[。！？!?])/).filter(Boolean);
+    return (sentences[sentences.length - 1] || clean).trim().slice(-120);
+  })();
+
+  const lines = [
+    `上一章：第 ${previousChapter.seq} 章《${previousChapter.title}》`,
+    `时间地点：${timePlace || '未标注，沿用上一章结尾原文，不要重新交代场景'}`,
+    `在场人物：${present.length ? present.join('、') : '未标注，按原文结尾判断'}`,
+  ];
+  if (openThreads) lines.push(`未解：${openThreads}`);
+  if (lastSentence) lines.push(`末句（语气参照，不要照抄）：${lastSentence}`);
+  return lines;
+}
+
+/**
  * 装配上下文消息数组。
  *
  * @param {Object} params
@@ -794,24 +853,29 @@ async function assembleContext(params = {}) {
   } else if (chapter) {
     if (!includeChapterBody) {
       // 规划步：不塞整章正文（省预算，也避免模型把原文复述一遍）。
-      // 只给上一章结尾作前情摘要——下一章该接什么，答案在那里。
+      // 只给上一章落点与结尾，下一章该接什么，答案在那里。
       if (previousChapter) {
-        const tail = chapterBody(previousChapter);
-        if (tail.trim()) {
+        const previousBody = chapterBody(previousChapter);
+        if (previousBody.trim()) {
+          const handoff = await buildPreviousHandoffLines(previousChapter, workId);
           addPart(
-            `## 上一章结尾（前情摘要）\n${truncate(tail, CONTINUITY_LIMIT)}`,
+            `## 上一章结尾（前情摘要）\n${handoff.join('\n')}\n\n原文结尾：\n` +
+              truncate(previousBody, CONTINUITY_LIMIT),
             PRIORITY.CONTENT
           );
         }
       }
     } else {
       // 写作步：跨章承接必须看到上一章原文，而不只是 500 字摘要。
+      // 先给可执行落点（时间地点/在场人物/末句语气），再给原文结尾。
       // 空章会回退到最近一个有正文的前章，标题里写清是哪一章。
       if (previousChapter) {
         const previousBody = chapterBody(previousChapter);
         if (previousBody.trim()) {
+          const handoff = await buildPreviousHandoffLines(previousChapter, workId);
           addPart(
-            `## 上一章结尾（第 ${previousChapter.seq} 章《${previousChapter.title}》原文，供本章承接）\n` +
+            `## 跨章承接：第 ${previousChapter.seq} 章《${previousChapter.title}》落点与原文\n` +
+              `${handoff.join('\n')}\n\n` +
               '以下是上一章最后的内容，只用来接住场面、语气与最后动作；已经发生，不要重演。\n' +
               truncate(previousBody, PREVIOUS_BODY_LIMIT),
             PRIORITY.CONTENT

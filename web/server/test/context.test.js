@@ -421,8 +421,9 @@ test('跨章承接：写作上下文注入上一章原文结尾', async () => {
   });
   const system = messages[0].content;
 
-  assert.ok(system.includes('## 上一章结尾（第 1 章《第一章》原文，供本章承接）'));
+  assert.ok(system.includes('## 跨章承接：第 1 章《第一章》落点与原文'));
   assert.ok(system.includes(prevTail), '上一章原文必须真的进 prompt');
+  assert.ok(system.includes('末句（语气参照，不要照抄）'), '要给出末句语气锚点');
   assert.strictEqual(meta.previousChapter, prevId);
 });
 
@@ -478,6 +479,63 @@ test('跨章承接：紧邻上一章为空时回退到最近有正文的前章',
   assert.ok(system.includes('第 1 章《第一章》'), '标题必须指明回退到了哪一章');
   assert.ok(system.includes(firstTail), '回退后的正文必须进 prompt');
   assert.ok(!system.includes('第 2 章《第二章》'), '不能把空章当成承接对象');
+});
+
+test('跨章承接块：时间地点与在场人物来自上一章摘要，原文兜底', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-prev-handoff';
+  const prevId = 'handoff-1';
+  const chapterId = 'handoff-2';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, '落点测试', '', '', '', 0, ?, ?)`,
+    [workId, userId, now, now]
+  );
+  await db.run(
+    `INSERT INTO characters (id, work_id, name, aliases, created_at, modified_at)
+     VALUES ('handoff-c1', ?, '周岑', '老周', ?, ?)`,
+    [workId, now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, summary, summary_words, created_at, modified_at)
+     VALUES (?, ?, '第一章', 1, '', 'done', ?, '[]', '', ?, 900, ?, ?)`,
+    [
+      prevId,
+      workId,
+      '老周推门进来，抖掉肩上的雪。他把灯挑亮，说密诏已经不在了。',
+      JSON.stringify({
+        progress: '老周带来密诏失踪的消息。',
+        open_threads: '密诏被谁取走',
+        setting: '雪夜，城隍庙后殿',
+        characters: ['周岑'],
+      }),
+      now,
+      now,
+    ]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第二章', 2, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, now, now]
+  );
+
+  const { messages } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+  const system = messages[0].content;
+
+  assert.ok(system.includes('时间地点：雪夜，城隍庙后殿'));
+  assert.ok(system.includes('在场人物：周岑'));
+  assert.ok(system.includes('未解：密诏被谁取走'));
+  assert.ok(system.includes('末句（语气参照，不要照抄）：他把灯挑亮，说密诏已经不在了。'));
 });
 
 test('跨章承接：规划上下文只给上一章结尾摘要，不注入整章', async () => {
