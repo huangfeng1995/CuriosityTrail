@@ -73,18 +73,44 @@ function removeNode(node, id) {
   return same ? node : { ...node, children };
 }
 
-function MindNode({ node, depth, onText, onAddChild, onAddSibling, onRemove }) {
+const CJK = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
+
+/** 输入框宽度按「视觉字数」算：一个汉字顶两格，避免文字被截成半个。 */
+function textWidth(text) {
+  let units = 0;
+  for (const ch of String(text || '')) units += CJK.test(ch) ? 2 : 1;
+  return Math.min(56, Math.max(8, units + 2));
+}
+
+function MindNode({
+  node,
+  depth,
+  collapsed,
+  onText,
+  onAddChild,
+  onAddSibling,
+  onRemove,
+  onToggle,
+}) {
+  const hasChildren = node.children.length > 0;
+  // 只有确实画得出子级时才收起：空节点没有可折叠的内容
+  const isCollapsed = hasChildren && collapsed.has(node.id);
+  const showChildren = hasChildren && !isCollapsed;
+
   return (
-    <div className="ct-mm-item">
-      <div className={`ct-mm-node${depth === 0 ? ' is-root' : ''}`}>
+    <div className="ct-mm-branch">
+      <div
+        className={`ct-mm-node${depth === 0 ? ' is-root' : ''}${
+          showChildren ? ' has-children' : ''
+        }`}
+      >
         <input
           data-mm-id={node.id}
           value={node.text}
           placeholder={depth === 0 ? '中心想法' : '分支'}
           aria-label={depth === 0 ? '中心想法' : '分支'}
-          style={{
-            width: `${Math.min(26, Math.max(6, String(node.text || '').length + 1))}ch`,
-          }}
+          title={node.text || undefined}
+          style={{ width: `${textWidth(node.text)}ch` }}
           onChange={(e) => onText(node.id, e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -93,10 +119,26 @@ function MindNode({ node, depth, onText, onAddChild, onAddSibling, onRemove }) {
             } else if (e.key === 'Tab') {
               e.preventDefault();
               onAddChild(node.id);
+            } else if (e.key === 'Backspace' && depth > 0 && !node.text) {
+              // 空节点上按退格直接删掉，不用去点小叉
+              e.preventDefault();
+              onRemove(node.id);
             }
           }}
         />
         <span className="ct-mm-ops">
+          {hasChildren && (
+            <button
+              type="button"
+              className="ct-mm-toggle"
+              title={isCollapsed ? '展开分支' : '收起分支'}
+              aria-label={isCollapsed ? '展开分支' : '收起分支'}
+              aria-expanded={!isCollapsed}
+              onClick={() => onToggle(node.id)}
+            >
+              {isCollapsed ? '+' : '−'}
+            </button>
+          )}
           <button
             type="button"
             title="加一层分支（Tab）"
@@ -119,17 +161,19 @@ function MindNode({ node, depth, onText, onAddChild, onAddSibling, onRemove }) {
         </span>
       </div>
 
-      {node.children.length > 0 && (
+      {showChildren && (
         <div className="ct-mm-children">
           {node.children.map((child) => (
             <MindNode
               key={child.id}
               node={child}
               depth={depth + 1}
+              collapsed={collapsed}
               onText={onText}
               onAddChild={onAddChild}
               onAddSibling={onAddSibling}
               onRemove={onRemove}
+              onToggle={onToggle}
             />
           ))}
         </div>
@@ -156,6 +200,8 @@ export default function MindMapModal({ item, workId, onClose, onSaved }) {
 
   const [root, setRoot] = useState(initialRoot);
   const [focusId, setFocusId] = useState('');
+  // 收起来的分支：只影响画面，不影响写回大纲的结构
+  const [collapsed, setCollapsed] = useState(() => new Set());
   const [mode, setMode] = useState('branches');
   // 作者手动选过转换方式之后，不再自动跟着结构切
   const [modeTouched, setModeTouched] = useState(false);
@@ -169,6 +215,7 @@ export default function MindMapModal({ item, workId, onClose, onSaved }) {
     if (!open) return;
     setRoot(initialRoot);
     setFocusId('');
+    setCollapsed(new Set());
     // 设定名留空，转换时默认取中心想法；作者填了才用填的
     setName('');
     setCategory('其他');
@@ -202,6 +249,13 @@ export default function MindMapModal({ item, workId, onClose, onSaved }) {
   const patchAddChild = (id) => {
     const child = makeNode('');
     setRoot((prev) => addChild(prev, id, child));
+    // 往收起的分支里加节点时自动展开，否则新框看不见
+    setCollapsed((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     setFocusId(child.id);
   };
   const patchAddSibling = (id) => {
@@ -214,6 +268,13 @@ export default function MindMapModal({ item, workId, onClose, onSaved }) {
     setFocusId(sibling.id);
   };
   const patchRemove = (id) => setRoot((prev) => removeNode(prev, id));
+  const patchToggle = (id) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   /** 把当前的树写回灵感。返回落库后的 id；转设定前必须先调一次。 */
   const persist = async () => {
@@ -316,21 +377,25 @@ export default function MindMapModal({ item, workId, onClose, onSaved }) {
     <Modal
       open
       title="脑图"
-      width="min(940px, 94vw)"
+      width="min(1120px, 94vw)"
       footer={null}
       onCancel={() => onClose?.()}
       destroyOnClose
     >
       <div className="ct-mm">
         <div className="ct-mm-canvas">
-          <MindNode
-            node={root}
-            depth={0}
-            onText={patchText}
-            onAddChild={patchAddChild}
-            onAddSibling={patchAddSibling}
-            onRemove={patchRemove}
-          />
+          <div className="ct-mm-stage">
+            <MindNode
+              node={root}
+              depth={0}
+              collapsed={collapsed}
+              onText={patchText}
+              onAddChild={patchAddChild}
+              onAddSibling={patchAddSibling}
+              onRemove={patchRemove}
+              onToggle={patchToggle}
+            />
+          </div>
         </div>
 
         <div className="ct-mm-foot">

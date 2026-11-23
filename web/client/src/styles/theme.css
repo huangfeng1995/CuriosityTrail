@@ -5728,70 +5728,100 @@ body.ct-resizing * {
   white-space: nowrap;
 }
 
+/* 灵感脑图：中心在左、分支向右，XMind 式横向铺开 */
 .ct-mm {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .ct-mm-canvas {
-  min-height: 220px;
-  max-height: 46vh;
+  min-height: 320px;
+  max-height: 52vh;
   overflow: auto;
-  padding: 18px;
+  padding: 28px 32px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   background-color: var(--bg-base);
   background-image: radial-gradient(var(--border) 1px, transparent 1px);
   background-size: 18px 18px;
 }
 
-.ct-mm-item {
+/* 图比画布宽时横向滚动；小图在画布里垂直居中 */
+.ct-mm-stage {
   display: flex;
   align-items: center;
+  width: max-content;
+  min-width: 100%;
+  min-height: 264px;
+}
+
+.ct-mm-branch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
 
 .ct-mm-node {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
-  padding: 4px 5px 4px 9px;
+  min-height: 34px;
+  padding: 5px 8px 5px 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: 9px;
   background: var(--bg-container);
+  box-shadow: 0 1px 3px rgba(94, 82, 56, 0.07);
 }
 
 .ct-mm-node.is-root {
+  min-height: 40px;
+  padding: 7px 10px 7px 14px;
   border-color: var(--cinnabar-glow);
   background: var(--cinnabar-dim);
 }
 
+/* 有子级时，从节点右缘拉一条引线接到竖干 */
+.ct-mm-node.has-children::after {
+  content: '';
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  width: 34px;
+  border-top: 1.5px solid var(--border-strong);
+}
+
 .ct-mm-node input {
+  padding: 0;
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--text-primary);
   outline: none;
+}
+
+.ct-mm-node.is-root input {
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .ct-mm-node input::placeholder {
   color: var(--text-quaternary);
 }
 
+/* 操作按钮常显：小叉不再藏在悬停里 */
 .ct-mm-ops {
   display: inline-flex;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.15s ease;
-}
-
-.ct-mm-node:hover .ct-mm-ops,
-.ct-mm-node:focus-within .ct-mm-ops {
-  opacity: 1;
-  visibility: visible;
+  align-items: center;
+  gap: 1px;
+  margin-left: 4px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border-faint);
 }
 
 .ct-mm-ops button {
@@ -5801,13 +5831,16 @@ body.ct-resizing * {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-quaternary);
+  color: var(--text-tertiary);
   font-size: 13px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .ct-mm-ops button:hover {
@@ -5820,27 +5853,71 @@ body.ct-resizing * {
   background: var(--cinnabar-dim);
 }
 
+/* 收起/展开的小圆钮，和「加分支」的 + 区分开 */
+.ct-mm-ops button.ct-mm-toggle {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ct-mm-ops button.ct-mm-toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: var(--bg-container);
+}
+
 .ct-mm-children {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-left: 20px;
-  padding-left: 20px;
-  border-left: 1px solid var(--border-strong);
+  row-gap: 12px;
+  margin-left: 34px;
+  padding-left: 34px;
 }
 
-.ct-mm-children > .ct-mm-item {
+.ct-mm-children > .ct-mm-branch {
   position: relative;
 }
 
-.ct-mm-children > .ct-mm-item::before {
+/* 每个子节点一条横线，接到左侧竖干 */
+.ct-mm-children > .ct-mm-branch::before {
   content: '';
   position: absolute;
-  left: -20px;
+  left: -34px;
   top: 50%;
-  width: 20px;
-  border-top: 1px solid var(--border-strong);
+  width: 34px;
+  border-top: 1.5px solid var(--border-strong);
+}
+
+/* 竖干分段拼成：从第一个子节点中线到最后一个子节点中线 */
+.ct-mm-children > .ct-mm-branch::after {
+  content: '';
+  position: absolute;
+  left: -34px;
+  top: 0;
+  height: 100%;
+  border-left: 1.5px solid var(--border-strong);
+}
+
+.ct-mm-children > .ct-mm-branch:not(:last-child)::after {
+  height: calc(100% + 12px);
+}
+
+.ct-mm-children > .ct-mm-branch:first-child::after {
+  top: 50%;
+  height: calc(50% + 12px);
+}
+
+.ct-mm-children > .ct-mm-branch:last-child::after {
+  top: 0;
+  height: 50%;
+}
+
+.ct-mm-children > .ct-mm-branch:only-child::after {
+  display: none;
 }
 
 .ct-mm-foot {
