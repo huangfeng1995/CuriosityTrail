@@ -1316,7 +1316,7 @@ router.post('/chat', async (req, res) => {
 
           if (backgroundFactRows.length) {
             briefSystemPrompt +=
-              `\n\n---\n\n## 已入库的主角背景事实（首次出场章必须交代，每项至少一句）\n` +
+              `\n\n---\n\n## 已入库的主角背景事实（本章按拍交代；更早章节已交代过的不再重复）\n` +
               backgroundFactRows.map((row) => `- ${row.content}`).join('\n');
           }
 

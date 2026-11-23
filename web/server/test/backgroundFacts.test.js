@@ -219,7 +219,7 @@ test('信息释放时间表：在 revealAt 之后交代才算覆盖', () => {
   assert.ok(!check.missing.some((item) => item.content.includes('十四岁')), '到点说了就不算缺');
 });
 
-test('非首次出场：更早章节已出现主角 → 不强制交代', () => {
+test('第二章节起继续守：更早章节出现主角但没交代 → 仍逐项报缺', () => {
   const chapter = backgroundFacts.mustRevealForChapter({
     facts: factRows(),
     characters: [PROTAGONIST],
@@ -227,8 +227,67 @@ test('非首次出场：更早章节已出现主角 → 不强制交代', () => 
     priorBodies: ['上一章：杨平在县衙门口站了很久。'],
     body: '杨平跟着父亲上车。',
   });
-  assert.strictEqual(chapter.applicable, false);
-  assert.deepStrictEqual(chapter.missing, []);
+  assert.strictEqual(chapter.applicable, true, '主角再次出场不再是免检理由');
+  assert.deepStrictEqual(
+    chapter.missing.map((item) => item.content),
+    ['杨平今年十四岁', '杨平是河内获嘉人', '杨平因战乱寄养在司马防家']
+  );
+});
+
+test('第二章节起继续守：更早章节已交代过的事实不再重复要求', () => {
+  const chapter = backgroundFacts.mustRevealForChapter({
+    facts: factRows(),
+    characters: [PROTAGONIST],
+    chapterText: '杨平随父亲离城。',
+    priorBodies: ['上一章：杨平今年十四岁，是河内获嘉人。'],
+    body: '杨平跟着父亲上车。',
+  });
+  assert.strictEqual(chapter.applicable, true);
+  assert.deepStrictEqual(chapter.missing.map((item) => item.content), ['杨平因战乱寄养在司马防家']);
+
+  const allRevealed = backgroundFacts.mustRevealForChapter({
+    facts: factRows(),
+    characters: [PROTAGONIST],
+    chapterText: '杨平随父亲离城。',
+    priorBodies: ['上一章：杨平今年十四岁，是河内获嘉人，因战乱寄养在司马防家。'],
+    body: '杨平跟着父亲上车。',
+  });
+  assert.strictEqual(allRevealed.applicable, true);
+  assert.deepStrictEqual(allRevealed.missing, [], '全部交代过就不再报缺');
+  assert.strictEqual(allRevealed.allRevealed, true);
+});
+
+test('第二章节起继续守：更早章节已出现主角，本章提前释放照样报 premature', () => {
+  const plan = {
+    beats: ['B1', 'B2', 'B3', 'B4'].map((id) => ({ id, paragraphs: 2 })),
+  };
+  const brief = {
+    items: [{ kind: 'mustReveal', text: '杨平今年十四岁', revealAt: 'B3' }],
+  };
+  const body = [
+    '杨平今年十四岁。',
+    '风从城门那边吹过来，卷起地上的碎草。',
+    '车队在门口等着，马鼻子里喷出白气。',
+    '父亲没有说话，只把手按在车辕上。',
+    '他抬头看了一眼灰白的天。',
+    '巷子里很安静，连狗都没有叫。',
+    '远处有人敲钟，一声比一声远。',
+    '他把手缩回袖子里，跟着往前走了两步。',
+  ].join('\n\n');
+
+  const chapter = backgroundFacts.mustRevealForChapter({
+    facts: factRows(),
+    characters: [PROTAGONIST],
+    chapterText: '杨平随父亲离城。',
+    priorBodies: ['上一章：杨平在县衙门口站了很久。'],
+    body,
+    plan,
+    brief,
+  });
+
+  assert.strictEqual(chapter.applicable, true);
+  assert.strictEqual(chapter.premature.length, 1, '续章也要守住 revealAt');
+  assert.strictEqual(chapter.premature[0].actualBeat, 'B1');
 });
 
 test('素材升格：幂等 + missing 标记保留，重复升格不产生重复行', async () => {
