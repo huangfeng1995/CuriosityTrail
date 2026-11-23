@@ -94,6 +94,26 @@ const MAX_TOTAL_PARAGRAPHS = 80;
 /** 范文口径的全章目标字数（仅用于把份额换算成每拍目标字数）。 */
 const CHAPTER_TARGET_CHARS = 5000;
 /**
+ * 对白承载比例。
+ *
+ * 范文实测对白占 17.99%（docs/superpowers/baseline/measure.py）。
+ * 夜宴/审问这类题材容易把整章写成对话，规划阶段就要定目标并压住：
+ * 默认 18%，上限 27%（范文 ×1.5），超出的信息必须落到叙述、心理与动作。
+ */
+const SAMPLE_DIALOGUE_PERCENT = 17.99;
+const DIALOGUE_TARGET_DEFAULT = 18;
+const DIALOGUE_TARGET_MAX = 27;
+
+/**
+ * 规划器给的对白目标：缺省按范文 18%，越界夹到 5–27。
+ * 这里是「目标」不是验收线，越界不判计划作废，避免为配比再拒一轮。
+ */
+function normalizeDialoguePercent(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return DIALOGUE_TARGET_DEFAULT;
+  return Math.min(DIALOGUE_TARGET_MAX, Math.max(5, Math.round(raw)));
+}
+/**
  * 范文段均字数（docs/superpowers/baseline/measure.py 实测 sample.md）。
  *
  * 段落数必须由目标字数反推，而不是让模型凭感觉给 3–12 段：
@@ -249,7 +269,10 @@ const MAX_EVIDENCE_CHARS = 30;
  * 不写正文，避免模型顺手开始写小说。
  */
 const PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
-字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
+字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[], dialoguePercent。
+dialoguePercent：本章直接引语占全章正文字数的目标百分比；范文实测 18%，不得超过 27%。
+对白承载不了的背景、判断与心理要写进 beats[].goal/infoGain，用叙述、动作与停顿推进，
+不要把整拍的信息全塞进对话；夜宴、审问这类场景也要给叙述和动作留出份额。
 beats 6–8 个；每拍含 id（B1…Bn）、function、functionReason、type（行动|转折|冲突|揭示|决定|过渡|险露）、
 goal、obstacle、cost、delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、
 targetChars、wordShare、endHook（这一拍结束时的悬念或钩子）、entities（数组）、
@@ -293,7 +316,10 @@ mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不
  */
 const OUTLINE_PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 本章已有作者写好的大纲。请把大纲里的事件按因果顺序拆成 4–8 拍，不要套用任何固定功能模板。
-字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[]。
+字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[], dialoguePercent。
+dialoguePercent：本章直接引语占全章正文字数的目标百分比；范文实测 18%，不得超过 27%。
+对白承载不了的背景、判断与心理要写进 beats[].goal/infoGain，用叙述、动作与停顿推进，
+不要把整拍的信息全塞进对话；宴席、审问这类多对话场景也要给叙述和动作留出份额。
 每拍含 id（B1…Bn）、function（自由标签，如「入场」「试探」「冲突」「决定」，不要求六类）、
 type（行动|转折|冲突|揭示|决定|过渡|险露）、goal、obstacle、turn（这一拍的转折）、cost、
 delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、wordShare、endHook、entities（数组）、
@@ -834,6 +860,7 @@ function validateBeatPlan(candidate, options = {}) {
       hook,
       avoidRepeat,
       mainType,
+      dialoguePercent: normalizeDialoguePercent(data.dialoguePercent),
       beats,
       totalParagraphs,
       shareMissing,
@@ -1013,6 +1040,7 @@ function salvageBeatPlan(candidate, options = {}) {
       ? data.avoidRepeat.map((x) => text(x)).filter(Boolean)
       : [],
     mainType,
+    dialoguePercent: normalizeDialoguePercent(data.dialoguePercent),
     beats,
     totalParagraphs: beats.reduce((sum, beat) => sum + (beat.paragraphs || 0), 0),
     shareMissing,
@@ -1068,6 +1096,8 @@ function formatBeatPlan(plan) {
   return [
     '## 本章节拍表（硬约束，必须覆盖）',
     '按 B1→Bn 顺序推进；每拍至少改变一个变量；不得把两拍合并成一段总结；正文里不要写节拍编号。',
+    `本章对白占比目标 ≤${normalizeDialoguePercent(plan.dialoguePercent)}%（范文 ${SAMPLE_DIALOGUE_PERCENT}%）：` +
+      '同一轮交流写进同一段，不要一句一引号；超出对白承载的背景、心理与判断改成叙述、动作和停顿。',
     JSON.stringify({ ...plan, beats }),
   ].join('\n');
 }

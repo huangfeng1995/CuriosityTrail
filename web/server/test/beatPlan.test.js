@@ -1201,6 +1201,39 @@ test('大纲模式：范文功能份额验收不适用', () => {
   assert.deepStrictEqual(report.outOfRange, []);
 });
 
+test('A2 规划阶段给对白占比目标：缺省 18%，越界夹到 27%', () => {
+  const withTarget = makeOutlinePlan({ dialoguePercent: 12 });
+  const plan = validateBeatPlan(withTarget, { mode: 'outline', ground: OUTLINE_GROUND }).plan;
+  assert.strictEqual(plan.dialoguePercent, 12);
+
+  const missing = validateBeatPlan(makeOutlinePlan(), {
+    mode: 'outline',
+    ground: OUTLINE_GROUND,
+  }).plan;
+  assert.strictEqual(missing.dialoguePercent, 18, '没给就按范文 18%');
+
+  const tooHigh = validateBeatPlan(makeOutlinePlan({ dialoguePercent: 45 }), {
+    mode: 'outline',
+    ground: OUTLINE_GROUND,
+  }).plan;
+  assert.strictEqual(tooHigh.dialoguePercent, 27, '目标上限 27%，不因此判计划作废');
+});
+
+test('A2 两个规划提示词都要求给 dialoguePercent，并写进写手节拍表', () => {
+  assert.match(PLAN_PROMPT, /dialoguePercent/);
+  assert.match(PLAN_PROMPT, /不得超过 27%/);
+  assert.match(OUTLINE_PLAN_PROMPT, /dialoguePercent/);
+  assert.match(OUTLINE_PLAN_PROMPT, /不得超过 27%/);
+
+  const plan = validateBeatPlan(makeOutlinePlan({ dialoguePercent: 15 }), {
+    mode: 'outline',
+    ground: OUTLINE_GROUND,
+  }).plan;
+  const text = formatBeatPlan(plan);
+  assert.match(text, /对白占比目标 ≤15%/);
+  assert.match(text, /同一轮交流写进同一段/);
+});
+
 test('大纲提示词：要求 4–8 拍与每拍目标/阻碍/转折/代价', () => {
   assert.match(OUTLINE_PLAN_PROMPT, /4–8 拍/);
   assert.match(OUTLINE_PLAN_PROMPT, /目标/);
