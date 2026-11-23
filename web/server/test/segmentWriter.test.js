@@ -2446,3 +2446,22 @@ test('P4 全章问题进入重写指令：点明段号并给出全章改写要�
   assert.match(instruction, /从本章上一处的时间点顺叙推进/);
   assert.ok(out.calls[0].reasons.includes('continuity'));
 });
+
+// ---------------------------------------------------------------------------
+// 具名地点与形态类重写优先级
+// ---------------------------------------------------------------------------
+
+test('具名地点写进起稿与重写指令：地点/官署首次出现用全称', () => {
+  const plan = makePlan(4);
+  const groups = segmentWriter.planSegments(plan);
+  const instruction = segmentWriter.buildSegmentInstruction({
+    plan,
+    group: groups[0],
+    groups,
+    tail: '',
+  });
+  assert.match(instruction, /地点与官署首次出现用具体名称/);
+  assert.match(instruction, /本章具名地点与官署/);
+  assert.match(instruction, /本章具名人物/);
+  assert.match(instruction, /不要用「那座官署」/);
+});

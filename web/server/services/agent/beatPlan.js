@@ -272,7 +272,7 @@ const MAX_EVIDENCE_CHARS = 30;
  * 不写正文，避免模型顺手开始写小说。
  */
 const PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
-字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[], dialoguePercent。
+字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[], dialoguePercent, namedCast[], namedPlaces[]。
 dialoguePercent：本章直接引语占全章正文字数的目标百分比；范文实测 18%，不得低于 14%，不得超过 27%。
 对白承载不了的背景、判断与心理要写进 beats[].goal/infoGain，用叙述、动作与停顿推进，
 不要把整拍的信息全塞进对话；夜宴、审问这类场景也要给叙述和动作留出份额，
@@ -286,6 +286,11 @@ scale（small|medium|large，默认 small）、pressure（心理|对峙|误导|�
 consequence 写清选它之后人物付出什么、失去什么；每章至多 1 拍 critical=true，其余拍不要给 options。
 entities 列出这一拍出现的人名、物名、关键道具；只能用给定资料里出现过的人或物，
 没有出处的一律不许写，也不许用「父亲/老师/领导」这类新角色代替已有角色。
+namedCast：2–5 个本章会出场、有名有姓的配角（主角不计），每项 {name, role, beat, action}：
+name 必须取自「人物与设定」清单或给定资料；role 是他的身份；action 是他在本章具体做的一件事（至少 6 字）；
+beat 是所在拍的 id。只报名字、没有具体动作的人物一律不要——为凑密度硬塞人名比缺名字更差。
+namedPlaces：1–4 个本章会写到、有名可称的地点或官署，每项 {name, kind: place|office, beat}；
+name 必须取自设定或本章大纲。地点与官署第一次出现要用这个全称，不要写成「一座官署」「城外」。
 function 只能取以下六类，且全章六类必须各出现至少一次（可以有同类多拍）：
 - opening：开场。有外部对手施加压力、主角被叫走/被传唤，外部压力先一步打断当前场景。
   这一拍的 obstacle 必须写清对手是谁、用什么方式阻碍，正文会据此校验对手是否落进开场。
@@ -320,7 +325,7 @@ mainType 必须与某一个 beats[].type 相同。只依据给定上下文，不
  */
 const OUTLINE_PLAN_PROMPT = `你是章节节拍规划器。只输出一个 JSON 对象，不要解释、不要 markdown、不要正文。
 本章已有作者写好的大纲。请把大纲里的事件按因果顺序拆成 4–8 拍，不要套用任何固定功能模板。
-字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[], dialoguePercent。
+字段：chapterGoal, protagonistIntent, obstacle, cost, hook, avoidRepeat（数组，可为空）, mainType, beats[], dialoguePercent, namedCast[], namedPlaces[]。
 dialoguePercent：本章直接引语占全章正文字数的目标百分比；范文实测 18%，不得低于 14%，不得超过 27%。
 对白承载不了的背景、判断与心理要写进 beats[].goal/infoGain，用叙述、动作与停顿推进，
 不要把整拍的信息全塞进对话；宴席、审问这类多对话场景也要给叙述和动作留出份额，
@@ -345,7 +350,12 @@ consequence 写清选它之后人物付出什么、失去什么；每章至多 1
    status=已完成的节点才是已经写过的内容，只能承接、不得重演。
    不得新增本章大纲与情节卡都没有的事件，不得改变事件结果；可以细化动作、对话与场面。
 5. 只依据给定资料，不新增人物或设定；卡里没有的东西不要补。
-6. mainType 必须与某一个 beats[].type 相同。`;
+6. mainType 必须与某一个 beats[].type 相同。
+7. namedCast：2–5 个本章出场、有名有姓的配角（主角不计），每项 {name, role, beat, action}。
+   name 只能取自「可用实体」/本章大纲/情节卡；role 是他的身份；action 是他在本章具体做的一件事（至少 6 字）。
+   只报名字、没有具体动作的人物不要写——为凑密度硬塞人名比缺名字更差。
+8. namedPlaces：1–4 个本章会写到、有名可称的地点或官署，每项 {name, kind: place|office, beat}。
+   name 只能取自设定/本章大纲。写手会在它们首次出现时用全称，不要写成「那座官署」「城里」。`;
 
 /** 代词与泛称：不算「新实体」，不需要在资料里有出处。 */
 const GENERIC_ENTITIES = new Set([
@@ -491,6 +501,174 @@ function buildGroundBlock(ground) {
   }
   lines.push('清单、大纲与情节卡之外的人名、物名、关键道具一律不得出现。');
   return `\n\n---\n\n${lines.join('\n')}`;
+}
+
+/**
+ * 具名人物与地点：规划层就把名字排出来。
+ *
+ * 线上实测专名密度 26.78 个/千字、去重 16 个，范文 39.63、去重 43；
+ * 匿名特征指代已经压到 ≤0.9，缺的不是「不要用泛称」，而是「该泛称的地方
+ * 本来就有名字可叫」。写手补不了这一层：他手上只有「父亲/同伴」这类角色描述，
+ * 规划层不点名，正文就只能写「一个年轻吏员」「那座官署」。
+ *
+ * 硬边界不变：名字仍须在给定资料里有出处。配额不按字数反推，也不许为凑
+ * 密度硬塞——没有身份或没有本章具体动作的人一律丢弃，宁可少一个名字。
+ */
+const MAX_NAMED_CAST = 5;
+const MIN_NAMED_CAST = 2;
+const MAX_NAMED_PLACES = 4;
+const NAMED_ACTION_MIN_CHARS = 6;
+const NAMED_PLACE_KINDS = ['place', 'office'];
+
+/** 设定卡分类 → place / office；认不出的类别不进具名地点清单。 */
+function settingPlaceKind(category) {
+  const cat = text(category);
+  if (/官署|官府|衙门|官职|组织|势力|机构|军队|朝廷/.test(cat)) return 'office';
+  if (/地理|地点|场所|建筑|城池|区域|山川|街道/.test(cat)) return 'place';
+  return '';
+}
+
+/** 拍号必须命中现有拍到，否则留空（不替模型猜一个拍）。 */
+function namedBeatId(value, beatIds) {
+  const id = text(value).toUpperCase();
+  return beatIds.has(id) ? id : '';
+}
+
+/** 名字必须在给定资料里，且不能是「主角/我」这类代词。 */
+function namedGrounded(name, corpus, ground) {
+  const probe = normalizeEntity(name);
+  if (!probe || GENERIC_ENTITIES.has(probe)) return false;
+  if (!ground) return true;
+  return Boolean(corpus && corpus.includes(probe));
+}
+
+/**
+ * 归一化规划器给的人物清单。
+ *
+ * 只收「有名、有身份、有本章具体动作」三项齐全的人：只报名字的条目不进
+ * 清单——那正是「密度上去了但人物没用」，比缺名字更差。
+ */
+function normalizeNamedCast(rows, beatIds, corpus, ground) {
+  const out = [];
+  const seen = new Set();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== 'object') continue;
+    const name = text(row.name);
+    const role = text(row.role);
+    const action = text(row.action);
+    const probe = normalizeEntity(name);
+    if (!probe || seen.has(probe)) continue;
+    if (!namedGrounded(name, corpus, ground)) continue;
+    if (!role || action.length < NAMED_ACTION_MIN_CHARS) continue;
+    seen.add(probe);
+    out.push({ name, role, action, beat: namedBeatId(row.beat, beatIds) });
+    if (out.length >= MAX_NAMED_CAST) break;
+  }
+  return out;
+}
+
+/** 归一化地点/官署清单。kind 只认 place / office，缺省 place。 */
+function normalizeNamedPlaces(rows, beatIds, corpus, ground) {
+  const out = [];
+  const seen = new Set();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== 'object') continue;
+    const name = text(row.name);
+    const probe = normalizeEntity(name);
+    if (!probe || seen.has(probe)) continue;
+    if (!namedGrounded(name, corpus, ground)) continue;
+    const rawKind = text(row.kind).toLowerCase();
+    seen.add(probe);
+    out.push({
+      name,
+      kind: NAMED_PLACE_KINDS.includes(rawKind) ? rawKind : 'place',
+      beat: namedBeatId(row.beat, beatIds),
+    });
+    if (out.length >= MAX_NAMED_PLACES) break;
+  }
+  return out;
+}
+
+/** 大纲里点名某个人的那一句：作为「本章具体做什么」的出处。 */
+function outlineClauseFor(name, outline) {
+  const target = normalizeEntity(name);
+  if (!target) return '';
+  const clauses = String(outline || '')
+    .split(/[。；;！？\n]/)
+    .map((row) => row.trim())
+    .filter(Boolean);
+  const hit = clauses.find((row) => normalizeEntity(row).includes(target));
+  return hit ? hit.slice(0, 60) : '';
+}
+
+/**
+ * 模型没给人物清单时从人物卡兜底。
+ *
+ * 兜底守同一条线：只收本章大纲真的点名、卡上有身份的配角；动作取大纲里
+ * 提到他的那一句，不替他编一件本章没安排的事。大纲没有点名的人不进清单。
+ */
+function deriveNamedCast(ground, corpus, existing = []) {
+  if (!ground) return [];
+  const seen = new Set(existing.map((row) => normalizeEntity(row.name)));
+  const out = [];
+  for (const row of ground.characters || []) {
+    if (existing.length + out.length >= MAX_NAMED_CAST) break;
+    const name = text(row.name);
+    const probe = normalizeEntity(name);
+    if (!probe || seen.has(probe)) continue;
+    if (!namedGrounded(name, corpus, ground)) continue;
+    const role = text(row.role) || text(row.identity).slice(0, 20);
+    const action = outlineClauseFor(name, ground.outline);
+    if (!role || action.length < NAMED_ACTION_MIN_CHARS) continue;
+    seen.add(probe);
+    out.push({ name, role, action, beat: '' });
+  }
+  return out;
+}
+
+/**
+ * 模型没给地点清单时从设定卡兜底。
+ *
+ * 有大纲时只收大纲真的用到的地点/官署：整张设定表塞给写手等于让他自己挑，
+ * 挑出来的往往和本章场景无关。
+ */
+function deriveNamedPlaces(ground, corpus, existing = []) {
+  if (!ground) return [];
+  const outline = normalizeEntity(ground.outline);
+  const seen = new Set(existing.map((row) => normalizeEntity(row.name)));
+  const out = [];
+  for (const row of ground.settings || []) {
+    if (existing.length + out.length >= MAX_NAMED_PLACES) break;
+    const name = text(row.name);
+    const probe = normalizeEntity(name);
+    const kind = settingPlaceKind(row.category);
+    if (!probe || !kind || seen.has(probe)) continue;
+    if (!namedGrounded(name, corpus, ground)) continue;
+    if (outline && !outline.includes(probe)) continue;
+    seen.add(probe);
+    out.push({ name, kind, beat: '' });
+  }
+  return out;
+}
+
+/**
+ * 汇总一份拍表的具名安排。
+ *
+ * 模型给的就用模型的；不足下限时只从「本章大纲点名」的卡上人物补位，
+ * 不按卡表顺序硬凑。任何情况下都不因这份清单判计划作废——它是写手的
+ * 具名依据，不是结构门槛。
+ */
+function resolveNamedEntities(data, beats, corpus, ground) {
+  const beatIds = new Set((beats || []).map((beat) => beat.id));
+  let namedCast = normalizeNamedCast(data && data.namedCast, beatIds, corpus, ground);
+  if (namedCast.length < MIN_NAMED_CAST) {
+    namedCast = namedCast.concat(deriveNamedCast(ground, corpus, namedCast));
+  }
+  let namedPlaces = normalizeNamedPlaces(data && data.namedPlaces, beatIds, corpus, ground);
+  if (!namedPlaces.length) {
+    namedPlaces = deriveNamedPlaces(ground, corpus, namedPlaces);
+  }
+  return { namedCast, namedPlaces };
 }
 
 /**
@@ -854,6 +1032,10 @@ function validateBeatPlan(candidate, options = {}) {
     }
   }
 
+  // 具名人物/地点：写手的专名依据。名字不在资料里的条目已被过滤，
+  // 这里不判计划作废，只把可用的名字交给写手。
+  const { namedCast, namedPlaces } = resolveNamedEntities(data, beats, corpus, ground);
+
   return {
     ok: true,
     plan: {
@@ -866,6 +1048,8 @@ function validateBeatPlan(candidate, options = {}) {
       avoidRepeat,
       mainType,
       dialoguePercent: normalizeDialoguePercent(data.dialoguePercent),
+      namedCast,
+      namedPlaces,
       beats,
       totalParagraphs,
       shareMissing,
@@ -1033,6 +1217,7 @@ function salvageBeatPlan(candidate, options = {}) {
       }
     }
   }
+  const { namedCast, namedPlaces } = resolveNamedEntities(data, beats, corpus, ground);
 
   return {
     planMode: outlineMode ? 'outline' : 'reference',
@@ -1046,6 +1231,8 @@ function salvageBeatPlan(candidate, options = {}) {
       : [],
     mainType,
     dialoguePercent: normalizeDialoguePercent(data.dialoguePercent),
+    namedCast,
+    namedPlaces,
     beats,
     totalParagraphs: beats.reduce((sum, beat) => sum + (beat.paragraphs || 0), 0),
     shareMissing,
@@ -1098,12 +1285,32 @@ function formatBeatPlan(plan) {
         return rest;
       })
     : plan.beats;
+  const namedCast = Array.isArray(plan.namedCast) ? plan.namedCast : [];
+  const namedPlaces = Array.isArray(plan.namedPlaces) ? plan.namedPlaces : [];
+  const namedLines = [];
+  if (namedCast.length) {
+    namedLines.push('## 本章具名人物（配角也要有名有姓，且要真的做事）');
+    for (const row of namedCast) {
+      namedLines.push(
+        `- ${row.name}（${row.role || '身份未登记'}）${row.beat ? `在 ${row.beat} ` : ''}：${row.action}`
+      );
+    }
+    namedLines.push('这些名字在本组写到其人时原样使用，不要改写成「一个年轻吏员」「同行的同伴」。');
+  }
+  if (namedPlaces.length) {
+    namedLines.push('## 本章具名地点与官署（首次出现用全称）');
+    for (const row of namedPlaces) {
+      namedLines.push(`- ${row.name}（${row.kind === 'office' ? '官署' : '地点'}）${row.beat ? `：${row.beat}` : ''}`);
+    }
+    namedLines.push('地点与官署第一次出现要用上面这个全称，不要写「一座官署」「城里」「那边」。');
+  }
   return [
     '## 本章节拍表（硬约束，必须覆盖）',
     '按 B1→Bn 顺序推进；每拍至少改变一个变量；不得把两拍合并成一段总结；正文里不要写节拍编号。',
     `本章对白占比目标 ${DIALOGUE_TARGET_MIN}–${DIALOGUE_TARGET_MAX}%（默认 ${DIALOGUE_TARGET_DEFAULT}%，范文 ${SAMPLE_DIALOGUE_PERCENT}%）：` +
       '同一轮交流写进同一段，不要一句一引号；低于下限要把关键交锋写成直接引语，' +
       '超出对白承载的背景、心理与判断改成叙述、动作和停顿。',
+    ...namedLines,
     JSON.stringify({ ...plan, beats }),
   ].join('\n');
 }

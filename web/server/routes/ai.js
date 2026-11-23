@@ -3329,6 +3329,42 @@ router.post('/chat', async (req, res) => {
     let anchorViolations = [];
     const generatedProse =
       ['replace', 'append', 'insert'].includes(payload.action) && !payload.parseFailed;
+
+    // 具名密度诊断（非阻断）：规划排了哪些名字、正文里真的用了几次。
+    // 专名密度写手补不了，只能核对「规划层的具名安排有没有落到正文」；
+    // 不设门槛，避免为凑密度逼写手硬塞人名。
+    let namedPresence = null;
+    if (beatPlan && generatedProse && String(payload.content || '').trim()) {
+      const plannedNames = [
+        ...(beatPlan.namedCast || []).map((row) => ({ name: row.name, kind: 'person' })),
+        ...(beatPlan.namedPlaces || []).map((row) => ({ name: row.name, kind: row.kind || 'place' })),
+      ].filter((row) => row && row.name);
+      if (plannedNames.length) {
+        const bodyText = String(payload.content);
+        const rows = plannedNames.map((row) => ({
+          name: row.name,
+          kind: row.kind,
+          count: bodyText.split(row.name).length - 1,
+        }));
+        namedPresence = {
+          planned: rows.length,
+          present: rows.filter((row) => row.count > 0).length,
+          missing: rows.filter((row) => row.count === 0).map((row) => row.name),
+          rows,
+        };
+        console.log(
+          JSON.stringify({
+            event: 'ai_named_presence',
+            traceId,
+            userId: req.userId,
+            ...namedPresence,
+          })
+        );
+      }
+    }
+    payload.namedPresence = namedPresence;
+    if (payload.beatCheck) payload.beatCheck.namedPresence = namedPresence;
+
     if (meta.pipeline && generatedProse && chapterId && payload.content.trim()) {
       const anchorCheckStartedAt = Date.now();
       try {

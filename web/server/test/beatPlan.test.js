@@ -1281,3 +1281,109 @@ test('大纲模式：段数按目标字数 ÷ 范文段均 112 反推', () => {
     [12, 10, 12, 9]
   );
 });
+
+// ---------------------------------------------------------------------------
+// 具名人物与地点：专名密度在规划层安排，不在写作层硬凑
+// ---------------------------------------------------------------------------
+
+test('具名：只收「有名、有身份、有本章具体动作」的配角，卡外与只报名字的丢掉', () => {
+  const ground = {
+    outline: '杨平随父抵达许都，入司空府为掾属。杨俊被单独召见。',
+    characters: [
+      { name: '杨平', role: '主角', identity: '杨俊之子', goal: '在许都活下去' },
+      { name: '杨俊', role: '主角之父', identity: '河内获嘉豪族' },
+      { name: '司马懿', role: '挚友', identity: '司马防次子' },
+    ],
+    settings: [{ name: '司空府', category: '组织', content: '开府之处' }],
+  };
+  const plan = makeOutlinePlan({
+    namedCast: [
+      { name: '杨平', role: '主角', beat: 'B1', action: '随父抵达许都并办理入府手续' },
+      { name: '杨俊', role: '主角之父', beat: 'B3', action: '被单独召见，与旧臣争执' },
+      { name: '司马懿', role: '挚友', beat: 'B2', action: '' },
+      { name: '无名氏', role: '门吏', beat: 'B1', action: '拦住杨平索要名刺' },
+      { name: '杨平', role: '主角', beat: 'B2', action: '同一个人重复报名应当被去重' },
+    ],
+    namedPlaces: [
+      { name: '司空府', kind: 'office', beat: 'B2' },
+      { name: '许都', kind: 'city', beat: 'B1' },
+      { name: '洛阳', kind: 'place', beat: 'B1' },
+      { name: '门房', kind: 'place', beat: 'B9' },
+    ],
+  });
+  plan.beats.forEach((beat) => {
+    beat.entities = [];
+  });
+
+  const check = validateBeatPlan(plan, { mode: 'outline', ground });
+  assert.strictEqual(check.ok, true, check.errors.join('；'));
+  assert.deepStrictEqual(
+    check.plan.namedCast.map((row) => row.name),
+    ['杨平', '杨俊'],
+    '没有具体动作、卡外、重复的人物都不进清单'
+  );
+  assert.deepStrictEqual(
+    check.plan.namedPlaces.map((row) => `${row.name}:${row.kind}:${row.beat}`),
+    ['司空府:office:B2', '许都:place:B1'],
+    '卡外地点被拒；kind 非法时按 place；拍号不在拍表里时留空'
+  );
+});
+
+test('具名：规划没给清单时，只从本章大纲点名的人物/地点兜底', () => {
+  const ground = {
+    outline: '杨平随父抵达许都，入司空府为掾属。杨俊被单独召见。',
+    characters: [
+      { name: '杨平', role: '主角', identity: '杨俊之子' },
+      { name: '杨俊', role: '主角之父', identity: '河内获嘉豪族' },
+      { name: '司马懿', role: '挚友', identity: '司马防次子' },
+    ],
+    settings: [
+      { name: '司空府', category: '组织', content: '' },
+      { name: '温县', category: '地理', content: '' },
+    ],
+  };
+
+  const plan = makeOutlinePlan();
+  plan.beats.forEach((beat) => {
+    beat.entities = [];
+  });
+
+  const check = validateBeatPlan(plan, { mode: 'outline', ground });
+  assert.strictEqual(check.ok, true, check.errors.join('；'));
+  assert.deepStrictEqual(
+    check.plan.namedCast.map((row) => row.name),
+    ['杨平', '杨俊'],
+    '大纲没点名的司马懿不进兜底清单——不按卡表顺序硬凑'
+  );
+  assert.match(check.plan.namedCast[0].action, /杨平/, '动作取大纲里提到他的那一句');
+  assert.match(check.plan.namedCast[1].action, /杨俊/);
+  assert.deepStrictEqual(
+    check.plan.namedPlaces.map((row) => row.name),
+    ['司空府'],
+    '大纲没点名的温县不进清单'
+  );
+  assert.strictEqual(check.plan.namedPlaces[0].kind, 'office');
+});
+
+test('formatBeatPlan 列出具名人物与地点，并要求首次出现用全称', () => {
+  const plan = {
+    ...makePlan(),
+    namedCast: [{ name: '杨俊', role: '曲梁长', beat: 'B2', action: '在司空府门前拦下杨平' }],
+    namedPlaces: [{ name: '司空府', kind: 'office', beat: 'B2' }],
+  };
+  const out = formatBeatPlan(plan);
+  assert.match(out, /本章具名人物/);
+  assert.match(out, /杨俊（曲梁长）在 B2/);
+  assert.match(out, /本章具名地点与官署/);
+  assert.match(out, /司空府（官署）/);
+  assert.match(out, /第一次出现要用上面这个全称/);
+});
+
+test('两个规划提示词都要求具名人物与地点，并禁止为凑密度硬塞人名', () => {
+  for (const prompt of [PLAN_PROMPT, OUTLINE_PLAN_PROMPT]) {
+    assert.match(prompt, /namedCast/);
+    assert.match(prompt, /namedPlaces/);
+    assert.match(prompt, /为凑密度硬塞人名/);
+    assert.match(prompt, /至少 6 字/);
+  }
+});
