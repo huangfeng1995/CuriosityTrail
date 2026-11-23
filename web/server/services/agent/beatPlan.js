@@ -35,6 +35,17 @@ const DEFAULT_SCALE = 'small';
 const PRESSURE_VALUES = ['心理', '对峙', '误导', '动作'];
 
 /**
+ * 关键抉择暂停点（HP12）。
+ *
+ * 只有「决定」拍可以设 critical：作者要在正文开写之前先拍板。
+ * options 必须 2–3 项且每项带 label 与 consequence——不写后果的选项
+ * 等于让作者掷骰子，宁可判这一拍不合格。
+ */
+const DECISION_TYPE = '决定';
+const PAUSE_OPTION_MIN = 2;
+const PAUSE_OPTION_MAX = 3;
+
+/**
  * 功能拍枚举：这一拍在章节结构里承担什么。
  *
  * 与 type 是两件事：type 说「事件性质」（冲突/揭示），function 说
@@ -234,6 +245,8 @@ goal、obstacle、cost、delta{variable:处境|关系|信息|决心, from, to}�
 targetChars、wordShare、endHook（这一拍结束时的悬念或钩子）、entities（数组）、
 scale（small|medium|large，默认 small）、pressure（心理|对峙|误导|动作）。
 险露=人物在险境中被迫暴露信息（被试探、说漏、错拿），不是单纯遇险；每章至多 1 拍。
+决定拍若会改变后文走向，设 critical=true 并给 options（2–3 个 {id,label,consequence}），
+consequence 写清选它之后人物付出什么、失去什么；每章至多 1 拍 critical=true，其余拍不要给 options。
 entities 列出这一拍出现的人名、物名、关键道具；只能用给定资料里出现过的人或物，
 没有出处的一律不许写，也不许用「父亲/老师/领导」这类新角色代替已有角色。
 function 只能取以下六类，且全章六类必须各出现至少一次（可以有同类多拍）：
@@ -276,6 +289,8 @@ type（行动|转折|冲突|揭示|决定|过渡|险露）、goal、obstacle、t
 delta{variable:处境|关系|信息|决心, from, to}、infoGain、paragraphs（3–12）、wordShare、endHook、entities（数组）、
 scale（small|medium|large，默认 small）、pressure（心理|对峙|误导|动作）。
 险露=人物在险境中被迫暴露信息（被试探、说漏、错拿），不是单纯遇险；每章至多 1 拍。
+决定拍若会改变后文走向，设 critical=true 并给 options（2–3 个 {id,label,consequence}），
+consequence 写清选它之后人物付出什么、失去什么；每章至多 1 拍 critical=true，其余拍不要给 options。
 
 硬规则：
 1. 4–8 拍；每拍 3–12 段，全章合计 20–80 段。
@@ -444,6 +459,31 @@ function unique(list) {
 }
 
 /**
+ * 归一化关键抉择的选项。
+ *
+ * 只保留 label 与 consequence 都非空的项：缺后果的选项没法让作者判断，
+ * 留着只会制造「选了也没什么变化」的错觉。id 缺失或重复时按序号补，
+ * 保证作者点的那一项在恢复时能被准确认出来。
+ */
+function normalizeDecisionOptions(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  raw.forEach((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    const label = text(item.label);
+    const consequence = text(item.consequence);
+    if (!label || !consequence) return;
+    let id = text(item.id) || `o${index + 1}`;
+    if (seen.has(id)) id = `o${index + 1}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push({ id, label, consequence });
+  });
+  return out.slice(0, PAUSE_OPTION_MAX);
+}
+
+/**
  * 校验并归一化一份节拍表。
  *
  * 校验放在服务端，不交给模型自觉：一份缺代价、缺信息增量或段落数
@@ -548,6 +588,8 @@ function validateBeatPlan(candidate, options = {}) {
     const rawScale = text(beat.scale).toLowerCase();
     const scale = rawScale || DEFAULT_SCALE;
     const pressure = text(beat.pressure);
+    const rawCritical = beat.critical === true;
+    const decisionOptions = normalizeDecisionOptions(beat.options);
 
     if (id !== `B${index + 1}`) errors.push(`${where}的 id 必须是 B${index + 1}，收到「${id}」`);
     if (!allowedSet.has(type)) {
@@ -560,6 +602,20 @@ function validateBeatPlan(candidate, options = {}) {
     }
     if (pressure && !PRESSURE_VALUES.includes(pressure)) {
       errors.push(`${where}的 pressure 必须是 心理/对峙/误导/动作，收到「${pressure}」`);
+    }
+    // 关键抉择：只有「决定」拍能挂暂停点，且必须给 2–3 个带后果的选项。
+    // 缺选项的 critical 拍会让作者点进一个空面板，比不暂停更糟。
+    if (rawCritical) {
+      if (type !== DECISION_TYPE) {
+        errors.push(`${where}只有 type=决定 的拍可以设 critical，收到「${type || '空'}」`);
+      } else if (
+        decisionOptions.length < PAUSE_OPTION_MIN ||
+        decisionOptions.length > PAUSE_OPTION_MAX
+      ) {
+        errors.push(
+          `${where}标了 critical，必须给 ${PAUSE_OPTION_MIN}–${PAUSE_OPTION_MAX} 个带 label 与 consequence 的选项`
+        );
+      }
     }
     // function 缺失/非法不直接判计划作废：作废会掉进整章直写，比缺分类更糟。
     // 这里只记为「未分类」，由路由重排一次；重排后仍缺才写进 plan_degraded。
@@ -616,6 +672,13 @@ function validateBeatPlan(candidate, options = {}) {
       entities: entities || [],
       scale: SCALE_VALUES.includes(scale) ? scale : DEFAULT_SCALE,
       pressure: PRESSURE_VALUES.includes(pressure) ? pressure : '',
+      critical:
+        rawCritical &&
+        type === DECISION_TYPE &&
+        decisionOptions.length >= PAUSE_OPTION_MIN &&
+        decisionOptions.length <= PAUSE_OPTION_MAX,
+      options:
+        rawCritical && type === DECISION_TYPE ? decisionOptions : [],
     });
   });
 
@@ -631,6 +694,11 @@ function validateBeatPlan(candidate, options = {}) {
   const actionPressureBeats = beats.filter((beat) => beat.pressure === '动作');
   if (actionPressureBeats.length > 1) {
     errors.push(`一章 pressure=动作 不得超过 1 拍，收到 ${actionPressureBeats.length} 拍（${actionPressureBeats.map((b) => b.id).join('、')}）`);
+  }
+  // 暂停点一次只能停在一个抉择上：两拍都 critical 时无法判断该等作者选哪一个。
+  const criticalBeats = beats.filter((beat) => beat.critical);
+  if (criticalBeats.length > 1) {
+    errors.push(`每章至多 1 拍 critical（关键抉择），收到 ${criticalBeats.length} 拍（${criticalBeats.map((b) => b.id).join('、')}）`);
   }
 
   // wordShare：模型给齐了就按它的配比；缺项或合计明显不对，就按段落权重折算，
@@ -767,6 +835,8 @@ function salvageBeatPlan(candidate, options = {}) {
     const rawType = text(beat.type);
     const rawScale = text(beat.scale).toLowerCase();
     const pressure = text(beat.pressure);
+    const rawCritical = beat.critical === true;
+    const decisionOptions = normalizeDecisionOptions(beat.options);
     return {
       id: '',
       planMode: outlineMode ? 'outline' : 'reference',
@@ -793,6 +863,12 @@ function salvageBeatPlan(candidate, options = {}) {
       entities,
       scale: SCALE_VALUES.includes(rawScale) ? rawScale : DEFAULT_SCALE,
       pressure: PRESSURE_VALUES.includes(pressure) ? pressure : '',
+      critical:
+        rawCritical &&
+        allowedSet.has(rawType) &&
+        rawType === DECISION_TYPE &&
+        decisionOptions.length >= PAUSE_OPTION_MIN,
+      options: decisionOptions,
     };
   });
 
@@ -819,6 +895,21 @@ function salvageBeatPlan(candidate, options = {}) {
     if (beat.pressure === '动作') {
       if (seenAction) beat.pressure = '心理';
       else seenAction = true;
+    }
+  }
+  // 关键抉择同样只保留第一拍：修复时不因为多标了一拍 critical 就整份作废，
+  // 停不下来的抉择点等于没停——但事件链与其余字段必须原样保留。
+  let seenCritical = false;
+  for (const beat of beats) {
+    if (!beat.critical) {
+      beat.options = [];
+      continue;
+    }
+    if (seenCritical) {
+      beat.critical = false;
+      beat.options = [];
+    } else {
+      seenCritical = true;
     }
   }
   beats.forEach((beat, index) => {
@@ -915,10 +1006,19 @@ function buildFunctionReplanInstruction(plan, missing, reasonMissing = []) {
  */
 function formatBeatPlan(plan) {
   if (!plan) return '';
+  // 选项只在暂停面板里给作者看。写手拿到的是「已定」的那一项（由路由追加），
+  // 这里若仍列出全部选项，模型会自己挑一个，作者的选择就白做了。
+  const beats = Array.isArray(plan.beats)
+    ? plan.beats.map((beat) => {
+        if (!beat || !Array.isArray(beat.options) || !beat.options.length) return beat;
+        const { options, ...rest } = beat;
+        return rest;
+      })
+    : plan.beats;
   return [
     '## 本章节拍表（硬约束，必须覆盖）',
     '按 B1→Bn 顺序推进；每拍至少改变一个变量；不得把两拍合并成一段总结；正文里不要写节拍编号。',
-    JSON.stringify(plan),
+    JSON.stringify({ ...plan, beats }),
   ].join('\n');
 }
 
@@ -1517,6 +1617,9 @@ module.exports = {
   FUNCTION_LABELS,
   DELTA_VARIABLES,
   DANGER_TYPE,
+  DECISION_TYPE,
+  PAUSE_OPTION_MIN,
+  PAUSE_OPTION_MAX,
   SCALE_VALUES,
   PRESSURE_VALUES,
   SAMPLE_SHARES,

@@ -746,6 +746,7 @@ router.post('/chat', async (req, res) => {
     useMemory = true,
     excludeRefIds = [],
     replaceMessageId = '',
+    resumePlanId = '',
   } = req.body || {};
   let retrieval = Array.isArray(req.body?.retrieval) ? req.body.retrieval : [];
 
@@ -1000,6 +1001,22 @@ router.post('/chat', async (req, res) => {
       }
     }
 
+    // 暂停点恢复（HP12）：沿用暂停那一轮留下的提问，不再插入新的一条。
+    //
+    // 复用条件同时要求「内容完全一致」：作者在暂停后换了说法，就按新指令
+    // 正常插入——计划仍会被复用，但上下文里不能拿旧问题冒充这一次的提问。
+    if (!reusedUserMessage && resumePlanId) {
+      const prevUser = await get(
+        `SELECT * FROM messages
+         WHERE conversation_id = ? AND role = 'user'
+         ORDER BY rowid DESC LIMIT 1`,
+        [conversation.id]
+      );
+      if (prevUser && String(prevUser.content) === String(message)) {
+        reusedUserMessage = prevUser;
+      }
+    }
+
     // 历史消息
     // 重新生成时，复用的那行提问还在库里，但它要作为"这一轮的问题"
     // 出现在最后，所以先从历史里剔掉。
@@ -1129,6 +1146,9 @@ router.post('/chat', async (req, res) => {
     let backgroundFactRows = [];
     // 人物卡里的姓名/别名：分段起稿的前情账本要用它区分「在场人物」与道具。
     let planCharacterNames = [];
+    // HP12 暂停点：本轮要么停下来等作者选（pausePlan），要么带着已选的约束写（chosenOption）。
+    let pausePlan = null;
+    let chosenOption = null;
 
     if (planningEnabled) {
       send({ type: 'agent_thinking', label: '正在规划本章节拍' });
@@ -1224,6 +1244,31 @@ router.post('/chat', async (req, res) => {
             brief = reusable.brief || null;
             planDegraded = 'reused';
             send({ type: 'agent_thinking', label: '复用本章已有节拍表' });
+
+            // 暂停点的对账：库里这一行是什么状态，决定本轮停还是写。
+            //   awaiting_choice → 再停一次（作者回来还没选，不替他做主）
+            //   confirmed + chosen → 带着「本节拍已定」约束写
+            //   confirmed 无 chosen → 作者放行过，按原计划写
+            //
+            // 暂停点是模板能力：关掉 template 的作品不读这一行状态，
+            // 与 P.3.2「写入侧同样先读 works.template，未启用直接 return」一致。
+            if (pipelineEnabled) {
+              const row = reusable.row || {};
+              const options = planStore.parseOptions(row.options);
+              const pause = planStore.pausePointOf(reusable.plan);
+              if (row.status === 'awaiting_choice') {
+                if (pause || options.length) {
+                  pausePlan = {
+                    planId: row.id,
+                    beatId: pause ? pause.beatId : '',
+                    goal: pause ? pause.goal : '',
+                    options: options.length ? options : pause.options,
+                  };
+                }
+              } else if (row.chosen) {
+                chosenOption = options.find((item) => item.id === String(row.chosen)) || null;
+              }
+            }
           } else if (reusable && reusable.stale) {
             console.log(
               JSON.stringify({
@@ -1556,16 +1601,30 @@ router.post('/chat', async (req, res) => {
 
           // 落库最终采用的拍表与 brief。放在重排与 brief 落位之后，
           // 存的是写手真正会看到的那一版；复用轮次不重写，避免无谓刷新时间戳。
+          //
+          // 有暂停点时状态写 awaiting_choice 并把选项一起存下来：
+          // 断流、关页面后靠这一行恢复，不重新规划、也不替作者选。
+          const freshPause = pipelineEnabled ? planStore.pausePointOf(beatPlan) : null;
           if (!reusedPlan) {
             try {
-              await planStore.saveChapterPlan({
+              const savedPlanId = await planStore.saveChapterPlan({
                 workId,
                 chapterId,
                 plan: beatPlan,
                 brief,
-                status: 'confirmed',
+                status: freshPause ? 'awaiting_choice' : 'confirmed',
+                options: freshPause ? freshPause.options : [],
               });
+              if (freshPause) {
+                pausePlan = {
+                  planId: savedPlanId,
+                  beatId: freshPause.beatId,
+                  goal: freshPause.goal,
+                  options: freshPause.options,
+                };
+              }
             } catch (err) {
+              // 落库失败就不停：暂停点依赖 planId 恢复，没有行就没法续。
               console.error('[ai] 拍表落库失败，本轮照常写作:', err.message);
             }
           }
@@ -1591,6 +1650,14 @@ router.post('/chat', async (req, res) => {
           // brief 放在节拍表之后：先给「必须发生什么」，再给「拆成哪几拍」。
           if (brief) {
             chatMessages[0].content += `\n\n---\n\n${planBrief.formatPlanBrief(brief)}`;
+          }
+          // 作者已在暂停点选定方向：放在最后，压过节拍表里的原计划。
+          // 放行（chosen 为空）不追加任何东西，写手按原计划写。
+          if (chosenOption) {
+            chatMessages[0].content +=
+              `\n\n---\n\n## 本节拍已定（作者选定，硬约束）\n` +
+              `${chosenOption.label}；后果：${chosenOption.consequence}\n` +
+              '这一拍按作者的选择写，不得改回其他选项，也不得把未选的选项写进正文。';
           }
         } else {
           planDegraded = planOut.reason || 'failed';
@@ -1628,6 +1695,45 @@ router.post('/chat', async (req, res) => {
           // 作者要看得见"这一轮没有规划"：否则他只会觉得这次写得松散，
           // 却不知道是规划环节降级了。
           send({ type: 'notice', content: '本章节拍规划没有成功，这一轮按直写处理（未规划）。' });
+        }
+
+        // ---- 关键抉择暂停点（HP12）----
+        //
+        // 有暂停点时本轮到此为止：不调用写手、不落助手消息。
+        // 计划行已经按 awaiting_choice 落库，作者选完再发起同一轮写作，
+        // 走的是计划复用（0 次规划调用）而不是整章重跑。
+        if (pausePlan && !roundSignal.aborted) {
+          send({
+            type: 'plan_ready',
+            planId: pausePlan.planId,
+            chapterId,
+            beatId: pausePlan.beatId,
+            goal: pausePlan.goal,
+            options: pausePlan.options,
+            // 整份拍表一并给出：作者要「看一眼」的就是它。
+            beats: (beatPlan && beatPlan.beats) || [],
+            chapterGoal: (beatPlan && beatPlan.chapterGoal) || '',
+          });
+          send({
+            type: 'done',
+            conversationId: conversation.id,
+            userMessageId: insertedUserMessageId || (reusedUserMessage && reusedUserMessage.id) || '',
+            provider: name,
+            stopReason: 'plan_paused',
+            traceId,
+          });
+          console.log(
+            JSON.stringify({
+              event: 'ai_plan_paused',
+              traceId,
+              userId: req.userId,
+              chapterId,
+              planId: pausePlan.planId,
+              beatId: pausePlan.beatId,
+              options: pausePlan.options.length,
+            })
+          );
+          return;
         }
       } catch (err) {
         // 规划出意外（含取消）都不该挡住写作。

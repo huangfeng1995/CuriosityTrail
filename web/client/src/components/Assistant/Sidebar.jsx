@@ -271,6 +271,8 @@ export default function AssistantSidebar() {
         replaceMessageId = '',
         reuseAssistantId = '',
         roleKey: sendRoleKey = roleKey,
+        resumePlanId = '',
+        chosenLabel = '',
       } = options;
       const sendRole = roles.find((r) => r.key === sendRoleKey) || activeRole;
 
@@ -332,11 +334,22 @@ export default function AssistantSidebar() {
         memoryReason: '',
         // 工具过程：AI 自己翻出来的东西，作者要能核对
         toolTrace: [],
+        // 关键抉择暂停点（HP12）：拍表已生成、正文未开写时挂出来的选项
+        planPause: null,
+        chosenLabel: '',
+        planAbandoned: false,
         // 消息字段叫 excludedRefIds（已剔除列表），入参叫 excludeRefIds，
         // 这里必须显式赋值：写成简写会引用一个不存在的变量，点发送直接 ReferenceError。
         excludedRefIds: excludeRefIds,
         regenerating: isRegen,
       };
+
+      // 暂停点恢复：气泡上保留「已选：X」，面板由新一轮的 plan_ready 重新决定。
+      if (resumePlanId) {
+        assistantMsg.chosenLabel = chosenLabel;
+        assistantMsg.planPause = null;
+        assistantMsg.planAbandoned = false;
+      }
 
       if (isRegen) {
         dispatch({ type: 'message/update', id: assistantId, patch: assistantMsg });
@@ -387,6 +400,7 @@ export default function AssistantSidebar() {
             useMemory,
             excludeRefIds,
             replaceMessageId,
+            resumePlanId,
           },
           (event) => {
             // 第一个事件到时，服务端的会话行已经建好了：
@@ -517,6 +531,26 @@ export default function AssistantSidebar() {
                 id: assistantId,
                 patch: {
                   anchorViolations: Array.isArray(event.violations) ? event.violations : [],
+                },
+              });
+            } else if (event.type === 'plan_ready') {
+              // 拍表已生成、正文还没开写（HP12）：把抉择面板挂在这条气泡上。
+              // 必须把 gotReply 置真，否则收尾逻辑会把它当成「没收到回复」，
+              // 用一句失败提示盖掉面板。
+              gotReply = true;
+              dispatch({ type: 'streaming/set', streaming: '' });
+              dispatch({
+                type: 'message/update',
+                id: assistantId,
+                patch: {
+                  thinking: '',
+                  planPause: {
+                    planId: event.planId,
+                    beatId: event.beatId || '',
+                    goal: event.goal || '',
+                    options: Array.isArray(event.options) ? event.options : [],
+                    beats: Array.isArray(event.beats) ? event.beats : [],
+                  },
                 },
               });
             } else if (event.type === 'done') {
@@ -667,6 +701,72 @@ export default function AssistantSidebar() {
       });
     },
     [send, sending]
+  );
+
+  /**
+   * 关键抉择暂停点（HP12）：作者选定方向后从断点继续。
+   *
+   * 先把选择写进 chapter_plans，再用同一句话重发一轮。服务端会复用
+   * 已落库的拍表（不再规划），只把「本节拍已定」追加到写手 system。
+   * optionId 为空表示按原计划放行。
+   */
+  const decidePlan = useCallback(
+    async (msg, optionId) => {
+      const pause = msg?.planPause;
+      if (!pause || !msg.prompt || !chapter?.id || sending) return;
+      try {
+        const res = await fetch(
+          `/api/chapters/${chapter.id}/plans/${pause.planId}/choose`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(optionId ? { optionId } : {}),
+          }
+        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || '选择没有生效');
+        }
+        const chosenLabel = optionId
+          ? ((pause.options || []).find((item) => item.id === optionId) || {}).label || ''
+          : '';
+        send(msg.prompt, {
+          reuseAssistantId: msg.id,
+          resumePlanId: pause.planId,
+          chosenLabel,
+        });
+      } catch (e) {
+        dispatch({ type: 'notice/set', error: e.message });
+      }
+    },
+    [chapter?.id, dispatch, send, sending]
+  );
+
+  /** 放弃这次规划：不写正文，计划行留档。 */
+  const abandonPlan = useCallback(
+    async (msg) => {
+      const pause = msg?.planPause;
+      if (!pause || !chapter?.id || sending) return;
+      try {
+        const res = await fetch(
+          `/api/chapters/${chapter.id}/plans/${pause.planId}/abandon`,
+          { method: 'POST', credentials: 'include' }
+        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || '放弃没有生效');
+        }
+        dispatch({
+          type: 'message/update',
+          id: msg.id,
+          patch: { planPause: null, planAbandoned: true },
+        });
+      } catch (e) {
+        dispatch({ type: 'notice/set', error: e.message });
+      }
+    },
+    [chapter?.id, dispatch, sending]
   );
 
   /**
@@ -1075,6 +1175,8 @@ export default function AssistantSidebar() {
           adoptedFindingKeys={adoptedFindingKeys}
           onAdoptFindings={adoptFindings}
           onJumpToFinding={jumpToFinding}
+          onChoosePlan={decidePlan}
+          onAbandonPlan={abandonPlan}
           onDismissSystem={(msg) => dispatch({ type: 'message/remove', id: msg.id })}
         />
       </div>

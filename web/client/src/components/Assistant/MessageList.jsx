@@ -4,6 +4,7 @@ import { Bookmark, BookmarkCheck } from 'lucide-react';
 import ActionCard from './ActionCard';
 import CitationBadge from './CitationBadge';
 import MemoryPanel from './MemoryPanel';
+import PlanPauseCard from './PlanPauseCard';
 import ToolPanel from './ToolPanel';
 import EmptyState from '../EmptyState';
 
@@ -63,6 +64,8 @@ export default function MessageList({
   onAdoptFindings,
   onJumpToFinding,
   onDismissSystem,
+  onChoosePlan,
+  onAbandonPlan,
 }) {
   // 占位提示的文案。
   //
@@ -160,6 +163,19 @@ export default function MessageList({
                       : null
                   }
                   regenerating={!!msg.regenerating}
+                />
+              )}
+
+              {/* 关键抉择暂停面板（HP12）：排在正文之前，
+                  作者先定方向，再看到按这个方向写出来的稿子。 */}
+              {(msg.planPause || msg.chosenLabel || msg.planAbandoned) && (
+                <PlanPauseCard
+                  pause={msg.planPause}
+                  chosenLabel={msg.chosenLabel || ''}
+                  abandoned={!!msg.planAbandoned}
+                  disabled={!!sending}
+                  onChoose={(optionId) => onChoosePlan?.(msg, optionId)}
+                  onAbandon={() => onAbandonPlan?.(msg)}
                 />
               )}
 

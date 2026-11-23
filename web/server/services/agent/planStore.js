@@ -179,8 +179,148 @@ async function saveChapterPlan({
   return id;
 }
 
+/**
+ * 从拍表里找暂停点（HP12）。
+ *
+ * 只有「决定」拍、标了 critical、且带 2–3 个选项时才停。
+ * 这不是「所有章节都停下来」：没有关键抉择的章照旧一路写完。
+ *
+ * @param {Object} plan validateBeatPlan 归一化后的拍表
+ * @returns {{beatId: string, goal: string, options: Array}|null}
+ */
+function pausePointOf(plan) {
+  if (!plan || !Array.isArray(plan.beats)) return null;
+  const beat = plan.beats.find(
+    (item) =>
+      item &&
+      item.type === '决定' &&
+      item.critical === true &&
+      Array.isArray(item.options) &&
+      item.options.length >= 2
+  );
+  if (!beat) return null;
+  return {
+    beatId: beat.id,
+    goal: beat.goal || '',
+    options: beat.options.slice(0, 3).map((option) => ({
+      id: String(option.id),
+      label: String(option.label),
+      consequence: String(option.consequence),
+    })),
+  };
+}
+
+/** 解析库里的 options 列；坏数据按空清单处理，不让暂停面板渲染出半条选项。 */
+function parseOptions(raw) {
+  try {
+    const list = JSON.parse(raw || '[]');
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter((item) => item && item.id && item.label && item.consequence)
+      .slice(0, 3)
+      .map((item) => ({
+        id: String(item.id),
+        label: String(item.label),
+        consequence: String(item.consequence),
+      }));
+  } catch (e) {
+    return [];
+  }
+}
+
+function parsePlan(raw) {
+  try {
+    return JSON.parse(raw || 'null');
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * 取本章待作者选择的计划。
+ *
+ * 断流、关页面、隔天回来都靠它把面板恢复出来——计划行一直在库里，
+ * 不设置过期时间，也不自动替作者选一个。
+ */
+async function loadPendingPlan({ workId, chapterId } = {}) {
+  if (!workId || !chapterId) return null;
+  const row = await get(
+    `SELECT * FROM chapter_plans
+     WHERE work_id = ? AND chapter_id = ? AND status = 'awaiting_choice'
+     ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+    [workId, chapterId]
+  );
+  if (!row) return null;
+  const plan = parsePlan(row.plan);
+  const pause = pausePointOf(plan);
+  const options = parseOptions(row.options);
+  if (!pause && !options.length) return null;
+  return {
+    planId: row.id,
+    status: row.status,
+    plan,
+    beatId: pause ? pause.beatId : '',
+    options: options.length ? options : pause.options,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * 作者选定一个选项，或直接按原计划放行。
+ *
+ * 不传 optionId（null/''）＝ 放行：状态同样转 confirmed，但不额外追加
+ * 「本节拍已定」约束，写手按节拍表原样写。这样作者既能改方向，
+ * 也能看一眼就让它往下走。
+ *
+ * @returns {{planId, status, option}|{error: string, options?: Array}}
+ */
+async function choosePlanOption({ workId, chapterId, planId, optionId } = {}) {
+  if (!workId || !chapterId || !planId) return { error: 'not_found' };
+  const row = await get(
+    'SELECT * FROM chapter_plans WHERE id = ? AND work_id = ? AND chapter_id = ?',
+    [planId, workId, chapterId]
+  );
+  if (!row) return { error: 'not_found' };
+  if (row.status === 'abandoned') return { error: 'abandoned' };
+
+  const options = parseOptions(row.options);
+  const wanted = optionId === null || optionId === undefined ? '' : String(optionId);
+  let option = null;
+  if (wanted) {
+    option = options.find((item) => item.id === wanted) || null;
+    if (!option) return { error: 'bad_option', options };
+  }
+
+  const ts = new Date().toISOString();
+  await run(
+    "UPDATE chapter_plans SET status = 'confirmed', chosen = ?, updated_at = ? WHERE id = ?",
+    [option ? option.id : null, ts, row.id]
+  );
+  return { planId: row.id, status: 'confirmed', option, options };
+}
+
+/** 作者放弃这次规划：不写正文，计划行留档但不再参与复用。 */
+async function abandonChapterPlan({ workId, chapterId, planId } = {}) {
+  if (!workId || !chapterId || !planId) return { error: 'not_found' };
+  const row = await get(
+    'SELECT id FROM chapter_plans WHERE id = ? AND work_id = ? AND chapter_id = ?',
+    [planId, workId, chapterId]
+  );
+  if (!row) return { error: 'not_found' };
+  await run(
+    "UPDATE chapter_plans SET status = 'abandoned', updated_at = ? WHERE id = ?",
+    [new Date().toISOString(), row.id]
+  );
+  return { planId: row.id, status: 'abandoned' };
+}
+
 module.exports = {
   fingerprintOf,
   loadReusablePlan,
   saveChapterPlan,
+  pausePointOf,
+  parseOptions,
+  loadPendingPlan,
+  choosePlanOption,
+  abandonChapterPlan,
 };

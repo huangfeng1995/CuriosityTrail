@@ -2950,6 +2950,124 @@ body.ct-resizing * {
   font-size: 12.5px;
 }
 
+/* 关键抉择暂停面板（HP12）：拍表已出、正文未写。
+   选项与后果必须同时可见——只给选项不给后果，作者没法判断该选哪个。 */
+.ct-plan-pause {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg-container);
+}
+.ct-plan-pause-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.ct-plan-pause-goal {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.ct-plan-pause-beats {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ct-plan-pause-beats li {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+.ct-plan-pause-beats li.is-pause {
+  color: var(--text-primary);
+}
+.ct-plan-pause-beat-id {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+.ct-plan-pause-beat-type {
+  flex: 0 0 auto;
+}
+.ct-plan-pause-beat-goal {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-plan-pause-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ct-plan-pause-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.ct-plan-pause-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.ct-plan-pause-option:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.ct-plan-pause-option-label {
+  font-size: 12.5px;
+}
+.ct-plan-pause-option-consequence {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.ct-plan-pause-actions {
+  display: flex;
+  gap: 10px;
+}
+.ct-plan-pause-pass,
+.ct-plan-pause-abandon {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11.5px;
+  cursor: pointer;
+  color: var(--text-tertiary);
+}
+.ct-plan-pause-pass:hover:not(:disabled) {
+  color: var(--accent);
+}
+.ct-plan-pause-abandon:hover:not(:disabled) {
+  color: var(--text-secondary);
+}
+.ct-plan-pause-pass:disabled,
+.ct-plan-pause-abandon:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.ct-plan-pause-note {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
 /* 流式光标 */
 .ct-caret {
   display: inline-block;

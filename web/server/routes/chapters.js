@@ -6,6 +6,9 @@
  *   GET    /api/chapters/:id            章节详情
  *   PUT    /api/chapters/:id            更新章节（blocks 为权威数据）
  *   POST   /api/chapters/:id/summary    手动重生成章节摘要
+ *   GET    /api/chapters/:id/plans/pending   本章待作者选择的关键抉择（HP12）
+ *   POST   /api/chapters/:id/plans/:planId/choose    选定选项或按原计划放行
+ *   POST   /api/chapters/:id/plans/:planId/abandon   放弃这次规划
  *   DELETE /api/chapters/:id            删除章节
  */
 
@@ -17,6 +20,7 @@ const { countBlockWords, countWords } = require('../services/wordCount');
 const progress = require('../services/progress');
 const chapterSummary = require('../services/summaries/chapterSummary');
 const memory = require('../services/memory/indexer');
+const planStore = require('../services/agent/planStore');
 
 const router = express.Router();
 const now = () => new Date().toISOString();
@@ -151,6 +155,76 @@ router.post('/:id/summary', async (req, res) => {
       words: result.words,
       generatedAt: result.generatedAt,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 本章待作者选择的关键抉择（HP12）。
+ *
+ * 暂停点不设过期：作者关掉页面、隔天回来，计划行还在库里，
+ * 这个接口负责把面板原样恢复出来。没有待选计划时返回 pending: null。
+ */
+router.get('/:id/plans/pending', async (req, res) => {
+  try {
+    const chapter = await ownedChapter(req.params.id, req.userId);
+    if (!chapter) return res.status(404).json({ error: '章节不存在' });
+    const pending = await planStore.loadPendingPlan({
+      workId: chapter.work_id,
+      chapterId: chapter.id,
+    });
+    res.json({ pending });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 选定一个选项，或按原计划放行。
+ *
+ * 只改 chapter_plans 的状态：正文由作者紧接着发起的那一轮写作生成，
+ * 服务端在恢复时按 chosen 追加「本节拍已定」约束，不整章重跑规划。
+ * 不带 optionId 即放行（chosen 置空）。
+ */
+router.post('/:id/plans/:planId/choose', async (req, res) => {
+  try {
+    const chapter = await ownedChapter(req.params.id, req.userId);
+    if (!chapter) return res.status(404).json({ error: '章节不存在' });
+
+    const result = await planStore.choosePlanOption({
+      workId: chapter.work_id,
+      chapterId: chapter.id,
+      planId: req.params.planId,
+      optionId: req.body?.optionId ?? null,
+    });
+
+    if (result.error === 'not_found') return res.status(404).json({ error: '计划不存在' });
+    if (result.error === 'abandoned') {
+      return res.status(409).json({ error: '这次规划已放弃，重新写会重新规划' });
+    }
+    if (result.error === 'bad_option') {
+      return res.status(422).json({ error: '选项不存在', options: result.options || [] });
+    }
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** 放弃这次规划：不写正文，计划行留档但不再参与复用。 */
+router.post('/:id/plans/:planId/abandon', async (req, res) => {
+  try {
+    const chapter = await ownedChapter(req.params.id, req.userId);
+    if (!chapter) return res.status(404).json({ error: '章节不存在' });
+
+    const result = await planStore.abandonChapterPlan({
+      workId: chapter.work_id,
+      chapterId: chapter.id,
+      planId: req.params.planId,
+    });
+    if (result.error === 'not_found') return res.status(404).json({ error: '计划不存在' });
+    res.json({ ok: true, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
