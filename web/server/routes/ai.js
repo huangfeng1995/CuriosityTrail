@@ -21,8 +21,6 @@ const aiConfig = require('../services/aiConfig');
 const { resolveProvider, checkAllProviders } = require('../services/providers');
 const {
   assembleContext,
-  findPreviousChapterWithBody,
-  chapterBody,
   trimHistory,
 } = require('../services/context');
 const roles = require('../services/roles');
@@ -47,7 +45,6 @@ const {
   buildFunctionReplanInstruction,
   beatBadge,
   checkWordShares,
-  BEAT_TYPES,
   DANGER_TYPE,
 } = require('../services/agent/beatPlan');
 const planBrief = require('../services/agent/planBrief');
@@ -57,7 +54,7 @@ const referenceAnchor = require('../services/agent/referenceAnchor');
 const segmentWriter = require('../services/agent/segmentWriter');
 const { checkAnchors } = require('../services/pipeline/anchorCheck');
 const knowledgeScan = require('../services/pipeline/knowledgeScan');
-const { isPipelineEnabled } = require('../services/pipeline/gate');
+const { buildPlanGrounding } = require('../services/agent/planGrounding');
 
 const router = express.Router();
 
@@ -145,35 +142,9 @@ function errorText(err) {
 }
 
 /**
- * 上一章的 mainType（只用于「相邻两章不得同为 险露」）。
- *
- * HP11 落库后从 chapter_plans 读；表还没建（HP10 单独上线）时查询会报错，
- * 这里吞掉错误按「没有上一章计划」处理，不阻断本轮规划。
+ * 上一章 mainType 与实体接地都在 services/agent/planGrounding.js 里。
+ * 路由只调用 buildPlanGrounding，不在这里做查询与判定。
  */
-async function loadPreviousMainType(workId, chapterId) {
-  if (!workId || !chapterId) return '';
-  try {
-    const current = await get('SELECT seq FROM chapters WHERE id = ? AND work_id = ?', [
-      chapterId,
-      workId,
-    ]);
-    if (!current) return '';
-    const prev = await get(
-      'SELECT id FROM chapters WHERE work_id = ? AND seq < ? ORDER BY seq DESC LIMIT 1',
-      [workId, current.seq]
-    );
-    if (!prev) return '';
-    const row = await get(
-      'SELECT plan FROM chapter_plans WHERE chapter_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1',
-      [prev.id]
-    );
-    if (!row || !row.plan) return '';
-    const parsed = JSON.parse(row.plan);
-    return parsed && typeof parsed.mainType === 'string' ? parsed.mainType : '';
-  } catch (e) {
-    return '';
-  }
-}
 
 /**
  * 从历史里剔掉被中断的那一轮。
@@ -1178,77 +1149,24 @@ router.post('/chat', async (req, res) => {
         // 有本章大纲时，节拍表必须服从大纲自己的场景与因果，不再套范文六类功能；
         // 没有大纲时才退回六类兜底。无论哪种模式，都把「可用实体」交给规划器，
         // 有大纲时还做硬校验：拍里出现的人名/物名/道具必须在资料里有出处。
-        const [planChapterRow, planWorkRow, groundCharacters, groundSettings, groundMaterials] =
-          await Promise.all([
-            chapterId
-              ? get('SELECT title, outline, seq FROM chapters WHERE id = ? AND work_id = ?', [
-                  chapterId,
-                  workId,
-                ]).catch(() => null)
-              : null,
-            get('SELECT title, synopsis, outline, template FROM works WHERE id = ?', [workId]).catch(() => null),
-            all(
-              `SELECT name, aliases, role, identity, personality, speech, goal, arc, relations, notes, weakness
-               FROM characters WHERE work_id = ?`,
-              [workId]
-            ).catch(() => []),
-            all('SELECT name, category, content FROM settings WHERE work_id = ?', [workId]).catch(() => []),
-            all(
-              `SELECT title, body FROM materials
-               WHERE user_id = ? AND (work_id = ? OR work_id IS NULL OR work_id = '')
-                 AND status != 'retracted'
-               ORDER BY created_at DESC, id DESC LIMIT 20`,
-              [req.userId, workId]
-            ).catch(() => []),
-          ]);
-
-        // 上一章结尾原文也是规划器的给定输入（「如何衔接上一章」），
-        // 必须进接地语料：否则上一章末句里的器物（如「弓」）会被判成新道具。
-        const previousChapterRow = planChapterRow && planChapterRow.seq
-          ? await findPreviousChapterWithBody(workId, planChapterRow.seq).catch(() => null)
-          : null;
-        const previousChapterText = previousChapterRow
-          ? chapterBody(previousChapterRow).slice(-800)
-          : '';
-
-        const planGround = {
-          outline: String((planChapterRow && planChapterRow.outline) || '').trim(),
-          instruction: String(message),
-          workTitle: (planWorkRow && planWorkRow.title) || '',
-          workOutline: (planWorkRow && planWorkRow.outline) || '',
-          synopsis: (planWorkRow && planWorkRow.synopsis) || '',
-          previousChapter: previousChapterText,
-          characters: groundCharacters || [],
-          settings: groundSettings || [],
-          materials: groundMaterials || [],
-          // 情节卡里的标题/备注也进实体接地语料：卡里的节点是合法出处，
-          // 卡外的新人名/新道具仍然找不到出处。
+        //
+        // 材料读取与模式判定收在 services/agent/planGrounding.js：这里只取结果，
+        // 不在本文件里改上下文、发事件或落库。
+        const {
+          planGround,
+          planCharacterNames: groundedNames,
+          planMode,
+          pipelineEnabled,
+          allowedBeatTypes,
+          previousMainType,
+        } = await buildPlanGrounding({
+          workId,
+          chapterId,
+          userId: req.userId,
+          message,
           plotCards: plotCardRows,
-        };
-        // 姓名 + 别名（aliases 可能是逗号/顿号分隔的字符串），只做前情账本的人物识别用。
-        planCharacterNames = [...new Set(
-          (groundCharacters || [])
-            .flatMap((row) => [row.name, ...String(row.aliases || '').split(/[，,、|/;；]/)])
-            .map((name) => String(name || '').trim())
-            .filter((name) => name.length >= 2)
-        )];
-        // 只有「像大纲」的文本才按大纲拆拍：一行故事前提（例如「主角进庙查旧案」）
-        // 提供不了场景与因果，硬按大纲模式反而会退化成直写；这种短文本继续走
-        // 六类功能兜底。真实分场大纲通常远超 40 字。
-        const MIN_OUTLINE_CHARS_FOR_PLAN = 40;
-        const planMode = planGround.outline.length >= MIN_OUTLINE_CHARS_FOR_PLAN
-          ? 'outline'
-          : 'reference';
-
-        // 险露 只在历史悬疑模板启用时可用；相邻章规则需要上一章 mainType。
-        // 模板判定只用这一行作品数据，与注入侧共用同一个 gate。
-        const pipelineEnabled = isPipelineEnabled(planWorkRow);
-        const allowedBeatTypes = pipelineEnabled
-          ? BEAT_TYPES
-          : BEAT_TYPES.filter((type) => type !== DANGER_TYPE);
-        const previousMainType = pipelineEnabled
-          ? await loadPreviousMainType(workId, chapterId)
-          : '';
+        });
+        planCharacterNames = groundedNames;
 
         // ---- 复用已落库的拍表（HP11）----
         //
