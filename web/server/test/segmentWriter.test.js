@@ -2711,3 +2711,45 @@ test('比喻超限按实测上限 2.1 判定，不再写「上限 0」', () => {
   const problems = segmentWriter.shapeAcceptProblems(shape(2.0), shape(2.5), ['B1']);
   assert.match(problems.join('；'), /比喻密度 2\.5 处\/千字（上限 2\.1 处\/千字）/);
 });
+
+// ---------------------------------------------------------------------------
+// 形态不合格且重写被回滚：无损修补 + 明确阻断
+// ---------------------------------------------------------------------------
+
+test('短句过多时按句边界合并：不删字、不改段数，比例回到上限内', () => {
+  const plan = makePlan(4);
+  const paragraph =
+    '他把手里的拜帖捏紧了。门里没有人应声。廊下风灯晃了两下，照见阶前一层薄雪。';
+  const source = Array.from({ length: 10 }, (_, i) => `第${i + 1}段：${paragraph}`).join('\n\n');
+  const before = segmentWriter.checkParagraphShape(plan, source);
+  const beforeRow = before.violations.find((row) => row.kind === 'short_sentence');
+  assert.ok(beforeRow, '十组短句必须触发短句超限');
+  assert.ok(beforeRow.ratio > segmentWriter.SHORT_SENTENCE_RATIO_LIMIT);
+
+  const repaired = segmentWriter.repairShortSentences(source);
+  assert.ok(repaired.merged > 0, '至少要合并一对短句');
+  assert.ok(repaired.merged <= 10, '不会超过实际短句对数');
+  assert.strictEqual(
+    repaired.text.split(/\n+/).length,
+    source.split(/\n+/).length,
+    '只并句，不改段数'
+  );
+  assert.strictEqual(
+    repaired.text.replace(/[，。！？!?…\n]/g, '').length,
+    source.replace(/[，。！？!?…\n]/g, '').length,
+    '不删字'
+  );
+  const after = segmentWriter.checkParagraphShape(plan, repaired.text);
+  assert.ok(!after.violations.some((row) => row.kind === 'short_sentence'), '合并后不再短句超限');
+});
+
+test('形态缺口描述写清实际值、阈值与差多少', () => {
+  const detail = segmentWriter.formatShapeShortfall([
+    { kind: 'short_sentence', ratio: 25.1, limit: 18.4 },
+    { kind: 'dialogue_low', ratio: 12.9, limit: 14.4, deficitChars: 380 },
+    { kind: 'imagery_density', perKilo: 2.56, limit: 2.1 },
+  ]);
+  assert.match(detail, /短句占比 25\.1%（上限 18\.4%，多 6\.7pp）/);
+  assert.match(detail, /对白占比 12\.9%（下限 14\.4%，差 1\.5pp，约 380 字引语）/);
+  assert.match(detail, /比喻密度 2\.56 处\/千字（上限 2\.1，多 0\.5）/);
+});

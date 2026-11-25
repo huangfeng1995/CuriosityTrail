@@ -235,6 +235,134 @@ const CORNER_QUOTE_RE = /[「」]/;
 const DIALOGUE_ONLY_RE = /^[“"][^”"]*[”"][。！？!?…]?$/;
 
 /**
+ * 短句无损修补：按句边界合并，而不是整组重写。
+ *
+ * 整组重写一旦砍字超过 15%，就会被 85% 守卫回滚，缺口原样留下；
+ * 短句过多属于「句子切得太碎」，同段内把两个相邻短句用逗号接起来即可，
+ * 不改词、不改段、不删信息。合并后必须超过 12 字才算数（否则仍是短句）。
+ *
+ * @param {string} text
+ * @param {number} [targetRatio] 目标短句占比，默认范文×1.5 的上限
+ * @returns {{text: string, merged: number}}
+ */
+function repairShortSentences(text, targetRatio = SHORT_SENTENCE_RATIO_LIMIT) {
+  const source = String(text || '');
+  const paragraphs = source.split(/\n+/);
+  const before = measureSentenceLength(paragraphs.join('\n\n'));
+  if (before.count < 20) return { text: source, merged: 0 };
+  const shortRatioOf = (shape) => {
+    if (!shape.count) return 0;
+    const short = shape.sentences.filter((sentence) => sentence.words <= SHORT_SENTENCE_MAX_CHARS).length;
+    return (short / shape.count) * 100;
+  };
+  if (shortRatioOf(before) <= targetRatio) return { text: source, merged: 0 };
+
+  let merged = 0;
+  let stop = false;
+  for (let p = 0; p < paragraphs.length && !stop; p += 1) {
+    // 每段最多合并 40 次：一段塞 40 句短句已经不正常，超过就该走重写。
+    for (let guard = 0; guard < 40; guard += 1) {
+      const parts = paragraphs[p].match(/[^。！？!?…]+[。！？!?…]?/g) || [];
+      let changed = false;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        const left = parts[i];
+        const right = parts[i + 1];
+        // 含引号的句子不动：对白内部并句会改变说话节奏与说话人归属。
+        if (/[“”「」]/.test(left) || /[“”「」]/.test(right)) continue;
+        if (!/[。！？!?…]+$/.test(left)) continue;
+        const leftWords = countWords(left);
+        if (leftWords > SHORT_SENTENCE_MAX_CHARS) continue;
+        const joined = `${left.replace(/[。！？!?…]+$/, '，')}${right}`;
+        const joinedWords = countWords(joined);
+        // 合并后还是短句就没有意义；超过 40 字又会变成另一个极端。
+        if (joinedWords <= SHORT_SENTENCE_MAX_CHARS || joinedWords > 40) continue;
+        paragraphs[p] = paragraphs[p].replace(left + right, joined);
+        merged += 1;
+        changed = true;
+        break;
+      }
+      if (!changed) break;
+      const current = measureSentenceLength(paragraphs.join('\n\n'));
+      if (shortRatioOf(current) <= targetRatio) {
+        stop = true;
+        break;
+      }
+    }
+  }
+  return { text: paragraphs.join('\n\n'), merged };
+}
+
+/**
+ * 交付阻断用的形态缺口描述：逐项写清实际值、阈值与差多少。
+ *
+ * 只写「形态不合规」等于让作者猜；轮 A 的教训是短句 25.11% 被回滚后
+ * 仍然原样交付，作者根本不知道差在哪。
+ */
+const SHAPE_SHORTFALL_LABELS = {
+  count: '每拍段数',
+  too_long: '单段超长',
+  fragment_ratio: '40–79 字短段占比',
+  short_run: '连续短段',
+  avg: '段均字数',
+  dialogue_stack: '对白连续独立成段',
+  corner_quote: '角引号「」',
+  short_sentence: '短句占比',
+  quote_density: '引号片段密度',
+  dialogue_ratio: '对白占比',
+  dialogue_low: '对白占比',
+  imagery_density: '比喻密度',
+  generic_reference: '匿名特征指代',
+};
+function formatShapeShortfall(rows) {
+  return (rows || [])
+    .map((row) => {
+      const label = SHAPE_SHORTFALL_LABELS[row.kind] || row.kind;
+      if (row.kind === 'count') {
+        return `${label} ${row.actual} 段（计划 ${row.expected}，允差 ±${row.tolerance}）`;
+      }
+      if (row.kind === 'too_long') {
+        return `${label} ${row.chars} 字（上限 ${row.limit}，第 ${Number(row.index) + 1} 段）`;
+      }
+      if (row.kind === 'short_run') {
+        return `${label} ${row.run} 段（第 ${Number(row.index) + 1} 段起，允许最多 2 段）`;
+      }
+      if (row.kind === 'dialogue_stack') {
+        return `${label} ${row.run} 段（第 ${Number(row.index) + 1} 段起，允许最多 2 段）`;
+      }
+      if (row.kind === 'avg') {
+        const range = Array.isArray(row.range) ? row.range : [];
+        return `${label} ${row.mean} 字（应在 ${range[0]}–${range[1]}）`;
+      }
+      if (row.kind === 'corner_quote') {
+        return `${label}（第 ${Number(row.index) + 1} 段，应改成全角 “”）`;
+      }
+      if (row.kind === 'fragment_ratio') {
+        return `${label} ${row.ratio}%（上限 ${row.limit}%）`;
+      }
+      if (row.kind === 'short_sentence') {
+        return `${label} ${row.ratio}%（上限 ${row.limit}%，多 ${Math.max(0, row.ratio - row.limit).toFixed(1)}pp）`;
+      }
+      if (row.kind === 'dialogue_ratio') {
+        return `${label} ${row.ratio}%（上限 ${row.limit}%，多 ${Math.max(0, row.ratio - row.limit).toFixed(1)}pp）`;
+      }
+      if (row.kind === 'dialogue_low') {
+        return `${label} ${row.ratio}%（下限 ${row.limit}%，差 ${Math.max(
+          0,
+          row.limit - row.ratio
+        ).toFixed(1)}pp，约 ${row.deficitChars || 0} 字引语）`;
+      }
+      if (row.kind === 'imagery_density' || row.kind === 'quote_density' || row.kind === 'generic_reference') {
+        return `${label} ${row.perKilo} 处/千字（上限 ${row.limit}，多 ${Math.max(
+          0,
+          row.perKilo - row.limit
+        ).toFixed(1)}）`;
+      }
+      return label;
+    })
+    .join('；');
+}
+
+/**
  * 场景切换的保守识别：只认开头的时间/地点提示语。
  *
  * 认错方向的代价不对称——漏判最多少合并一处，误判会把两个场景粘在一起。
@@ -3966,6 +4094,8 @@ module.exports = {
   summarizeShapeViolations,
   evaluateShapeDelivery,
   shapeAcceptProblems,
+  repairShortSentences,
+  formatShapeShortfall,
   describeShapeViolations,
   composeChapterContent,
   beatMarkers,

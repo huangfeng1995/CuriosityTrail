@@ -3102,6 +3102,45 @@ router.post('/chat', async (req, res) => {
       );
     }
 
+    // 短句过多时先做无损修补：整组重写一旦砍字超过 15% 就被 85% 守卫回滚，
+    // 缺口原样留下。按句边界合并两个相邻短句既不改词、不删信息，也不动段数。
+    let shapeRepair = null;
+    const shapeGateProse =
+      ['replace', 'append', 'insert'].includes(payload.action) && !payload.parseFailed;
+    if (beatPlan && shapeGateProse && shapeCheck && shapeCheck.applicable) {
+      const beforeDelivery = segmentWriter.evaluateShapeDelivery(shapeCheck);
+      if (beforeDelivery.blocking.some((row) => row.kind === 'short_sentence')) {
+        const repaired = segmentWriter.repairShortSentences(payload.content);
+        if (repaired.merged > 0) {
+          payload.content = repaired.text;
+          finalResult.parsed.content = repaired.text;
+          const repairedAudit = auditDraft({ plan: beatPlan, brief, text: payload.content });
+          shapeCheck = repairedAudit.shape;
+          beatCheck.shapeViolations = shapeCheck.violations;
+          beatCheck.shapeBeatIds = shapeCheck.beatIds;
+          beatCheck.paragraphCount = shapeCheck.totalParagraphs;
+          beatCheck.avgParagraphChars = shapeCheck.avgChars;
+          beatCheck.shapeQuality = shapeCheck.quality;
+          const afterDelivery = segmentWriter.evaluateShapeDelivery(shapeCheck);
+          shapeRepair = {
+            merged: repaired.merged,
+            before: (beforeDelivery.quality || {}).shortSentenceRatio,
+            after: (afterDelivery.quality || {}).shortSentenceRatio,
+            passed: afterDelivery.passed,
+          };
+          beatCheck.shapeRepair = shapeRepair;
+          console.log(
+            JSON.stringify({
+              event: 'ai_shape_repair',
+              traceId,
+              userId: req.userId,
+              ...shapeRepair,
+            })
+          );
+        }
+      }
+    }
+
     // 段落形态徽标：重写后仍不合规才挂，避免把「查过且合格」写成打扰。
     const finalShapeDelivery = segmentWriter.evaluateShapeDelivery(shapeCheck);
     if (beatCheck && shapeCheck) {
@@ -3563,6 +3602,69 @@ router.post('/chat', async (req, res) => {
         await restoreRemoved();
         return;
       }
+    }
+
+    // ---- 交付前形态门禁（短句/对白/比喻等）----
+    //
+    // 形态不合格、重写又被 85% 守卫回滚时，不能默认交付：轮 A 短句 25.11%
+    // 就是带着缺口落库的。这里先做无损修补（按句边界合并短句），仍不达标
+    // 就明确阻断并写清哪一项、差多少；不放宽阈值，也不取消 85% 守卫。
+    // 段数 ±2 这类结构偏差仍只挂徽标：无损修补会改动正文结构，不宜自动做。
+    //
+    // 只在「重写被 85% 守卫回滚」时阻断：没有回滚说明还有别的修复机会，
+    // 或者本来就没触发重写，按原逻辑挂徽标交付；回滚了还带着缺口，才不能默认交付。
+    const blockingShape = finalShapeDelivery.blocking.filter((row) => row.kind !== 'count');
+    // 只认「因为形态问题被回滚」的重写：覆盖类重写缩水回滚与形态无关，
+    // 不能拿它当阻断理由（线上单测里大量缺拍重写都会缩水）。
+    const reverted = ((beatRewrite && beatRewrite.rewriteReverted) || []).filter(
+      (row) => Array.isArray(row.shapeProblems) && row.shapeProblems.length
+    );
+    if (beatPlan && generatedProse && blockingShape.length && reverted.length) {
+      const detail = segmentWriter.formatShapeShortfall(blockingShape.slice(0, 4));
+      const revertNote = reverted.length
+        ? `；${reverted.length} 组重写因缩水 ${reverted
+            .map((row) => Math.round((Number(row.ratio) || 0) * 100))
+            .join('%/')}% 被 85% 守卫回滚`
+        : '';
+      console.log(
+        JSON.stringify({
+          event: 'ai_shape_blocked',
+          traceId,
+          userId: req.userId,
+          blocking: blockingShape.map((row) => ({
+            kind: row.kind,
+            beatId: row.beatId,
+            ratio: row.ratio,
+            perKilo: row.perKilo,
+            limit: row.limit,
+            deficitChars: row.deficitChars,
+          })),
+          reverted: reverted.map((row) => ({
+            group: row.group,
+            ratio: row.ratio,
+            reason: row.reason,
+          })),
+          repair: shapeRepair,
+        })
+      );
+      send({
+        type: 'error',
+        code: 'SHAPE_UNMET',
+        message: `本章形态仍不达标，未保存：${detail}${revertNote}。请重试或改写后重跑。`,
+      });
+      send({
+        type: 'done',
+        conversationId: conversation.id,
+        provider: name,
+        stopReason: finalResult.stopReason,
+        traceId,
+      });
+      // 没交付就不能留下孤立的提问，也不能让重新生成前的那一版消失。
+      if (insertedUserMessageId) {
+        await run('DELETE FROM messages WHERE id = ?', [insertedUserMessageId]).catch(() => {});
+      }
+      await restoreRemoved();
+      return;
     }
 
     // 章末冲突随消息落库：重载旧对话时「史实冲突」徽标仍可点开看原句。
