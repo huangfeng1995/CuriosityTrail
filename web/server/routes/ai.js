@@ -2877,6 +2877,148 @@ router.post('/chat', async (req, res) => {
       beatCheck.chapterFloor = segmentWriter.TARGET_CHAPTER_CHARS;
     }
 
+    // 对白下限兜底：扩写只补叙述，会把对白占比进一步稀释。
+    //
+    // 轮 2 实测 7.85%（下限 14.4%）：形态判定确实触发过一次重写，但重写
+    // 发生在扩写之前，扩写之后没有任何兜底，最终就按低对白交付了。
+    // 这里在交付前按最终正文再判一次：仍有缺口且还有调用额度，就再补一轮，
+    // 并把「补没补上」写进 ai_dialogue_gate 与 beatCheck，不能静默。
+    if (segmented && beatPlan && beatCheck && shapeCheck && !roundSignal.aborted) {
+      const quality = shapeCheck.quality || {};
+      const minRatio = Number((quality.limits || {}).dialogueRatioMin) || 0;
+      const beforeRatio = Number(quality.dialogueRatio) || 0;
+      let afterRatio = beforeRatio;
+      let action = 'ok';
+      let attempts = 0;
+      let topUpCalls = 0;
+      let topUpGroups = [];
+
+      // 最多补两轮：一轮通常补不够（轮 2 差 6.5pp ≈ 360 字），
+      // 但也不能无上限——每轮都是整组重写，最多两次后如实报缺口。
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const lowRow = (shapeCheck.violations || []).find((row) => row.kind === 'dialogue_low') || null;
+        if (!lowRow) break;
+        const remainingCalls = segmentWriter.MAX_SEGMENT_CALLS - (segmented.callCount || 0);
+        const remainingMs = ROUND_BUDGET_MS - (Date.now() - startedAt);
+        if (remainingCalls <= 0 || remainingMs < SEGMENT_CALL_TIMEOUT_MS + CHECK_TIMEOUT_MS) {
+          action = attempts ? 'partial_budget' : 'no_budget';
+          break;
+        }
+        // 所有低于下限的拍一起补；只补最差一拍，全章比例回不来。
+        const priorityIds = Array.isArray(lowRow.beatIds) && lowRow.beatIds.length
+          ? lowRow.beatIds
+          : [lowRow.beatId];
+        action = 'rewrite';
+        attempts += 1;
+        try {
+          send({
+            type: 'agent_thinking',
+            label: `对白占比 ${afterRatio}%（下限 ${minRatio}%），第 ${attempt + 1} 次补对白`,
+          });
+          const topUp = await segmentWriter.rewriteMissingGroups({
+            plan: beatPlan,
+            groups: segmented.groups,
+            // 只补对白：把覆盖类问题清零，避免这次兜底又被缺拍/揭示占用配额。
+            coverage: { ...beatCheck, missing: [], weak: [], handoverDuplicated: [] },
+            shapeViolations: [lowRow],
+            priorityIds,
+            runSegment: segmentRun,
+            maxCalls: segmentWriter.MAX_SEGMENT_CALLS,
+            callCount: segmented.callCount,
+            log: (entry) => {
+              console.log(
+                JSON.stringify({
+                  event: 'ai_segment',
+                  traceId,
+                  userId: req.userId,
+                  role: roleKey,
+                  ...entry,
+                })
+              );
+            },
+            progress: ({ index, total, beatIds }) => {
+              send({
+                type: 'agent_thinking',
+                label: `正在补对白（第 ${index + 1}/${total} 组：${beatIds.join('、')}）`,
+              });
+            },
+          });
+          topUpCalls += topUp.calls.length;
+          topUpGroups = [...new Set([...topUpGroups, ...priorityIds])];
+          if (!topUp.content.trim()) {
+            action = 'rewrite_empty';
+            break;
+          }
+          payload.content = topUp.content;
+          finalResult.parsed.content = topUp.content;
+          finalResult.usage = segmentWriter.usageSum([...segmented.calls, ...topUp.calls]);
+          segmented = {
+            ...segmented,
+            groups: topUp.groups,
+            calls: [...segmented.calls, ...topUp.calls],
+            callCount: topUp.callCount,
+            degraded: topUp.degraded || segmented.degraded,
+            budgetExhaustedBy: topUp.budgetExhaustedBy || segmented.budgetExhaustedBy || '',
+            skippedGroups: [...(segmented.skippedGroups || []), ...(topUp.skippedGroups || [])],
+            truncated: topUp.truncated,
+            originalChars: topUp.originalChars,
+            chars: topUp.chars,
+          };
+          const topAudit = auditDraft({ plan: beatPlan, brief, text: payload.content });
+          shapeCheck = topAudit.shape;
+          beatCheck.shapeViolations = shapeCheck.violations;
+          beatCheck.shapeBeatIds = shapeCheck.beatIds;
+          beatCheck.paragraphCount = shapeCheck.totalParagraphs;
+          beatCheck.avgParagraphChars = shapeCheck.avgChars;
+          beatCheck.shapeQuality = shapeCheck.quality;
+          afterRatio = Number((shapeCheck.quality || {}).dialogueRatio) || 0;
+        } catch (err) {
+          action = 'error';
+          if (err.name === 'AbortError' || err.code === 'AI_ABORTED') throw err;
+          console.error('补对白重写失败：', err.message);
+          break;
+        }
+      }
+
+      const finalLow = (shapeCheck.violations || []).find((row) => row.kind === 'dialogue_low') || null;
+      const met = !finalLow;
+      const callsLeft = segmentWriter.MAX_SEGMENT_CALLS - (segmented.callCount || 0);
+      beatCheck.dialogueGate = {
+        before: beforeRatio,
+        after: afterRatio,
+        min: minRatio,
+        met,
+        action,
+        attempts,
+        calls: topUpCalls,
+        groups: topUpGroups,
+        remainingCalls: callsLeft,
+      };
+      beatCheck.dialogueShortfall = met
+        ? null
+        : {
+            ratio: afterRatio,
+            min: minRatio,
+            deficitChars: Number(finalLow.deficitChars) || 0,
+          };
+      console.log(
+        JSON.stringify({
+          event: 'ai_dialogue_gate',
+          traceId,
+          userId: req.userId,
+          before: beforeRatio,
+          after: afterRatio,
+          min: minRatio,
+          met,
+          action,
+          attempts,
+          calls: topUpCalls,
+          groups: topUpGroups,
+          remainingCalls: callsLeft,
+        })
+      );
+    }
+
     // 编排结果必须以作者看得见的方式落地：reason 前挂一个徽标，
     // 前端不用改也能显示；日志里另有 ai_beat_check 供复盘。
     // 没有规划就没有「编排」可言，此时不能挂「未自检」——那会让作者

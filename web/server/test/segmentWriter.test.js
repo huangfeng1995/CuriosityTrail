@@ -2530,3 +2530,74 @@ test('W1 没有形态优先项时仍按组序先到先得（旧行为不变）',
   assert.strictEqual(out.rewriteAllocation, null, '没有形态优先项时不做额外分配');
   assert.deepStrictEqual(out.skippedGroups, [2]);
 });
+
+// ---------------------------------------------------------------------------
+// 对白下限：比例必须落成可执行的汉字数
+// ---------------------------------------------------------------------------
+
+test('对白下限折算成汉字缺口，写手拿到的是字数不是形容词', () => {
+  const plan = makePlan(4);
+  const shape = segmentWriter.checkParagraphShape(plan, body('甲', 8));
+  const row = shape.violations.find((item) => item.kind === 'dialogue_low');
+  assert.ok(row, '整组没有直接引语时必须判 dialogue_low');
+  assert.strictEqual(row.ratio, 0);
+  assert.ok(row.totalChars > 600);
+  assert.strictEqual(row.dialogueChars, 0);
+  assert.strictEqual(
+    row.beatIds.length,
+    plan.beats.length,
+    '所有低于下限的拍都要进清单，不能只挂最差一拍'
+  );
+  assert.strictEqual(
+    row.deficitChars,
+    Math.ceil((segmentWriter.DIALOGUE_RATIO_MIN / 100) * row.totalChars),
+    '缺口 = 下限字数 - 现有对白字数'
+  );
+  assert.ok(row.deficitChars > 100);
+});
+
+test('起稿、续写、整组重写指令都带本组对白配额', () => {
+  const plan = makePlan(4);
+  const groups = segmentWriter.planSegments(plan);
+  const segment = segmentWriter.buildSegmentInstruction({
+    plan,
+    group: groups[0],
+    groups,
+    tail: '',
+  });
+  const continuation = segmentWriter.buildContinuationInstruction({
+    plan,
+    group: groups[0],
+    groups,
+    tail: '甲。',
+    remainingChars: 500,
+  });
+  for (const instruction of [segment, continuation]) {
+    assert.match(instruction, /本组对白配额/);
+    assert.match(instruction, /至少要有 \d+ 个汉字写在直接引语里/);
+  }
+});
+
+test('重写指令把对白缺口写成汉字数，并给出本拍最低引语字数', () => {
+  const plan = makePlan(4);
+  plan.beats[0].targetChars = 1200;
+  const groups = segmentWriter.planSegments(plan);
+  const row = {
+    beatId: plan.beats[0].id,
+    kind: 'dialogue_low',
+    ratio: 7.85,
+    limit: segmentWriter.DIALOGUE_RATIO_MIN,
+    totalChars: 5500,
+    dialogueChars: 432,
+    deficitChars: 380,
+  };
+  const instruction = segmentWriter.buildBeatRewriteInstruction({
+    plan,
+    group: groups[0],
+    groups,
+    problemIds: [],
+    shapeViolations: [row],
+  });
+  assert.match(instruction, /还差约 380 个汉字/);
+  assert.match(instruction, /本拍至少写 216 个汉字在直接引语里/, '1200 × 18% ≈ 216');
+});

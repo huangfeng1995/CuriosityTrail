@@ -636,6 +636,26 @@ function groupQuotaBlock(beats) {
   return rows.length ? `## 本组各拍目标（纯汉字，不含标点）\n${rows.join('\n')}` : '';
 }
 
+/**
+ * 本组对白配额。
+ *
+ * 只给比例（14.4%–27%）时，模型仍会把整组写成叙述：轮 2 实测 7.85%，
+ * 判定触发了重写却补不上。这里按本组目标字数把下限折成可执行的汉字数，
+ * 让「补对白」有一个明确的数，而不是形容词。
+ */
+function groupDialogueQuota(group) {
+  const target = Number(group && group.targetChars) || 0;
+  if (!target) return '';
+  const minChars = Math.ceil((target * DIALOGUE_RATIO_MIN) / 100);
+  const rounds = Math.max(2, Math.round(minChars / 60));
+  return [
+    '## 本组对白配额（硬约束）',
+    `本组至少要有 ${minChars} 个汉字写在直接引语里（全角 “…” 内；按全章下限 ${DIALOGUE_RATIO_MIN}% × 本组目标 ${target} 字折算），` +
+      `约 ${rounds} 轮有来有回的交锋。每一轮都要带说话人的动作、神态或对方的反应，` +
+      '关键交锋不得用「他说……」「问他是否……」转述代替；补对白不是加寒暄，也不把已有叙述整段改写成对白。',
+  ].join('\n');
+}
+
 /** 把下一组的标志事件写进指令，明确本组只能写到哪里。 */
 function buildBoundaryBlock({ group, groups }) {
   const next = groups.find((g) => g.index === group.index + 1);
@@ -1171,6 +1191,8 @@ function buildSegmentInstruction({ plan, group, groups, tail = '', brief = null,
     '',
     groupQuotaBlock(group.beats),
     '',
+    groupDialogueQuota(group),
+    '',
     PARAGRAPH_SHAPE_RULES,
     '',
     briefBlock,
@@ -1248,6 +1270,8 @@ function buildContinuationInstruction({ plan, group, groups, tail, remainingChar
     '',
     groupQuotaBlock(group.beats),
     '',
+    groupDialogueQuota(group),
+    '',
     PARAGRAPH_SHAPE_RULES,
     '',
     briefBlock,
@@ -1307,10 +1331,17 @@ function buildBeatRewriteInstruction({
   const withhold = new Set(mustWithholdIds || []);
   const shape = new Map();
   for (const violation of shapeViolations || []) {
-    if (!violation || !violation.beatId) continue;
-    const rows = shape.get(violation.beatId) || [];
-    rows.push(violation);
-    shape.set(violation.beatId, rows);
+    if (!violation) continue;
+    // 全章密度类违规（比喻/对白/短句）挂在所有含标记的拍上：
+    // 只挂最差一拍时，重写那一拍拉不回全章密度（轮 2 比喻 3.44）。
+    const ids = Array.isArray(violation.beatIds) && violation.beatIds.length
+      ? violation.beatIds
+      : [violation.beatId];
+    for (const id of ids.filter(Boolean)) {
+      const rows = shape.get(id) || [];
+      rows.push(violation);
+      shape.set(id, rows);
+    }
   }
   const conflicts = new Map();
   for (const conflict of invariantConflicts || []) {
@@ -1432,6 +1463,12 @@ function buildBeatRewriteInstruction({
       const needsStyleFix = shapeRows.some((row) =>
         ['imagery_density', 'generic_reference'].includes(row.kind)
       );
+      // 对白缺口必须给成汉字数：比例式指令（「补到 14.4%」）不构成约束。
+      const dialogueRow = shapeRows.find((row) => row.kind === 'dialogue_low') || null;
+      const beatTarget = Number(b.targetChars) || 0;
+      const dialogueQuota = dialogueRow && beatTarget
+        ? Math.max(40, Math.round((beatTarget * SAMPLE_DIALOGUE_RATIO) / 100))
+        : 0;
       clauses.push(
         `本拍段落形态不合规（${describeShapeViolations(shapeRows)}）：` +
           `按 ${planned}±${SHAPE_BEAT_TOLERANCE} 段落段，段长按范文分布（多数 80–140，允许 40–79 与 141–320，单段不超 320）；` +
@@ -1442,9 +1479,11 @@ function buildBeatRewriteInstruction({
               '超出对白承载的背景、判断与情绪改成叙述、心理和动作，不许靠加标点或硬并句把短句撑长。'
             : '') +
           (needsDialogueAdd
-            ? `对白不足：把本拍的关键交锋写成有来有回的直接引语（下限 ${DIALOGUE_RATIO_MIN}%，范文 ${SAMPLE_DIALOGUE_RATIO}%），` +
-              '让每一轮对话推动关系、立场、决定或信息，不要把该说的话概括成叙述；' +
-              '补对白不是加寒暄，也不是把动作改写成对白，仍要带动作、神态与停顿。'
+            ? `对白不足（全章 ${dialogueRow.ratio}%，下限 ${DIALOGUE_RATIO_MIN}%，还差约 ${dialogueRow.deficitChars || 0} 个汉字）：` +
+              (dialogueQuota ? `本拍至少写 ${dialogueQuota} 个汉字在直接引语里，` : '') +
+              '凑成 4–8 轮有来有回的交锋，让每一轮对话推动关系、立场、决定或信息；' +
+              '关键交锋不要用「他说……」「问他是否……」转述，也不要用寒暄凑数；' +
+              '补对白不是把整段叙述机械改写成引语，动作、神态与停顿仍要留在段内。'
             : '') +
           (needsStyleFix
             ? '比喻不堆叠：同一段最多一个明喻，删掉重复的「像/仿佛/如同」，改用动作、感官与细节；' +
@@ -1527,6 +1566,8 @@ function buildBeatRewriteInstruction({
       .join('\n'),
     '',
     groupQuotaBlock(group.beats),
+    '',
+    groupDialogueQuota(group),
     '',
     PARAGRAPH_SHAPE_RULES,
     '',
@@ -1891,6 +1932,18 @@ function checkParagraphShape(plan, body) {
     });
   }
   if (totalChars >= 600 && dialogueRatio < DIALOGUE_RATIO_MIN) {
+    // 缺口折成汉字数：比例式的「补到 14.4%」对写手不构成约束，
+    // 轮 2 实测 7.85% 就是重写收到比例后仍然写成整段叙述。
+    const dialogueChars = Math.round((dialogueRatio / 100) * totalChars);
+    const minDialogueChars = Math.ceil((DIALOGUE_RATIO_MIN / 100) * totalChars);
+    // 全章一句一句找：每个低于下限的拍都要进清单，只挂最差一拍补不齐。
+    const lowBeatIds = beats
+      .filter((beat, index) => {
+        const [from, to] = ranges[index] || [0, 0];
+        const beatText = paragraphs.slice(from, to).join('\n\n');
+        return countWords(beatText) > 0 && measureDialogueRatio(beatText) < DIALOGUE_RATIO_MIN;
+      })
+      .map((beat) => beat.id);
     violations.push({
       beatId: worstBeatFor(
         paragraphs
@@ -1899,9 +1952,13 @@ function checkParagraphShape(plan, body) {
         ranges,
         beats
       ),
+      beatIds: lowBeatIds,
       kind: 'dialogue_low',
       ratio: dialogueRatio,
       limit: DIALOGUE_RATIO_MIN,
+      totalChars,
+      dialogueChars,
+      deficitChars: Math.max(0, minDialogueChars - dialogueChars),
     });
   }
   if (imageryPerKilo > IMAGERY_LIMIT) {
@@ -2810,7 +2867,16 @@ async function rewriteMissingGroups({
   const weakIds = (coverage?.weak || []).map((w) => w.id);
   const dupIds = coverage?.handoverDuplicated || [];
   const conflictIds = (invariantConflicts || []).map((conflict) => conflict.beatId);
-  const shapeIds = [...new Set((shapeViolations || []).map((row) => row && row.beatId).filter(Boolean))];
+  // 全章密度类违规会带 row.beatIds（所有含标记的拍）；局部形态问题只有 beatId。
+  const shapeIds = [
+    ...new Set(
+      (shapeViolations || []).flatMap((row) => {
+        if (!row) return [];
+        const ids = Array.isArray(row.beatIds) && row.beatIds.length ? row.beatIds : [row.beatId];
+        return ids.filter(Boolean);
+      })
+    ),
+  ];
   // 连续性问题只点名受影响的拍：重演/倒回所在的组重写，其他组原样保留。
   const continuityIds = [
     ...new Set((continuityIssues || []).flatMap((issue) => issue.beatIds || []).filter(Boolean)),
