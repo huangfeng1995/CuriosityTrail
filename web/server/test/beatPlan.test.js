@@ -546,7 +546,7 @@ test('规划：第一次不合格时带错误清单重试，第二次合格即�
   assert.ok(out.plan, '第二次合格时应当拿到节拍表');
   assert.strictEqual(calls.length, 2, '不合格才重试，且最多两次');
   assert.deepStrictEqual(calls[0].jsonOutput, true);
-  assert.strictEqual(calls[0].maxTokens, 2600);
+  assert.strictEqual(calls[0].maxTokens, 3600, '规划预算须容得下具名清单，2600 会截断');
   assert.match(String(calls[0].messages[1].content), /写第一章/);
   assert.match(
     String(calls[1].messages[1].content),

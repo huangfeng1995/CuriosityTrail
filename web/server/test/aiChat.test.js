@@ -963,7 +963,7 @@ test('起稿前先规划：节拍表以 JSON 进入写手请求，规划不读�
 
   // 规划请求：JSON 模式、独立预算、上下文含大纲但不含整章正文
   assert.deepStrictEqual(planCall.response_format, { type: 'json_object' });
-  assert.strictEqual(planCall.max_tokens, 2600, '规划预算 2600，完整节拍表加 functionReason 后仍有余量');
+  assert.strictEqual(planCall.max_tokens, 3600, '规划预算 3600，容得下节拍表与具名清单');
   const planSystem = String(planCall.messages[0].content || '');
   assert.match(planSystem, /MAGIC-大纲/, '规划要用本章大纲');
   assert.ok(!planSystem.includes('MAGIC-正文'), '规划不塞整章正文');
