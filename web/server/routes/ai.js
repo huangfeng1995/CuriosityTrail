@@ -55,6 +55,7 @@ const segmentWriter = require('../services/agent/segmentWriter');
 const { checkAnchors } = require('../services/pipeline/anchorCheck');
 const knowledgeScan = require('../services/pipeline/knowledgeScan');
 const { buildPlanGrounding } = require('../services/agent/planGrounding');
+const { auditDraft } = require('../services/agent/draftAudit');
 
 const router = express.Router();
 
@@ -2167,8 +2168,10 @@ router.post('/chat', async (req, res) => {
         })),
       })
     );
-    // 交付只允许一次：确定性扫正文，不依赖模型自检。
-    const handoverDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
+    // 写后确定性审查集中在 draftAudit：交付记账、悬念、不变项、篇幅、形态。
+    // 这里只把结果挂到 beatCheck 上，并算出后续重写要用的拍号。
+    const audit = auditDraft({ plan: beatPlan, brief, text: payload.content });
+    const handoverDup = audit.handover;
     if (beatCheck) beatCheck.handoverDuplicated = handoverDup.beatIds;
     // 交付记账：计划指定的拍必须等于正文实际交付所在拍，不一致不能静默。
     if (beatCheck) {
@@ -2182,9 +2185,7 @@ router.post('/chat', async (req, res) => {
         ? { designated, actual }
         : null;
     }
-    // 悬念自检：确定性扫正文，同一拍里制度词和结论词同时出现就判「把悬念解释掉」。
-    // 与覆盖自检独立：模型说拍子写完了，但把制度结论讲完，仍然算违规。
-    let withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
+    let withholdCheck = audit.withhold;
     if (beatCheck) {
       beatCheck.mustWithholdViolations = withholdCheck.violations;
       // 没有映射目标≠检查通过：unmapped 必须显式带出，不能只给 0 条违规。
@@ -2192,36 +2193,26 @@ router.post('/chat', async (req, res) => {
       beatCheck.mustWithholdPassed = withholdCheck.passed === true;
     }
     const withholdIds = withholdCheck.violations.map((v) => v.id);
-    // 同章一致性：同一不变项在正文里出现两个数（十年/十五年、六岁/七岁）即判冲突。
-    let invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
+    let invariantCheck = audit.invariant;
     const invariantConflicts = invariantCheck.violations;
     const invariantIds = invariantCheck.beatIds;
     if (beatCheck) beatCheck.invariantConflicts = invariantConflicts;
-    // 篇幅配比只记账：按纯汉字量，与每拍 wordShare 目标比，超出 ±5pp 就列出拍号。
     if (beatPlan) {
-      const wordShares = checkWordShares(beatPlan, payload.content);
-      wordSharesReport = wordShares;
+      wordSharesReport = audit.wordShares;
       // R3：wordShares 永远给实值数组（每拍目标区间/实际/是否命中），
       // 即使功能拍没排齐也不留空；是否适用由 wordShareApplicable 单独标。
       if (beatCheck) {
-        beatCheck.wordShares = wordShares.beats;
-        beatCheck.wordRoleShares = wordShares.roleShares;
-        beatCheck.wordShareApplicable = wordShares.applicable;
-        beatCheck.wordShareReason = wordShares.reason || '';
-        beatCheck.wordShareOutOfRange = wordShares.outOfRange;
-        beatCheck.wordShareMissing = wordShares.shareMissing || [];
+        beatCheck.wordShares = wordSharesReport.beats;
+        beatCheck.wordRoleShares = wordSharesReport.roleShares;
+        beatCheck.wordShareApplicable = wordSharesReport.applicable;
+        beatCheck.wordShareReason = wordSharesReport.reason || '';
+        beatCheck.wordShareOutOfRange = wordSharesReport.outOfRange;
+        beatCheck.wordShareMissing = wordSharesReport.shareMissing || [];
       }
     }
-    // 段落形态自检：分布校验（数值来自范文实测）。硬拦只有单段 >320；
-    // 40–79 段占比超范文 +10pp、连续 3 段 <40、段均偏离 ±15%、每拍段数 ±2
-    // 都算分布违规。违规只重写违规拍所在的组，不整章重写。
-    let shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
-    // 不再逐段卡 80–140：范文自己就有 24/45 段在这个区间外。
-    // 判定口径见 SHAPE_MEASURE。
-    const shapeDelivery = segmentWriter.evaluateShapeDelivery(shapeCheck);
-    const shapeIds = [
-      ...new Set(shapeDelivery.blocking.map((row) => row.beatId).filter(Boolean)),
-    ];
+    let shapeCheck = audit.shape;
+    const shapeDelivery = audit.shapeDelivery;
+    const shapeIds = audit.shapeIds;
     if (beatCheck) {
       beatCheck.shapeViolations = shapeCheck.violations;
       beatCheck.shapeBeatIds = shapeCheck.beatIds;
