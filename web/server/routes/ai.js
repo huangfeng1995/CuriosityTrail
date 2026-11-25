@@ -2033,6 +2033,8 @@ router.post('/chat', async (req, res) => {
     let wordSharesReport = null;
     let beatRewrite = false;
     let beatRewriteFailed = false;
+    // 因形态问题被 85% 守卫回滚的重写组：交付门禁据此决定阻断还是放行。
+    let rewriteReverts = [];
 
     const isProse = ['replace', 'append', 'insert'].includes(payload.action) && !payload.parseFailed;
 
@@ -2418,6 +2420,7 @@ router.post('/chat', async (req, res) => {
             }
 
             beatRewrite = rewrite.rewroteGroups > 0;
+            rewriteReverts = Array.isArray(rewrite.rewriteReverted) ? rewrite.rewriteReverted : [];
             if (rewrite.degraded || rewrite.failedGroups.length) beatRewriteFailed = true;
 
             console.log(
@@ -2944,6 +2947,9 @@ router.post('/chat', async (req, res) => {
             },
           });
           topUpCalls += topUp.calls.length;
+          rewriteReverts = rewriteReverts.concat(
+            Array.isArray(topUp.rewriteReverted) ? topUp.rewriteReverted : []
+          );
           topUpGroups = [...new Set([...topUpGroups, ...priorityIds])];
           if (!topUp.content.trim()) {
             action = 'rewrite_empty';
@@ -3542,6 +3548,74 @@ router.post('/chat', async (req, res) => {
       }
     }
 
+    // ---- 交付前形态门禁（短句/对白/比喻等）----
+    //
+    // 形态不合格、重写又被 85% 守卫回滚时，不能默认交付：轮 A 短句 25.11%
+    // 就是带着缺口落库的。这里先做无损修补（按句边界合并短句），仍不达标
+    // 就明确阻断并写清哪一项、差多少；不放宽阈值，也不取消 85% 守卫。
+    // 段数 ±2 这类结构偏差仍只挂徽标：无损修补会改动正文结构，不宜自动做。
+    //
+    // 只在「重写被 85% 守卫回滚」时阻断：没有回滚说明还有别的修复机会，
+    // 或者本来就没触发重写，按原逻辑挂徽标交付；回滚了还带着缺口，才不能默认交付。
+    const blockingShape = finalShapeDelivery.blocking.filter((row) => row.kind !== 'count');
+    // 只认「因为形态问题被回滚」的重写：覆盖类重写缩水回滚与形态无关，
+    // 不能拿它当阻断理由（线上单测里大量缺拍重写都会缩水）。
+    const reverted = rewriteReverts.filter(
+      (row) => Array.isArray(row.shapeProblems) && row.shapeProblems.length
+    );
+    if (beatPlan && generatedProse && blockingShape.length && reverted.length) {
+      const detail = segmentWriter.formatShapeShortfall(blockingShape.slice(0, 4));
+      // 回滚有两种原因：砍字超过 15%，或重写没把点名的形态问题改好。
+      // 一律写成「缩水 N%」会把 168% 这种实际变长的回滚说反，得分开说。
+      const revertNote = reverted.length
+        ? `；${reverted.length} 组重写被 85% 守卫回滚（${reverted
+            .map((row) => {
+              const percent = Math.round((Number(row.ratio) || 0) * 100);
+              return percent < 85 ? `缩水至 ${percent}%` : '形态未改好';
+            })
+            .join('，')}）`
+        : '';
+      console.log(
+        JSON.stringify({
+          event: 'ai_shape_blocked',
+          traceId,
+          userId: req.userId,
+          blocking: blockingShape.map((row) => ({
+            kind: row.kind,
+            beatId: row.beatId,
+            ratio: row.ratio,
+            perKilo: row.perKilo,
+            limit: row.limit,
+            deficitChars: row.deficitChars,
+          })),
+          reverted: reverted.map((row) => ({
+            group: row.group,
+            ratio: row.ratio,
+            reason: row.reason,
+          })),
+          repair: shapeRepair,
+        })
+      );
+      send({
+        type: 'error',
+        code: 'SHAPE_UNMET',
+        message: `本章形态仍不达标，未保存：${detail}${revertNote}。请重试或改写后重跑。`,
+      });
+      send({
+        type: 'done',
+        conversationId: conversation.id,
+        provider: name,
+        stopReason: finalResult.stopReason,
+        traceId,
+      });
+      // 没交付就不能留下孤立的提问，也不能让重新生成前的那一版消失。
+      if (insertedUserMessageId) {
+        await run('DELETE FROM messages WHERE id = ?', [insertedUserMessageId]).catch(() => {});
+      }
+      await restoreRemoved();
+      return;
+    }
+
     // ---- 交付前全章连续性门禁（HP14 修复二）----
     //
     // 重写后仍检出整段重演、复读对白或时间倒序，就不落库：
@@ -3602,69 +3676,6 @@ router.post('/chat', async (req, res) => {
         await restoreRemoved();
         return;
       }
-    }
-
-    // ---- 交付前形态门禁（短句/对白/比喻等）----
-    //
-    // 形态不合格、重写又被 85% 守卫回滚时，不能默认交付：轮 A 短句 25.11%
-    // 就是带着缺口落库的。这里先做无损修补（按句边界合并短句），仍不达标
-    // 就明确阻断并写清哪一项、差多少；不放宽阈值，也不取消 85% 守卫。
-    // 段数 ±2 这类结构偏差仍只挂徽标：无损修补会改动正文结构，不宜自动做。
-    //
-    // 只在「重写被 85% 守卫回滚」时阻断：没有回滚说明还有别的修复机会，
-    // 或者本来就没触发重写，按原逻辑挂徽标交付；回滚了还带着缺口，才不能默认交付。
-    const blockingShape = finalShapeDelivery.blocking.filter((row) => row.kind !== 'count');
-    // 只认「因为形态问题被回滚」的重写：覆盖类重写缩水回滚与形态无关，
-    // 不能拿它当阻断理由（线上单测里大量缺拍重写都会缩水）。
-    const reverted = ((beatRewrite && beatRewrite.rewriteReverted) || []).filter(
-      (row) => Array.isArray(row.shapeProblems) && row.shapeProblems.length
-    );
-    if (beatPlan && generatedProse && blockingShape.length && reverted.length) {
-      const detail = segmentWriter.formatShapeShortfall(blockingShape.slice(0, 4));
-      const revertNote = reverted.length
-        ? `；${reverted.length} 组重写因缩水 ${reverted
-            .map((row) => Math.round((Number(row.ratio) || 0) * 100))
-            .join('%/')}% 被 85% 守卫回滚`
-        : '';
-      console.log(
-        JSON.stringify({
-          event: 'ai_shape_blocked',
-          traceId,
-          userId: req.userId,
-          blocking: blockingShape.map((row) => ({
-            kind: row.kind,
-            beatId: row.beatId,
-            ratio: row.ratio,
-            perKilo: row.perKilo,
-            limit: row.limit,
-            deficitChars: row.deficitChars,
-          })),
-          reverted: reverted.map((row) => ({
-            group: row.group,
-            ratio: row.ratio,
-            reason: row.reason,
-          })),
-          repair: shapeRepair,
-        })
-      );
-      send({
-        type: 'error',
-        code: 'SHAPE_UNMET',
-        message: `本章形态仍不达标，未保存：${detail}${revertNote}。请重试或改写后重跑。`,
-      });
-      send({
-        type: 'done',
-        conversationId: conversation.id,
-        provider: name,
-        stopReason: finalResult.stopReason,
-        traceId,
-      });
-      // 没交付就不能留下孤立的提问，也不能让重新生成前的那一版消失。
-      if (insertedUserMessageId) {
-        await run('DELETE FROM messages WHERE id = ?', [insertedUserMessageId]).catch(() => {});
-      }
-      await restoreRemoved();
-      return;
     }
 
     // 章末冲突随消息落库：重载旧对话时「史实冲突」徽标仍可点开看原句。
