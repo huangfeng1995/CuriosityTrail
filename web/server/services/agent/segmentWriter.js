@@ -2251,6 +2251,10 @@ function evaluateShapeDelivery(shape) {
     passed: shape && shape.applicable && blocking.length === 0,
     blocking,
     summary,
+    // 验收要用同一份阈值（比喻 2.1、对白下限 14.4）。缺了这一层，
+    // shapeAcceptProblems 的 limitOf 全部取到 0：对白下限分支直接不执行，
+    // 比喻/泛称也会把「上限 0」当成结论，线上就出现「下限形同虚设」。
+    quality: (shape && shape.quality) || null,
     buckets: (shape && shape.buckets) || {},
     stats: (shape && shape.stats) || null,
     distribution: (shape && shape.distribution) || null,
@@ -2311,7 +2315,9 @@ function shapeAcceptProblems(before, after, ownedBeatIds) {
     return row ? Number(row[field]) || 0 : 0;
   };
   const limitOf = (field) =>
-    (after && after.quality && after.quality.limits && after.quality.limits[field]) || 0;
+    (after && after.quality && after.quality.limits && after.quality.limits[field]) ||
+    (before && before.quality && before.quality.limits && before.quality.limits[field]) ||
+    0;
   for (const [kind, field, limitField, label, unit] of [
     ['short_sentence', 'ratio', 'shortSentenceRatio', '≤12 字短句占比', '%'],
     ['quote_density', 'perKilo', 'quotePerKilo', '引号片段密度', ' 处/千字'],

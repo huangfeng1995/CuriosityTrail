@@ -2676,3 +2676,38 @@ test('W1 配额不足时：覆盖类保 1 组，形态类先挑标记最密的�
   assert.match(runner.seen[1].instruction, /B5/);
   assert.match(runner.seen[1].instruction, /比喻/);
 });
+
+// ---------------------------------------------------------------------------
+// 形态验收必须拿到阈值
+// ---------------------------------------------------------------------------
+
+test('形态验收带着阈值：对白下限与比喻上限不是 0', () => {
+  const plan = makePlan(4);
+  const delivery = segmentWriter.evaluateShapeDelivery(
+    segmentWriter.checkParagraphShape(plan, body('甲', 8))
+  );
+  assert.strictEqual(delivery.quality.limits.dialogueRatioMin, segmentWriter.DIALOGUE_RATIO_MIN);
+  assert.strictEqual(delivery.quality.limits.imageryPerKilo, segmentWriter.IMAGERY_LIMIT);
+});
+
+test('对白补得更低必须被判成问题；补高了但没到下限不拦', () => {
+  const limits = { dialogueRatioMin: segmentWriter.DIALOGUE_RATIO_MIN };
+  const low = (ratio) => ({
+    blocking: [{ kind: 'dialogue_low', ratio }],
+    quality: { limits },
+  });
+  const worse = segmentWriter.shapeAcceptProblems(low(10), low(5), ['B1']);
+  assert.match(worse.join('；'), /对白占比 5%（下限 14\.4%）/);
+  const better = segmentWriter.shapeAcceptProblems(low(7), low(10), ['B1']);
+  assert.deepStrictEqual(better, [], '补高了就该保留，不能因为没有一次到位而回滚');
+});
+
+test('比喻超限按实测上限 2.1 判定，不再写「上限 0」', () => {
+  const limits = { imageryPerKilo: segmentWriter.IMAGERY_LIMIT };
+  const shape = (perKilo) => ({
+    blocking: [{ kind: 'imagery_density', perKilo }],
+    quality: { limits },
+  });
+  const problems = segmentWriter.shapeAcceptProblems(shape(2.0), shape(2.5), ['B1']);
+  assert.match(problems.join('；'), /比喻密度 2\.5 处\/千字（上限 2\.1 处\/千字）/);
+});
