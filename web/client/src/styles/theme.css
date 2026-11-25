@@ -6138,3 +6138,43 @@ body.ct-resizing * {
   display: flex;
   gap: 8px;
 }
+
+/* ---------- 生成中的排队提示 ----------
+   生成一轮要几分钟，输入框不再禁用：说出口的话先排进队列，本轮结束后
+   自动发出。这一条只占一行，不新开面板、不挤压正文与输入区高度。 */
+.ct-ai-queue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+.ct-ai-queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-ai-queue-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.ct-ai-queue-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.ct-ai-queue-btn:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}

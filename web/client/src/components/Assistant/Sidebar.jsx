@@ -22,6 +22,14 @@ import {
 import { restoreChapterConversation } from './conversationRestore';
 import { createConversationBinding } from './conversationBinder';
 import { pendingActions } from './pendingActions';
+import {
+  enqueue,
+  dequeue,
+  peek,
+  clearQueue,
+  headBelongsTo,
+  summarize,
+} from './pendingQueue';
 import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
@@ -113,6 +121,19 @@ export default function AssistantSidebar() {
   activeChapterIdRef.current = chapter?.id || '';
   // 这一轮正在给哪一章生成（没有生成时为空）。
   const sendingChapterIdRef = useRef('');
+  // ---- 生成中的排队发送 ----
+  //
+  // 一轮生成要几分钟，期间输入框不再禁用：作者说的话先进队列，
+  // 本轮正常结束后按顺序自动发出。只做客户端排队——一次 /chat 是
+  // 一条单向 SSE 流，服务端收不到中途输入，所以不做真全双工。
+  const [pendingQueue, setPendingQueue] = useState([]);
+  const pendingRef = useRef(pendingQueue);
+  pendingRef.current = pendingQueue;
+  // 上一轮的结局：ok / aborted / failed。只有 ok 才自动发下一条，
+  // 中断或出错时把队列交给作者决定，避免一条接一条地失败。
+  const roundOutcomeRef = useRef('');
+  // 作者点过「停止」后暂时不自动发送，等他在提示条上点「发送」。
+  const [flushPaused, setFlushPaused] = useState(false);
 
   useEffect(() => {
     if (!chapterKey) return undefined;
@@ -273,6 +294,8 @@ export default function AssistantSidebar() {
         roleKey: sendRoleKey = roleKey,
         resumePlanId = '',
         chosenLabel = '',
+        // 自动续发的上一轮排队消息不能清空输入框：作者可能正在打下一句。
+        keepInput = false,
       } = options;
       const sendRole = roles.find((r) => r.key === sendRoleKey) || activeRole;
 
@@ -292,7 +315,7 @@ export default function AssistantSidebar() {
       let userBubbleId = '';
 
       if (!isRegen) {
-        setInput('');
+        if (!keepInput) setInput('');
         userBubbleId = `u-${Date.now()}`;
         dispatch({
           type: 'message/add',
@@ -651,6 +674,10 @@ export default function AssistantSidebar() {
         streamBufRef.current = '';
         sendingChapterIdRef.current = '';
         abortRef.current = null;
+        // 记下这一轮的结局，决定排队里的下一条要不要自动发出：
+        // 只有正常结束才自动续发；中断/出错时把队列交给作者。
+        roundOutcomeRef.current = aborted ? 'aborted' : failed ? 'failed' : 'ok';
+        if (aborted && pendingRef.current.length) setFlushPaused(true);
         // 停下来的这一下要留痕：先让「停止中」站住 0.4 秒（中断本身是瞬间的，
         // 不留这一下的话按钮会直接跳回发送，作者看不出点没点到），
         // 再显示「已停止生成」，2.2 秒后自动回到「发送」。
@@ -668,6 +695,61 @@ export default function AssistantSidebar() {
     },
     [input, sending, dispatch, work, chapter, roleKey, conversationId, blocks, activeRole, roles, useMemory]
   );
+
+  /**
+   * 输入区的统一入口：能发就发，正在生成或队列里还压着消息就入队。
+   *
+   * 不直接调用 send 的理由是 send 在 sending 时直接 return，
+   * 那样作者打了字按回车会毫无反应。这里把「排队」显式做出来，
+   * 并记住入队时的章节与角色，切章后不会发错地方。
+   */
+  const submit = useCallback(
+    (text) => {
+      const content = (text ?? input).trim();
+      if (!content) return;
+      // 正在生成，或上一轮中断后队列还没清空：一律排到队尾，保持先后顺序。
+      if (sending || pendingRef.current.length) {
+        setPendingQueue((q) =>
+          enqueue(q, {
+            text: content,
+            roleKey,
+            chapterId: chapter?.id || '',
+            chapterTitle: chapter?.title || '',
+            createdAt: Date.now(),
+          })
+        );
+        if (text === undefined) setInput('');
+        return;
+      }
+      setFlushPaused(false);
+      send(content);
+    },
+    [input, sending, roleKey, chapter?.id, chapter?.title, send]
+  );
+
+  /** 发出队首一条（同章才发）。队列的顺序就是作者说话的先后顺序。 */
+  const flushHead = useCallback(() => {
+    const q = pendingRef.current;
+    const head = peek(q);
+    if (!head || sending) return;
+    if (!headBelongsTo(q, chapter?.id)) return;
+    const { rest } = dequeue(q);
+    setPendingQueue(rest);
+    setFlushPaused(false);
+    send(head.text, { roleKey: head.roleKey, keepInput: true });
+  }, [sending, chapter?.id, send]);
+
+  // 本轮正常结束后自动续发下一条；中断、出错、跨章时都不动，等作者决定。
+  useEffect(() => {
+    if (sending) return;
+    if (flushPaused) return;
+    if (roundOutcomeRef.current !== 'ok') return;
+    if (!pendingRef.current.length) return;
+    if (!headBelongsTo(pendingRef.current, chapter?.id)) return;
+    // 只消费一次：flushHead 会把 sending 置回 true，避免同一结局重复触发。
+    roundOutcomeRef.current = '';
+    flushHead();
+  }, [sending, flushPaused, chapter?.id, flushHead]);
 
   /**
    * 剔除一条记忆。
@@ -1121,6 +1203,9 @@ export default function AssistantSidebar() {
   // 组件卸载时把收尾定时器清掉，避免卸载后 setState。
   useEffect(() => () => clearTimeout(stopTimerRef.current), []);
 
+  // 排队提示条的文案与按钮：跨章时只提示归属，同章时给「发送」出口。
+  const queueInfo = summarize(pendingQueue, chapter?.id);
+
   if (!chapter) {
     return (
       <EmptyState className="ct-empty-fill" text="先在左侧选一个章节" />
@@ -1140,8 +1225,7 @@ export default function AssistantSidebar() {
           {activeRole.suggestions.map((s) => (
             <button
               key={s}
-              onClick={() => send(s)}
-              disabled={sending}
+              onClick={() => submit(s)}
               className="ct-chip"
             >
               {s}
@@ -1182,18 +1266,49 @@ export default function AssistantSidebar() {
       </div>
 
       <div className="ct-ai-input">
+        {queueInfo && (
+          <div className="ct-ai-queue" role="status">
+            <span className="ct-ai-queue-text">
+              {!queueInfo.inCurrent
+                ? `有 ${queueInfo.otherCount} 条排队消息属于《${queueInfo.headTitle || '其他章节'}》`
+                : sending
+                  ? `已排队 ${queueInfo.count} 条，本轮结束后自动发送`
+                  : `已排队 ${queueInfo.count} 条`}
+            </span>
+            <span className="ct-ai-queue-actions">
+              {!sending && queueInfo.inCurrent && (
+                <button type="button" className="ct-ai-queue-btn" onClick={flushHead}>
+                  发送
+                </button>
+              )}
+              <button
+                type="button"
+                className="ct-ai-queue-btn"
+                onClick={() => {
+                  setPendingQueue(clearQueue());
+                  setFlushPaused(false);
+                }}
+              >
+                清空
+              </button>
+            </span>
+          </div>
+        )}
         <Input.TextArea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onPressEnter={(e) => {
             if (!e.shiftKey) {
               e.preventDefault();
-              send();
+              submit();
             }
           }}
-          placeholder={`以${activeRole?.name || 'AI'}的身份提问…`}
+          placeholder={
+            sending
+              ? '继续说，本轮结束后自动发送…'
+              : `以${activeRole?.name || 'AI'}的身份提问…`
+          }
           autoSize={{ minRows: 2, maxRows: 6 }}
-          disabled={sending}
           className="ct-ai-textarea"
         />
         <div className="ct-ai-actions">
@@ -1230,6 +1345,8 @@ export default function AssistantSidebar() {
             />
           </Dropdown>
           <span style={{ flex: 1 }} />
+          {/* 生成中「停止」与「排队」并存：作者可以随时叫停，也可以边说边排。
+              两者不互斥，所以不再用一个三元把发送按钮换掉。 */}
           {sending || stopPhase === 'stopping' ? (
             <button
               type="button"
@@ -1250,17 +1367,17 @@ export default function AssistantSidebar() {
             <span className="ct-ai-stopped" role="status">
               已停止生成
             </span>
-          ) : (
-            <Button
-              type="primary"
-              size="small"
-              icon={<SendOutlined />}
-              onClick={() => send()}
-              disabled={!input.trim()}
-            >
-              发送
-            </Button>
-          )}
+          ) : null}
+          <Button
+            type="primary"
+            size="small"
+            icon={<SendOutlined />}
+            onClick={() => submit()}
+            disabled={!input.trim()}
+            title={sending ? '排队，本轮结束后发送' : '发送'}
+          >
+            {sending ? '排队' : '发送'}
+          </Button>
         </div>
       </div>
 
