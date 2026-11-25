@@ -2463,7 +2463,9 @@ router.post('/chat', async (req, res) => {
               beatCheckError = 'recheck';
             }
             await loadRevealCheck(payload.content);
-            const recheckDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
+            // 重写后按新正文重算：确定性检查统一走 draftAudit，各站只挂自己需要的字段。
+            const recheckAudit = auditDraft({ plan: beatPlan, brief, text: payload.content });
+            const recheckDup = recheckAudit.handover;
             if (beatCheck) beatCheck.handoverDuplicated = recheckDup.beatIds;
             if (beatCheck) {
               const designated = brief && brief.handoverBeat
@@ -2476,17 +2478,17 @@ router.post('/chat', async (req, res) => {
                 : null;
             }
             // 重写后再判一次：仍违规就交付当前稿，只打徽标，不无限重写。
-            withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
+            withholdCheck = recheckAudit.withhold;
             if (beatCheck) {
               beatCheck.mustWithholdViolations = withholdCheck.violations;
               // 没有映射目标≠检查通过：unmapped 必须显式带出，不能只给 0 条违规。
               beatCheck.mustWithholdUnmapped = withholdCheck.unmapped || [];
               beatCheck.mustWithholdPassed = withholdCheck.passed === true;
             }
-            invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
+            invariantCheck = recheckAudit.invariant;
             if (beatCheck) {
               beatCheck.invariantConflicts = invariantCheck.violations;
-              const wordShares = checkWordShares(beatPlan, payload.content);
+              const wordShares = recheckAudit.wordShares;
               wordSharesReport = wordShares;
               beatCheck.wordShares = wordShares.beats;
               beatCheck.wordRoleShares = wordShares.roleShares;
@@ -2494,7 +2496,7 @@ router.post('/chat', async (req, res) => {
               beatCheck.wordShareReason = wordShares.reason || '';
               beatCheck.wordShareOutOfRange = wordShares.outOfRange;
               beatCheck.wordShareMissing = wordShares.shareMissing || [];
-              shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
+              shapeCheck = recheckAudit.shape;
               beatCheck.shapeViolations = shapeCheck.violations;
               beatCheck.shapeBeatIds = shapeCheck.beatIds;
               beatCheck.paragraphCount = shapeCheck.totalParagraphs;
@@ -2618,7 +2620,8 @@ router.post('/chat', async (req, res) => {
             beatCheckError = 'recheck';
           }
           await loadRevealCheck(payload.content);
-          const recheckDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
+          const recheckAudit = auditDraft({ plan: beatPlan, brief, text: payload.content });
+          const recheckDup = recheckAudit.handover;
           if (beatCheck) beatCheck.handoverDuplicated = recheckDup.beatIds;
           if (beatCheck) {
             const designated = brief && brief.handoverBeat
@@ -2630,17 +2633,17 @@ router.post('/chat', async (req, res) => {
               ? { designated, actual }
               : null;
           }
-          withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
+          withholdCheck = recheckAudit.withhold;
           if (beatCheck) {
             beatCheck.mustWithholdViolations = withholdCheck.violations;
             // 没有映射目标≠检查通过：unmapped 必须显式带出，不能只给 0 条违规。
             beatCheck.mustWithholdUnmapped = withholdCheck.unmapped || [];
             beatCheck.mustWithholdPassed = withholdCheck.passed === true;
           }
-          invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
+          invariantCheck = recheckAudit.invariant;
           if (beatCheck) {
             beatCheck.invariantConflicts = invariantCheck.violations;
-            const wordShares = checkWordShares(beatPlan, payload.content);
+            const wordShares = recheckAudit.wordShares;
             wordSharesReport = wordShares;
             beatCheck.wordShares = wordShares.beats;
             beatCheck.wordRoleShares = wordShares.roleShares;
@@ -2648,7 +2651,7 @@ router.post('/chat', async (req, res) => {
             beatCheck.wordShareReason = wordShares.reason || '';
             beatCheck.wordShareOutOfRange = wordShares.outOfRange;
             beatCheck.wordShareMissing = wordShares.shareMissing || [];
-            shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
+            shapeCheck = recheckAudit.shape;
             beatCheck.shapeViolations = shapeCheck.violations;
             beatCheck.shapeBeatIds = shapeCheck.beatIds;
             beatCheck.paragraphCount = shapeCheck.totalParagraphs;
@@ -2787,7 +2790,8 @@ router.post('/chat', async (req, res) => {
             };
 
             // 扩写只补细节，但段落形态/份额/悬念/不变量都要按新正文重算。
-            const sharesAfter = checkWordShares(beatPlan, payload.content);
+            const expandAudit = auditDraft({ plan: beatPlan, brief, text: payload.content });
+            const sharesAfter = expandAudit.wordShares;
             wordSharesReport = sharesAfter;
             beatCheck.wordShares = sharesAfter.beats;
             beatCheck.wordRoleShares = sharesAfter.roleShares;
@@ -2795,19 +2799,19 @@ router.post('/chat', async (req, res) => {
             beatCheck.wordShareReason = sharesAfter.reason || '';
             beatCheck.wordShareOutOfRange = sharesAfter.outOfRange;
             beatCheck.wordShareMissing = sharesAfter.shareMissing || [];
-            shapeCheck = segmentWriter.checkParagraphShape(beatPlan, payload.content);
+            shapeCheck = expandAudit.shape;
             beatCheck.shapeViolations = shapeCheck.violations;
             beatCheck.shapeBeatIds = shapeCheck.beatIds;
             beatCheck.paragraphCount = shapeCheck.totalParagraphs;
             beatCheck.avgParagraphChars = shapeCheck.avgChars;
             beatCheck.shapeQuality = shapeCheck.quality;
-            withholdCheck = planBrief.checkMustWithhold(brief, payload.content, beatPlan);
+            withholdCheck = expandAudit.withhold;
             beatCheck.mustWithholdViolations = withholdCheck.violations;
             beatCheck.mustWithholdUnmapped = withholdCheck.unmapped || [];
             beatCheck.mustWithholdPassed = withholdCheck.passed === true;
-            invariantCheck = planBrief.checkInvariantConsistency(brief, payload.content, beatPlan);
+            invariantCheck = expandAudit.invariant;
             beatCheck.invariantConflicts = invariantCheck.violations;
-            const expandDup = planBrief.findHandoverDuplicates(brief, payload.content, beatPlan);
+            const expandDup = expandAudit.handover;
             beatCheck.handoverDuplicated = expandDup.beatIds;
             beatCheck.handoverBeatId = (expandDup.evidence.length ? expandDup.evidence[0].id : '')
               || (brief && brief.handoverBeat ? String(brief.handoverBeat) : planBrief.handoverBeatId(brief, beatPlan));
