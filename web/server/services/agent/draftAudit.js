@@ -50,7 +50,11 @@ function auditDraft({ plan = null, brief = null, text = '' } = {}) {
   // 不再逐段卡 80–140：范文自己就有 24/45 段在这个区间外。
   const shapeDelivery = segmentWriter.evaluateShapeDelivery(shape);
   const shapeIds = [
-    ...new Set(shapeDelivery.blocking.map((row) => row.beatId).filter(Boolean)),
+    ...new Set(
+      shapeDelivery.blocking
+        .flatMap((row) => (Array.isArray(row.beatIds) && row.beatIds.length ? row.beatIds : [row.beatId]))
+        .filter(Boolean)
+    ),
   ];
 
   return { handover, withhold, invariant, wordShares, shape, shapeDelivery, shapeIds };

@@ -1824,6 +1824,10 @@ function checkParagraphShape(plan, body) {
     const hit = ranges.findIndex(([from, to]) => index >= from && index < to);
     return hit >= 0 ? beats[hit].id : beats[beats.length - 1].id;
   };
+  /** 一组段落下标 → 去重后的拍号。全章密度类违规要挂到所有含标记的拍。 */
+  const beatIdsOf = (indices) => [
+    ...new Set((indices || []).filter((index) => index >= 0).map(beatIdAt)),
+  ];
   const violations = [];
 
   // 0. 五区间分布与基础统计：全部按含标点口径。
@@ -1896,6 +1900,7 @@ function checkParagraphShape(plan, body) {
       .filter((index) => index >= 0);
     violations.push({
       beatId: worstBeatFor(shortParagraphs, ranges, beats),
+      beatIds: beatIdsOf(shortParagraphs),
       kind: 'short_sentence',
       ratio: shortSentenceRatio,
       limit: SHORT_SENTENCE_RATIO_LIMIT,
@@ -1910,6 +1915,7 @@ function checkParagraphShape(plan, body) {
       .filter((index) => index >= 0);
     violations.push({
       beatId: worstBeatFor(quoteParagraphs, ranges, beats),
+      beatIds: beatIdsOf(quoteParagraphs),
       kind: 'quote_density',
       spans: quoteSpans,
       perKilo: quotePerKilo,
@@ -1918,14 +1924,12 @@ function checkParagraphShape(plan, body) {
     });
   }
   if (dialogueRatio > DIALOGUE_RATIO_LIMIT) {
+    const dialogueParagraphs = paragraphs
+      .map((paragraph, index) => (QUOTE_SPAN_TEST_RE.test(paragraph) ? index : -1))
+      .filter((index) => index >= 0);
     violations.push({
-      beatId: worstBeatFor(
-        paragraphs
-          .map((paragraph, index) => (QUOTE_SPAN_TEST_RE.test(paragraph) ? index : -1))
-          .filter((index) => index >= 0),
-        ranges,
-        beats
-      ),
+      beatId: worstBeatFor(dialogueParagraphs, ranges, beats),
+      beatIds: beatIdsOf(dialogueParagraphs),
       kind: 'dialogue_ratio',
       ratio: dialogueRatio,
       limit: DIALOGUE_RATIO_LIMIT,
@@ -1962,16 +1966,16 @@ function checkParagraphShape(plan, body) {
     });
   }
   if (imageryPerKilo > IMAGERY_LIMIT) {
+    const imageryParagraphs = paragraphs
+      .map((paragraph, index) =>
+        /像|如同|仿佛|宛如|好似|犹如/.test(paragraph) ? index : -1
+      )
+      .filter((index) => index >= 0);
     violations.push({
-      beatId: worstBeatFor(
-        paragraphs
-          .map((paragraph, index) =>
-            /像|如同|仿佛|宛如|好似|犹如/.test(paragraph) ? index : -1
-          )
-          .filter((index) => index >= 0),
-        ranges,
-        beats
-      ),
+      beatId: worstBeatFor(imageryParagraphs, ranges, beats),
+      // 全章密度不是一个拍造成的：所有含比喻的拍都进清单，
+      // 只重写最差一拍拉不回全章密度（轮 2 只剩最差一拍达标，全章仍 3.44）。
+      beatIds: beatIdsOf(imageryParagraphs),
       kind: 'imagery_density',
       perKilo: imageryPerKilo,
       limit: IMAGERY_LIMIT,
@@ -1981,14 +1985,12 @@ function checkParagraphShape(plan, body) {
     });
   }
   if (genericPerKilo > GENERIC_REF_LIMIT) {
+    const genericParagraphs = paragraphs
+      .map((paragraph, index) => (GENERIC_REF_TEST_RE.test(paragraph) ? index : -1))
+      .filter((index) => index >= 0);
     violations.push({
-      beatId: worstBeatFor(
-        paragraphs
-          .map((paragraph, index) => (GENERIC_REF_TEST_RE.test(paragraph) ? index : -1))
-          .filter((index) => index >= 0),
-        ranges,
-        beats
-      ),
+      beatId: worstBeatFor(genericParagraphs, ranges, beats),
+      beatIds: beatIdsOf(genericParagraphs),
       kind: 'generic_reference',
       refs: genericRefs,
       perKilo: genericPerKilo,
@@ -2148,7 +2150,13 @@ function checkParagraphShape(plan, body) {
     applicable: true,
     totalParagraphs: paragraphs.length,
     avgChars: Math.round((totalChars / paragraphs.length) * 10) / 10,
-    beatIds: [...new Set(violations.map((row) => row.beatId))],
+    beatIds: [
+      ...new Set(
+        violations.flatMap((row) =>
+          Array.isArray(row.beatIds) && row.beatIds.length ? row.beatIds : [row.beatId]
+        ).filter(Boolean)
+      ),
+    ],
     violations,
     summary: summarizeShapeViolations(violations),
     buckets,
@@ -2917,13 +2925,20 @@ async function rewriteMissingGroups({
   const priorityGroups = prioritySet.size ? affected.filter(hasPriorityBeat) : [];
   if (!factsOnly && priorityGroups.length && affected.length > room && room > 0) {
     const coverageGroups = affected.filter((group) => !hasPriorityBeat(group));
+    // 全章密度类问题可能铺满所有组，配额不够时先挑标记最密的组：
+    // 同样一次重写，改含 4 个违规拍的组比改含 1 个的更可能把密度拉回来。
+    const priorityWeight = (group) =>
+      group.beatIds.filter((id) => prioritySet.has(id)).length;
+    const orderedPriority = [...priorityGroups].sort(
+      (a, b) => priorityWeight(b) - priorityWeight(a) || a.index - b.index
+    );
     const picked = new Set();
     const keepCoverage = Math.max(0, room - 1);
     for (const group of coverageGroups) {
       if (picked.size >= keepCoverage) break;
       picked.add(group.index);
     }
-    for (const group of priorityGroups) {
+    for (const group of orderedPriority) {
       if (picked.size >= room) break;
       picked.add(group.index);
     }

@@ -2601,3 +2601,78 @@ test('重写指令把对白缺口写成汉字数，并给出本拍最低引语�
   assert.match(instruction, /还差约 380 个汉字/);
   assert.match(instruction, /本拍至少写 216 个汉字在直接引语里/, '1200 × 18% ≈ 216');
 });
+
+// ---------------------------------------------------------------------------
+// 全章密度类违规：展开到所有含标记的拍
+// ---------------------------------------------------------------------------
+
+test('全章比喻超限时，所有含比喻的拍都进违规清单', () => {
+  const plan = makePlan(4);
+  const sentence =
+    '雪落在檐上，他把手按在门环上，指腹摸到一层薄冰，门里有人轻轻咳了一声，声音压得很低。';
+  const rows = Array.from({ length: 8 }, (_, i) => {
+    const tail = i % 2 === 0 ? '瓦上的雪像一层盐，踩上去簌簌地响。' : '';
+    return `第${i + 1}段：${sentence}${sentence}${tail}`;
+  });
+  const shape = segmentWriter.checkParagraphShape(plan, rows.join('\n\n'));
+  const row = shape.violations.find((item) => item.kind === 'imagery_density');
+  assert.ok(row, '四个比喻标记必须触发全章密度违规');
+  assert.strictEqual(row.beatIds.length, plan.beats.length, '每个含标记的拍都要列进 beatIds');
+  assert.deepStrictEqual(
+    shape.beatIds.sort(),
+    plan.beats.map((beat) => beat.id).sort(),
+    '对外暴露的 beatIds 是违规拍的并集'
+  );
+});
+
+test('W1 配额不足时：覆盖类保 1 组，形态类先挑标记最密的组', async () => {
+  const plan = makePlan(8);
+  const groups = segmentWriter.planSegments(plan);
+  groups.forEach((group) => {
+    group.content = body(`原${group.index}`, 8);
+  });
+  const reply = {
+    action: 'rewrite',
+    beats: [
+      { id: 'B4', paragraphs: Array.from({ length: 3 }, () => '改'.repeat(180)) },
+      { id: 'B5', paragraphs: Array.from({ length: 3 }, () => '改'.repeat(180)) },
+    ],
+  };
+  const runner = parsedRunner([
+    beatReply('B2', Array.from({ length: 3 }, () => '改'.repeat(180))),
+    reply,
+  ]);
+
+  const out = await segmentWriter.rewriteMissingGroups({
+    plan,
+    groups,
+    coverage: { covered: [], missing: ['B2'], weak: [] },
+    shapeViolations: [
+      {
+        kind: 'imagery_density',
+        beatId: 'B4',
+        beatIds: ['B4', 'B5', 'B7'],
+        perKilo: 3.44,
+        limit: 2.1,
+        sample: '瓦上的雪像一层盐',
+      },
+    ],
+    priorityIds: ['B4', 'B5', 'B7'],
+    runSegment: runner,
+    callCount: 4,
+    maxCalls: 6,
+  });
+
+  assert.deepStrictEqual(
+    out.rewriteAllocation.keptGroups,
+    [0, 1],
+    '覆盖组（B2）保 1 组，形态类选标记更密的组 1（B4+B5）'
+  );
+  assert.deepStrictEqual(out.rewriteAllocation.priorityGroups, [1]);
+  assert.deepStrictEqual(out.rewriteAllocation.droppedGroups, [2], '标记较少的组 2 让位');
+  assert.deepStrictEqual(out.skippedGroups, [2]);
+  assert.deepStrictEqual(runner.seen.map((meta) => meta.group.index), [0, 1]);
+  assert.match(runner.seen[1].instruction, /B4/);
+  assert.match(runner.seen[1].instruction, /B5/);
+  assert.match(runner.seen[1].instruction, /比喻/);
+});
