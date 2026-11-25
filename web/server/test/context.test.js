@@ -22,6 +22,8 @@ const {
   assembleContext,
   trimHistory,
   applyBudget,
+  applyBudgetWithReport,
+  formatOmittedNotice,
 } = require('../services/context');
 
 test('空章节：明确告诉模型正文会作为第一段插入', async () => {
@@ -377,6 +379,84 @@ test('上下文预算：超预算先丢低优先级分区，角色提示词不�
   assert.strictEqual(fitted[0].text, 'role-prompt', '最高优先级不能被截');
   assert.ok(fitted[2].text === '', '最低优先级的灵感整段让位');
   assert.ok(fitted[1].text.length > 0, '正文保留');
+});
+
+test('预算报告：整段丢弃的分区带上类别与条数', () => {
+  const parts = [
+    { text: 'role', priority: 1, label: '角色提示词' },
+    { text: 'c'.repeat(300), priority: 2, label: '当前章节正文' },
+    { text: 'x'.repeat(200), priority: 3, label: '人物卡', count: 4 },
+    { text: 'y'.repeat(100), priority: 6, label: '灵感速记', count: 2 },
+  ];
+
+  const { parts: fitted, dropped } = applyBudgetWithReport(parts, 400);
+  assert.strictEqual(fitted[0].text, 'role');
+  assert.ok(
+    dropped.some((d) => d.label === '灵感速记' && d.count === 2),
+    '最低优先级整段丢弃，并按条数报告'
+  );
+  assert.ok(
+    !dropped.some((d) => d.label === '角色提示词'),
+    '角色提示词不应出现在丢弃报告里'
+  );
+});
+
+test('预算报告：fixed 分区既不被裁也不进报告', () => {
+  const parts = [
+    { text: 'a'.repeat(100), priority: 1, fixed: true, label: '技能清单' },
+    { text: 'b'.repeat(500), priority: 3, label: '设定卡', count: 3 },
+  ];
+
+  const { parts: fitted, dropped } = applyBudgetWithReport(parts, 0);
+  assert.strictEqual(fitted[0].text.length, 100, 'fixed 原样保留');
+  assert.ok(!dropped.some((d) => d.label === '技能清单'));
+  assert.ok(dropped.some((d) => d.label === '设定卡' && d.count === 3));
+});
+
+test('未载入提示：只说不含内容，不承诺可以自行检索', () => {
+  const text = formatOmittedNotice([
+    { label: '人物卡', count: 3, chars: 800 },
+    { label: '当前章节正文', count: null, chars: 4800 },
+  ]);
+  assert.ok(text.includes('## 本轮未载入'));
+  assert.ok(text.includes('人物卡：3 条'));
+  assert.ok(text.includes('当前章节正文（约 4800 字）'));
+  assert.ok(text.includes('不要凭空编造'));
+  assert.ok(!/可检索|可获取|可查询|可以查到/.test(text), '不能承诺模型去检索');
+});
+
+test('未载入提示：没有丢弃时为空串，不改变原有输出', () => {
+  assert.strictEqual(formatOmittedNotice([]), '');
+});
+
+test('正常装配：预算充足时不出现未载入提示', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-no-omit';
+  const chapterId = 'chapter-no-omit';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, ?, '', '', '', 0, ?, ?)`,
+    [workId, userId, '预算充足', now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, ?, 1, '', 'draft', '', '[]', '', 0, ?, ?)`,
+    [chapterId, workId, '第一章', now, now]
+  );
+
+  const { messages } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+
+  assert.ok(!messages[0].content.includes('本轮未载入'), '没有丢弃就不应出现提示');
 });
 
 test('跨章承接：写作上下文注入上一章原文结尾', async () => {

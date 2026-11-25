@@ -102,7 +102,20 @@ const PRIORITY = {
 };
 
 /**
- * 按优先级把分区裁进预算。
+ * 优先级分区被整段丢弃时，用来给模型的「未载入」提示兜一个可读的类别名。
+ * 调用方显式传 label 时以调用方为准（人物卡 / 设定卡这种更具体）。
+ */
+const PRIORITY_LABEL = {
+  [PRIORITY.ROLE]: '角色与要求',
+  [PRIORITY.CONTENT]: '正文与大纲',
+  [PRIORITY.FACT]: '人物与设定',
+  [PRIORITY.MEMORY]: '长期记忆',
+  [PRIORITY.RETRIEVAL]: '检索资料',
+  [PRIORITY.INSPIRATION]: '灵感速记',
+};
+
+/**
+ * 按优先级把分区裁进预算，并报告哪些分区被整段丢弃。
  *
  * 不改变分区顺序（顺序决定了模型读到的先后），只把低优先级分区
  * 整段丢弃或截断。返回新数组，不修改入参。
@@ -111,14 +124,18 @@ const PRIORITY = {
  * 技能清单与文风要求都用这个机制——它们是「模型怎么调技能」「写成什么样」
  * 的唯一说明，被裁掉模型就只能瞎猜。
  *
- * @param {Array<{text: string, priority: number, fixed?: boolean}>} parts
+ * dropped 只记「整段丢弃」的分区：部分截断已经留了尾注，
+ * 再报一次「未载入」会让模型以为整段都没拿到。
+ *
+ * @param {Array<{text: string, priority: number, fixed?: boolean, label?: string, count?: number}>} parts
  * @param {number} budget 字符预算
- * @returns {Array<{text: string, priority: number}>}
+ * @returns {{parts: Array, dropped: Array<{label: string, count: number|null, chars: number}>}}
  */
-function applyBudget(parts, budget) {
+function applyBudgetWithReport(parts, budget) {
   const fitted = parts.map((p) => ({ ...p }));
+  const dropped = [];
   let total = fitted.reduce((sum, p) => (p.fixed ? sum : sum + p.text.length), 0);
-  if (total <= budget) return fitted;
+  if (total <= budget) return { parts: fitted, dropped };
 
   // 低优先级先让位（priority 数字越大越先牺牲）；同优先级保持原始顺序
   const order = fitted
@@ -132,6 +149,11 @@ function applyBudget(parts, budget) {
     const overflow = total - budget;
     if (p.text.length <= overflow) {
       total -= p.text.length;
+      dropped.push({
+        label: p.label || PRIORITY_LABEL[p.priority] || '其他内容',
+        count: Number.isFinite(p.count) ? p.count : null,
+        chars: p.text.length,
+      });
       p.text = '';
       continue;
     }
@@ -143,7 +165,34 @@ function applyBudget(parts, budget) {
     p.text = next;
   }
 
-  return fitted;
+  return { parts: fitted, dropped };
+}
+
+/**
+ * 只返回裁剪后的分区（兼容旧调用方）。
+ */
+function applyBudget(parts, budget) {
+  return applyBudgetWithReport(parts, budget).parts;
+}
+
+/**
+ * 把「哪些内容整段没载入」写成一段给模型看的提示。
+ *
+ * 必须诚实：当前没有让模型按需检索设定卡/人物卡的工具，
+ * 所以这里只说「没发给模型」，不承诺「可以自己去查」。
+ * 没有丢弃时返回空串，输出与改动前逐字节一致。
+ */
+function formatOmittedNotice(dropped) {
+  if (!dropped.length) return '';
+  const lines = dropped.map((item) => {
+    if (item.count !== null) return `- ${item.label}：${item.count} 条`;
+    return `- ${item.label}（约 ${item.chars} 字）`;
+  });
+  return [
+    '## 本轮未载入（上下文预算不足）',
+    ...lines,
+    '以上内容本轮没有发给模型；不要凭空编造，需要时请让作者缩小范围或补充说明。',
+  ].join('\n');
 }
 
 /**
@@ -541,12 +590,21 @@ async function assembleContext(params = {}) {
   const role = await getRole(roleKey, userId);
   // 带优先级的分区表。最终超预算时按优先级让位，见 applyBudget。
   const parts = [];
-  const addPart = (text, priority, fixed) => {
-    if (text) parts.push({ text, priority, fixed });
+  // info: { label, count }。label / count 只用于「被整段丢弃时」生成未载入提示，
+  // 不参与拼接内容本身；不传时按优先级兜一个类别名。
+  const addPart = (text, priority, fixed, info = {}) => {
+    if (!text) return;
+    parts.push({
+      text,
+      priority,
+      fixed,
+      label: info.label,
+      count: info.count,
+    });
   };
 
   if (role) {
-    addPart(role.systemPrompt, PRIORITY.ROLE);
+    addPart(role.systemPrompt, PRIORITY.ROLE, false, { label: '角色提示词' });
   }
 
   // ---- 0. 文风要求 ----
@@ -590,7 +648,7 @@ async function assembleContext(params = {}) {
   // 不设 fixed：它很重要，但仍要计入预算；超预算时由 applyBudget
   // 按优先级让位，而不是让 system 总长无上限地涨。
   if (roleKey === 'writer') {
-    addPart(STYLE_BASELINE, PRIORITY.ROLE);
+    addPart(STYLE_BASELINE, PRIORITY.ROLE, false, { label: '文风基线' });
     meta.styleBaseline = true;
   }
 
@@ -611,7 +669,7 @@ async function assembleContext(params = {}) {
     if (work.outline) {
       workLines.push(`大纲：\n${truncate(work.outline, OUTLINE_LIMIT)}`);
     }
-    addPart(workLines.join('\n'), PRIORITY.CONTENT);
+    addPart(workLines.join('\n'), PRIORITY.CONTENT, false, { label: '作品信息' });
   }
 
   // ---- 2. 章节层 ----
@@ -634,7 +692,7 @@ async function assembleContext(params = {}) {
       // 本章大纲是作者对"这一章要发生什么"的原始意图。
       // 不注入的话，规划和写作都只能从标题猜，很容易写偏。
       if (chapter.outline) lines.push(`大纲：\n${truncate(chapter.outline, OUTLINE_LIMIT)}`);
-      addPart(lines.join('\n'), PRIORITY.CONTENT);
+      addPart(lines.join('\n'), PRIORITY.CONTENT, false, { label: '当前章节信息' });
     }
   }
 
@@ -666,7 +724,7 @@ async function assembleContext(params = {}) {
       );
       const progressInfo = bookProgress.describeBookProgress({ work, chapter, chapters: listed });
       if (progressInfo) {
-        addPart(progressInfo.text, PRIORITY.CONTENT);
+        addPart(progressInfo.text, PRIORITY.CONTENT, false, { label: '全书进度' });
         meta.bookProgress = progressInfo;
       }
 
@@ -678,7 +736,9 @@ async function assembleContext(params = {}) {
       if (recent.length) {
         addPart(
           `## 前几章摘要（按时间顺序）\n${recent.map(chapterSummary.formatSummaryLine).join('\n')}`,
-          PRIORITY.CONTENT
+          PRIORITY.CONTENT,
+          false,
+          { label: '前几章摘要', count: recent.length }
         );
         meta.recentSummaries = recent.length;
       }
@@ -698,7 +758,10 @@ async function assembleContext(params = {}) {
       : await plotCards.listForContext(workId, chapterId).catch(() => []);
     if (cards.length) {
       meta.plotCards = cards.length;
-      addPart(formatPlotCardBlock(cards), PRIORITY.CONTENT);
+      addPart(formatPlotCardBlock(cards), PRIORITY.CONTENT, false, {
+        label: '情节卡',
+        count: cards.length,
+      });
     }
   }
 
@@ -761,7 +824,9 @@ async function assembleContext(params = {}) {
     if (selected.length) {
       addPart(
         `## 人物设定\n${selected.map(formatCharacter).join('\n\n')}`,
-        PRIORITY.FACT
+        PRIORITY.FACT,
+        false,
+        { label: '人物卡', count: selected.length }
       );
     }
   }
@@ -859,7 +924,9 @@ async function assembleContext(params = {}) {
     if (selected.length) {
       addPart(
         `## 世界观设定\n${selected.map(formatSetting).join('\n\n')}`,
-        PRIORITY.FACT
+        PRIORITY.FACT,
+        false,
+        { label: '设定卡', count: selected.length }
       );
     }
   }
@@ -881,7 +948,10 @@ async function assembleContext(params = {}) {
       const lines = inspirations.map(
         (i, idx) => `[灵${idx + 1}] ${i.text}${i.tags ? `（${i.tags}）` : ''}`
       );
-      addPart(`## 作者的灵感速记\n${lines.join('\n')}`, PRIORITY.INSPIRATION);
+      addPart(`## 作者的灵感速记\n${lines.join('\n')}`, PRIORITY.INSPIRATION, false, {
+        label: '灵感速记',
+        count: inspirations.length,
+      });
     }
   }
 
@@ -898,7 +968,9 @@ async function assembleContext(params = {}) {
       ]
         .filter(Boolean)
         .join('\n\n'),
-      PRIORITY.CONTENT
+      PRIORITY.CONTENT,
+      false,
+      { label: '待修改内容' }
     );
   } else if (chapter) {
     if (!includeChapterBody) {
@@ -911,7 +983,9 @@ async function assembleContext(params = {}) {
           addPart(
             `## 上一章结尾（前情摘要）\n${handoff.join('\n')}\n\n原文结尾：\n` +
               truncate(previousBody, CONTINUITY_LIMIT),
-            PRIORITY.CONTENT
+            PRIORITY.CONTENT,
+            false,
+            { label: '上一章结尾' }
           );
         }
       }
@@ -928,7 +1002,9 @@ async function assembleContext(params = {}) {
               `${handoff.join('\n')}\n\n` +
               '以下是上一章最后的内容，只用来接住场面、语气与最后动作；已经发生，不要重演。\n' +
               truncate(previousBody, PREVIOUS_BODY_LIMIT),
-            PRIORITY.CONTENT
+            PRIORITY.CONTENT,
+            false,
+            { label: '上一章原文' }
           );
         }
       }
@@ -937,7 +1013,9 @@ async function assembleContext(params = {}) {
       if (body) {
         addPart(
           `## 当前章节正文\n${truncate(body, CONTENT_LIMIT)}`,
-          PRIORITY.CONTENT
+          PRIORITY.CONTENT,
+          false,
+          { label: '当前章节正文' }
         );
       } else {
         // 本章还没有正文。
@@ -950,7 +1028,9 @@ async function assembleContext(params = {}) {
           '## 当前章节正文\n（本章还没有正文。）\n\n' +
             '你要写的正文会作为本章的第一段插入进去，所以：' +
             'action 填 "insert"（或 "append"），target 留空字符串，不要编造块ID。',
-          PRIORITY.CONTENT
+          PRIORITY.CONTENT,
+          false,
+          { label: '当前章节正文' }
         );
       }
     }
@@ -974,7 +1054,9 @@ async function assembleContext(params = {}) {
     if (index) {
       addPart(
         `## 段落索引\n每个 [块ID] 对应正文中的一段。当你要续写某段时，target 填该段的块ID；要在某段后插入新段时，target 也填该段块ID。\n${index}`,
-        PRIORITY.CONTENT
+        PRIORITY.CONTENT,
+        false,
+        { label: '段落索引', count: index.split('\n').length }
       );
     }
   }
@@ -985,7 +1067,9 @@ async function assembleContext(params = {}) {
   if (scope !== 'inline' && includeChapterBody && chapterBlocks.length) {
     const continuity = extractContinuity(chapterBlocks);
     if (continuity) {
-      addPart(`## 上一场景结尾（用于衔接）\n${continuity}`, PRIORITY.CONTENT);
+      addPart(`## 上一场景结尾（用于衔接）\n${continuity}`, PRIORITY.CONTENT, false, {
+        label: '上一场景结尾',
+      });
     }
   }
 
@@ -997,7 +1081,10 @@ async function assembleContext(params = {}) {
     const items = memoryRefs
       .map((ref, i) => `${i + 1}. 〔${ref.label}〕${ref.preview || ''}`)
       .join('\n');
-    addPart(`## 长期记忆（自动召回）\n${items}`, PRIORITY.MEMORY);
+    addPart(`## 长期记忆（自动召回）\n${items}`, PRIORITY.MEMORY, false, {
+      label: '长期记忆',
+      count: memoryRefs.length,
+    });
   }
 
   // ---- 8. 检索层 ----
@@ -1012,12 +1099,17 @@ async function assembleContext(params = {}) {
         return `${head}\n${r.snippet || ''}`;
       })
       .join('\n\n');
-    addPart(`## 检索到的参考资料\n${items}`, PRIORITY.RETRIEVAL);
+    addPart(`## 检索到的参考资料\n${items}`, PRIORITY.RETRIEVAL, false, {
+      label: '检索资料',
+      count: retrieval.length,
+    });
   }
 
   // ---- 附加指令 ----
   if (extraInstruction) {
-    addPart(`## 本次任务要求\n${extraInstruction}`, PRIORITY.ROLE);
+    addPart(`## 本次任务要求\n${extraInstruction}`, PRIORITY.ROLE, false, {
+      label: '本次任务要求',
+    });
   }
 
   // ---- 技能清单 ----
@@ -1058,14 +1150,18 @@ async function assembleContext(params = {}) {
     }
   }
 
-  const fitted = applyBudget(
+  const applied = applyBudgetWithReport(
     parts,
     Math.max(
       2000,
       CONTEXT_BUDGET - skillsText.length - styleText.length - anchorText.length - knowledgeText.length
     )
   );
-  const segments = fitted.map((p) => p.text).filter(Boolean);
+  const segments = applied.parts.map((p) => p.text).filter(Boolean);
+  // 被预算挤掉的整段内容必须让模型知道，否则它会以为「书里本来就没有」。
+  // 放在正文段之后、技能清单之前。
+  const omittedNotice = formatOmittedNotice(applied.dropped);
+  if (omittedNotice) segments.push(omittedNotice);
   if (skillsText) segments.push(skillsText);
 
   const messages = [{ role: 'system', content: segments.join('\n\n---\n\n') }];
@@ -1627,6 +1723,8 @@ module.exports = {
   nameVariants,
   trimHistory,
   applyBudget,
+  applyBudgetWithReport,
+  formatOmittedNotice,
   factShortTitle,
   CONTEXT_BUDGET,
   HISTORY_BUDGET,
