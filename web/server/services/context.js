@@ -1491,14 +1491,6 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
     stateByCharacter.get(row.character_id).set(row.fact_id, row.state);
   }
 
-  const evidenceRows = await all(
-    `SELECT * FROM evidence_items
-     WHERE work_id = ? AND status = 'active'
-     ORDER BY created_at ASC, id ASC`,
-    [workId]
-  );
-  const characterNames = new Map(characters.map((c) => [c.id, c.name]));
-
   /**
    * 事实在注入块里的写法。
    *
@@ -1580,31 +1572,6 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
     beat,
   }));
 
-  const evidenceText = () => {
-    if (!evidenceRows.length) return '';
-    const items = evidenceRows.map((item, index) => {
-      const label = `E${index + 1}`;
-      let holder = '无持有者';
-      if (item.holder_kind === 'character') {
-        holder = `${characterNames.get(item.holder_character_id) || '未知人物'}持有`;
-      } else if (item.holder_kind === 'place') {
-        holder = '置于某处';
-      }
-      let seen = [];
-      try {
-        seen = JSON.parse(item.seen_by || '[]');
-      } catch (e) {
-        seen = [];
-      }
-      const seenNames = Array.isArray(seen)
-        ? seen.map((id) => characterNames.get(id)).filter(Boolean)
-        : [];
-      const seenText = seenNames.length ? `仅${seenNames.join('、')}见过` : '无人见过';
-      return `${label}（${item.title}：${holder}，${seenText}）`;
-    });
-    return `证据：${items.join('｜')}`;
-  };
-
   const allowedText = (limit) => {
     const unmatchedText = unmatchedPlanned
       ? '规划中的揭示点无法唯一匹配到事实，本章维持保守上限。'
@@ -1643,7 +1610,7 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
     );
   };
 
-  const render = ({ includeUnknown, includeEvidence, compact, maxCharacters, revealLimit }) => {
+  const render = ({ includeUnknown, compact, maxCharacters, revealLimit }) => {
     const lines = chosen
       .slice(0, maxCharacters)
       .map((character) => characterLine(character, includeUnknown, compact))
@@ -1654,8 +1621,6 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
     const blocks = ['## 本章知情边界（硬约束）'];
     if (lines.length) blocks.push(...lines);
     blocks.push('', allowedText(revealLimit));
-    const evidence = includeEvidence ? evidenceText() : '';
-    if (evidence) blocks.push(evidence);
     blocks.push('', KNOWLEDGE_RULES);
     // 被 8 人上限或 700 字上限挡在外面的角色，必须让作者看见，而不是静默。
     if (omitted > 0) blocks.push(`其余 ${omitted} 人本轮未注入边界`);
@@ -1664,21 +1629,19 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
 
   const full = chosen.length;
   const stages = [
-    { includeUnknown: true, includeEvidence: true, compact: false },
-    { includeUnknown: false, includeEvidence: true, compact: false },
-    { includeUnknown: false, includeEvidence: false, compact: false },
-    { includeUnknown: false, includeEvidence: false, compact: true },
+    { includeUnknown: true, compact: false },
+    { includeUnknown: false, compact: false },
+    { includeUnknown: false, compact: true },
   ];
   for (const stage of stages) {
     const built = render({ ...stage, maxCharacters: full, revealLimit: reveals.length });
     if (built.text.length <= KNOWLEDGE_LIMIT) return built;
   }
 
-  // 到这一步「未知」和证据都已经让位，仍然超限就减少角色行。
+  // 到这一步「未知」已经让位，仍然超限就减少角色行。
   for (let count = full - 1; count >= 0; count -= 1) {
     const built = render({
       includeUnknown: false,
-      includeEvidence: false,
       compact: true,
       maxCharacters: count,
       revealLimit: reveals.length,
@@ -1690,7 +1653,6 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
   for (let limit = reveals.length - 1; limit >= 1; limit -= 1) {
     const built = render({
       includeUnknown: false,
-      includeEvidence: false,
       compact: true,
       maxCharacters: 0,
       revealLimit: limit,
@@ -1700,7 +1662,6 @@ async function buildKnowledgeSection({ workId, chapter, visible, beatPlan }) {
 
   const minimal = render({
     includeUnknown: false,
-    includeEvidence: false,
     compact: true,
     maxCharacters: 0,
     revealLimit: 0,

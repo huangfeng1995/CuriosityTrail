@@ -71,16 +71,6 @@ async function addKnowledge(workId, characterId, factId, chapterSeq, state, crea
   );
 }
 
-async function addEvidence(workId, { id, title, holderCharacterId, seenBy = [], factId = null }) {
-  await db.run(
-    `INSERT INTO evidence_items
-       (id, work_id, fact_id, title, description, holder_character_id, holder_kind,
-        seen_by, status, created_at, modified_at)
-     VALUES (?, ?, ?, ?, '', ?, 'character', ?, 'active', ?, ?)`,
-    [id, workId, factId, title, holderCharacterId, JSON.stringify(seenBy), TS, TS]
-  );
-}
-
 function knowledgeSection(system) {
   const head = system.indexOf('## 本章知情边界（硬约束）');
   if (head < 0) return '';
@@ -202,7 +192,7 @@ test('关闭态：写入知情数据后 system 逐字节不变，且无知情边
 // 3. 700 字超限
 // ---------------------------------------------------------------------------
 
-test('超限：8 角色 × 多条事实整段 ≤700 字，先砍未知与证据，允许揭示仍在', async () => {
+test('超限：8 角色 × 多条事实整段 ≤700 字，先砍未知，允许揭示仍在', async () => {
   const work = await createWork('history_thriller', '超限知情作品');
   await addChapter(work.id, {
     id: 'limit-knowledge-ch',
@@ -235,14 +225,6 @@ test('超限：8 角色 × 多条事实整段 ≤700 字，先砍未知与证据
     }
   }
 
-  await addEvidence(work.id, {
-    id: 'limit-evidence',
-    title: '证据卷宗',
-    holderCharacterId: 'limit-c-甲',
-    seenBy: ['limit-c-乙'],
-    factId: 'limit-f-1',
-  });
-
   const beatPlan = {
     plan: {
       beats: [
@@ -271,7 +253,6 @@ test('超限：8 角色 × 多条事实整段 ≤700 字，先砍未知与证据
     section.includes('规划外新事实本章合计仍限 1 条（本章总量，不是每角色）。'),
     '有节拍表时，规划外新事实仍限本章合计 1 条'
   );
-  assert.ok(!section.includes('证据：'), '超限时证据行应先于允许揭示被砍');
   assert.ok(!section.includes('未知：'), '超限时「未知」列表应先被砍');
   assert.ok(section.includes('F1（事实1）'), '超限时保留编号+短标题，且在冒号前断句');
   assert.ok(!section.includes('长'.repeat(80)), '超限时砍掉内容解释');
