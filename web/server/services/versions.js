@@ -20,12 +20,47 @@ const { all, get, run } = require('../database');
 const { countBlockWords, countWords } = require('./wordCount');
 
 /**
- * 每章最多保留多少份自动快照。
+ * 自动快照的保留策略。
+ *
+ * 最近 MAX_AUTO_VERSIONS 份 + 最近 DAILY_KEEP_DAYS 天每天一份。
+ *
+ * 为什么是 10：写手一次连续修改通常在 10 次保存以内，保留最近 10 份
+ * 足够覆盖「刚才那几段改坏了」；再往前靠按天快照。
+ * 为什么是 14 天：两周足够覆盖一次集中创作周期，也更符合「隔几天
+ * 回来看看旧稿」的实际使用。
  *
  * 手动快照不计入这个额度——它们是作者主动留的存档点，不能被系统清掉。
- * 40 份按"每天改十来次"算，够回溯一周多。
+ * 单章上限是 10 + 14 = 24 份；按当前 69 个有版本的章节算，稳定上界
+ * 约 1,656 行，且只随章节数线性增长，不随时间增长。
  */
-const MAX_AUTO_VERSIONS = 40;
+const MAX_AUTO_VERSIONS = 10;
+const DAILY_KEEP_DAYS = 14;
+
+/**
+ * 版本时间戳落在本地哪一天（YYYY-MM-DD）。
+ *
+ * 用服务器本地时区而不是 UTC：作者说的「今天」是本地今天，
+ * 否则晚上 8 点后的快照会被算到第二天，按天保留就错位了。
+ */
+function localDayKey(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 最近 N 个本地自然日的日期键（含今天）。
+ */
+function recentDayKeys(days) {
+  const keys = new Set();
+  const now = new Date();
+  for (let i = 0; i < days; i += 1) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    keys.add(localDayKey(d));
+  }
+  return keys;
+}
 
 /**
  * 解析章节的 blocks JSON。
@@ -274,24 +309,47 @@ async function deleteVersion(chapterId, versionId) {
 }
 
 /**
- * 清理超出额度的自动快照。
+ * 清理自动快照。
  *
- * 手动快照永远保留——它们是作者主动留的存档点。
+ * 保留规则（手动快照永远不动）：
+ *   1. 最近 MAX_AUTO_VERSIONS 份；
+ *   2. 最近 DAILY_KEEP_DAYS 天里，每天最新的一份。
+ * 两条规则取并集。
+ *
+ * 幂等：同一份数据重复执行，第二次不会再删任何行。
+ * 只删 chapter_versions，不碰 chapters，因此不会影响章节当前正文；
+ * 最新一份永远落在规则 1 里，当天最新一份同时落在规则 1 和 2 里。
  */
 async function pruneAutoVersions(chapterId) {
   const rows = await all(
-    `SELECT id FROM chapter_versions
+    `SELECT id, created_at FROM chapter_versions
      WHERE chapter_id = ? AND manual = 0
      ORDER BY created_at DESC, rowid DESC`,
     [chapterId]
   );
-  if (rows.length <= MAX_AUTO_VERSIONS) return 0;
+  if (!rows.length) return 0;
 
-  const excess = rows.slice(MAX_AUTO_VERSIONS);
-  for (const row of excess) {
-    await run('DELETE FROM chapter_versions WHERE id = ?', [row.id]);
+  const keep = new Set();
+  // 规则 1：最近 N 份
+  for (const row of rows.slice(0, MAX_AUTO_VERSIONS)) keep.add(row.id);
+
+  // 规则 2：最近 D 天每天最新的一份
+  const wantedDays = recentDayKeys(DAILY_KEEP_DAYS);
+  const coveredDays = new Set();
+  for (const row of rows) {
+    const day = localDayKey(row.created_at);
+    if (!day || !wantedDays.has(day) || coveredDays.has(day)) continue;
+    keep.add(row.id);
+    coveredDays.add(day);
   }
-  return excess.length;
+
+  let deleted = 0;
+  for (const row of rows) {
+    if (keep.has(row.id)) continue;
+    await run('DELETE FROM chapter_versions WHERE id = ?', [row.id]);
+    deleted += 1;
+  }
+  return deleted;
 }
 
 module.exports = {
@@ -307,4 +365,5 @@ module.exports = {
   deriveContent,
   fingerprint,
   MAX_AUTO_VERSIONS,
+  DAILY_KEEP_DAYS,
 };
