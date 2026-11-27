@@ -4,17 +4,15 @@
  * 情节卡路由。
  *
  *   GET    /api/plot-cards/work/:workId            作品的全部卡片
- *   GET    /api/plot-cards/chapter/:chapterId      某章的卡片
  *   POST   /api/plot-cards/work/:workId            新建卡片
  *   PUT    /api/plot-cards/:id                     更新卡片
  *   DELETE /api/plot-cards/:id                     删除卡片
- *   POST   /api/plot-cards/work/:workId/reorder    批量排序
  */
 
 const express = require('express');
 const { get } = require('../database');
 const plotCards = require('../services/plotCards');
-const { ownedWork, ownedChapter, ownedPlotCard } = require('../services/scope');
+const { ownedWork, ownedPlotCard } = require('../services/scope');
 
 const router = express.Router();
 
@@ -24,17 +22,6 @@ router.get('/work/:workId', async (req, res) => {
     if (!work) return res.status(404).json({ error: '作品不存在' });
 
     res.json(await plotCards.listCards(req.params.workId));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/chapter/:chapterId', async (req, res) => {
-  try {
-    const chapter = await ownedChapter(req.params.chapterId, req.userId);
-    if (!chapter) return res.status(404).json({ error: '章节不存在' });
-
-    res.json(await plotCards.listCardsByChapter(req.params.chapterId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -114,23 +101,6 @@ router.delete('/:id', async (req, res) => {
     const ok = await plotCards.deleteCard(req.params.id);
     if (!ok) return res.status(404).json({ error: '卡片不存在' });
     res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post('/work/:workId/reorder', async (req, res) => {
-  const { cardIds } = req.body || {};
-  if (!Array.isArray(cardIds)) {
-    return res.status(400).json({ error: 'cardIds 必须是数组' });
-  }
-
-  try {
-    const work = await ownedWork(req.params.workId, req.userId);
-    if (!work) return res.status(404).json({ error: '作品不存在' });
-
-    await plotCards.reorderCards(req.params.workId, cardIds);
-    res.json(await plotCards.listCards(req.params.workId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

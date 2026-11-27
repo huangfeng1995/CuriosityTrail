@@ -251,11 +251,6 @@ test('情节卡增删改查', async () => {
   assert.strictEqual(card.chapter_id, chapter.id);
   assert.strictEqual(card.chapter_title, '第一章 巷口');
 
-  // 按章查询能查到
-  const byChapter = await server.request(`/api/plot-cards/chapter/${chapter.id}`);
-  const chapterCards = await byChapter.json();
-  assert.ok(chapterCards.some((c) => c.id === card.id));
-
   // 改
   const updateRes = await server.request(`/api/plot-cards/${card.id}`, {
     method: 'PUT',

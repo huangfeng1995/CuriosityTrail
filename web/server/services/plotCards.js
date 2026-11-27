@@ -51,20 +51,6 @@ async function listCards(workId) {
 }
 
 /**
- * 列出某章的情节卡。
- */
-async function listCardsByChapter(chapterId) {
-  return all(
-    `SELECT c.*, ch.title AS chapter_title, ch.seq AS chapter_seq
-     FROM plot_cards c
-     LEFT JOIN chapters ch ON ch.id = c.chapter_id
-     WHERE c.chapter_id = ?
-     ORDER BY c.seq, c.created_at`,
-    [chapterId]
-  );
-}
-
-/**
  * 生成侧要读的情节卡：本章卡 + 全书级卡。
  *
  * 只给生成用，不改变面板的列表口径。本章卡全取（有上限），全书级卡只取前几张，
@@ -204,30 +190,13 @@ async function deleteCard(id) {
   return result.changes > 0;
 }
 
-/**
- * 批量排序。接收 id 数组，按数组顺序重写 seq。
- *
- * @param {string} workId
- * @param {Array<string>} cardIds
- */
-async function reorderCards(workId, cardIds) {
-  for (let i = 0; i < cardIds.length; i++) {
-    await run(
-      'UPDATE plot_cards SET seq = ?, modified_at = ? WHERE id = ? AND work_id = ?',
-      [i, new Date().toISOString(), cardIds[i], workId]
-    );
-  }
-}
-
 module.exports = {
   listCards,
-  listCardsByChapter,
   listForContext,
   getCard,
   createCard,
   updateCard,
   deleteCard,
-  reorderCards,
   KINDS,
   STATUSES,
   KIND_LABELS,

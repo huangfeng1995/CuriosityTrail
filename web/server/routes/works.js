@@ -14,12 +14,11 @@
  *   GET    /api/chapters/:chapterId           章节详情
  *   PUT    /api/chapters/:chapterId           更新章节（blocks 为权威数据）
  *   DELETE /api/chapters/:chapterId           删除章节
- *   POST   /api/chapters/:chapterId/reorder   章节排序
  */
 
 const express = require('express');
 const crypto = require('crypto');
-const { all, get, run, transaction } = require('../database');
+const { all, get, run } = require('../database');
 const { ownedWork } = require('../services/scope');
 const memory = require('../services/memory/indexer');
 const { TEMPLATES } = require('../services/pipeline/gate');
@@ -227,35 +226,6 @@ router.post('/:id/chapters', async (req, res) => {
       ]
     );
     res.json(await get('SELECT * FROM chapters WHERE id = ?', [id]));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * 章节排序：接收 id 数组，按数组顺序重写 seq。
- */
-router.post('/:id/chapters/reorder', async (req, res) => {
-  const { chapterIds } = req.body || {};
-  if (!Array.isArray(chapterIds)) {
-    return res.status(400).json({ error: 'chapterIds 必须是数组' });
-  }
-
-  try {
-    const work = await ownedWork(req.params.id, req.userId);
-    if (!work) return res.status(404).json({ error: '作品不存在' });
-
-    const statements = chapterIds.map((chapterId, index) => ({
-      sql: 'UPDATE chapters SET seq = ?, modified_at = ? WHERE id = ? AND work_id = ?',
-      params: [index + 1, now(), chapterId, req.params.id],
-    }));
-    await transaction(statements);
-
-    const rows = await all(
-      'SELECT id, title, seq FROM chapters WHERE work_id = ? ORDER BY seq',
-      [req.params.id]
-    );
-    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
