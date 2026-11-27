@@ -8,7 +8,6 @@
  *   GET  /api/ai/roles     角色列表（含用户覆盖后的实际提示词）
  *   POST /api/ai/prompts/:roleKey  保存提示词覆盖
  *   DELETE /api/ai/prompts/:roleKey 恢复默认
- *   GET  /api/ai/status    provider 连通状态
  *   POST /api/ai/messages/:messageId/remember  把一条消息记入长期记忆
  *   GET  /api/ai/conversations            历史对话列表
  *   GET  /api/ai/conversations/:id/messages  一条历史对话的消息
@@ -18,7 +17,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { all, get, run } = require('../database');
 const aiConfig = require('../services/aiConfig');
-const { resolveProvider, checkAllProviders } = require('../services/providers');
+const { resolveProvider } = require('../services/providers');
 const {
   assembleContext,
   trimHistory,
@@ -4518,32 +4517,6 @@ router.delete('/prompts/:roleKey', async (req, res) => {
     res.json(role);
   } catch (err) {
     res.status(400).json({ error: err.message });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// GET /api/ai/status
-// ---------------------------------------------------------------------------
-router.get('/status', async (req, res) => {
-  try {
-    const aiCfg = aiConfig.getConfig();
-    const providers = await checkAllProviders(aiCfg);
-
-    let active = null;
-    try {
-      const resolved = resolveProvider(aiCfg);
-      active = { name: resolved.name, degraded: resolved.degraded, reason: resolved.reason };
-    } catch (e) {
-      active = { name: null, degraded: false, reason: e.message };
-    }
-
-    res.json({
-      active,
-      providers,
-      config: aiConfig.getPublicConfig(),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
 });
 

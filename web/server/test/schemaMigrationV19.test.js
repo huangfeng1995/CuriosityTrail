@@ -110,7 +110,7 @@ test.after(() => {
 
 test('v18 真实形态：新增 setting_risks，老作品/章节/摘要逐项不变', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 20, '迁移后版本应为 20');
+  assert.strictEqual(version.user_version, 21, '迁移后版本应为 21');
 
   const table = await db.get(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'setting_risks'"
@@ -158,7 +158,7 @@ test('v18 真实形态：二次启动幂等，摘要与风险表不被清空', a
 
   assert.ok(!logs.some((line) => line.includes('执行增量迁移')), '二次启动不应再迁移');
   const version = await db.all('PRAGMA user_version');
-  assert.strictEqual(version[0].user_version, 20);
+  assert.strictEqual(version[0].user_version, 21);
 
   const risk = await db.get('SELECT title FROM setting_risks WHERE id = ?', ['r1']);
   assert.strictEqual(risk.title, '时间线冲突');

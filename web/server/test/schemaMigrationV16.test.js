@@ -71,7 +71,7 @@ test.after(() => {
 
 test('v15 真实形态：新建 consistency_findings，老作品不丢', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 20, '迁移后版本应为 20');
+  assert.strictEqual(version.user_version, 21, '迁移后版本应为 21');
 
   const columns = await db.all('PRAGMA table_info(consistency_findings)');
   const names = columns.map((c) => c.name);
@@ -173,7 +173,7 @@ test('v15 真实形态：二次启动幂等，结论行数不变', async () => {
   assert.ok(!logs.some((line) => line.includes('执行增量迁移')), '二次启动不应再迁移');
 
   const version = await db.all('PRAGMA user_version');
-  assert.strictEqual(version[0].user_version, 20);
+  assert.strictEqual(version[0].user_version, 21);
 
   const count = await db.get('SELECT COUNT(*) AS c FROM consistency_findings');
   assert.strictEqual(count.c, 1, '二次启动后结论行数不能变化');

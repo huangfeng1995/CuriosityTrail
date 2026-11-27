@@ -133,7 +133,6 @@ web/
 | `/api/ai/roles` | GET | 五个角色（含用户覆盖后的实际提示词与参数，并附 `effectiveModel` / `effectiveThinking` / `temperatureEffective` 供前端提示） |
 | `/api/ai/prompts/:roleKey` | POST | 保存角色覆盖（提示词/温度/模型/思考） |
 | `/api/ai/prompts/:roleKey` | DELETE | 恢复默认 |
-| `/api/ai/status` | GET | 各 provider 连通状态 |
 
 ### 配置
 

@@ -99,7 +99,7 @@ test.before(async () => {
   await db.ready;
   // 迁移日志在 require 时就已产生，这里补一条便于确认真的跑过迁移
   assert.ok(
-    logs.some((line) => line.includes('数据库 schema 版本 11 → 20')),
+    logs.some((line) => line.includes('数据库 schema 版本 11 → 21')),
     '应在真实 v11 库上执行增量迁移'
   );
 });
@@ -111,7 +111,7 @@ test.after(() => {
 
 test('v11 真实形态：迁移不抛错，版本/列/默认值/索引/行数五项成立', async () => {
   const version = await db.get('PRAGMA user_version');
-  assert.strictEqual(version.user_version, 20, '迁移后版本应为 20');
+  assert.strictEqual(version.user_version, 21, '迁移后版本应为 21');
 
   const anchorColumns = await db.all('PRAGMA table_info(work_anchors)');
   const materialCol = anchorColumns.find((c) => c.name === 'source_material_id');
@@ -152,7 +152,7 @@ test('v11 真实形态：二次启动幂等，不再迁移且行数不变', asyn
   assert.ok(!logs.some((line) => line.includes('执行增量迁移')), '二次启动不应再迁移');
 
   const version = await db.all('PRAGMA user_version');
-  assert.strictEqual(version[0].user_version, 20);
+  assert.strictEqual(version[0].user_version, 21);
 
   for (const [table, expected] of Object.entries(LEGACY_COUNTS)) {
     const row = await db.get(`SELECT COUNT(*) AS c FROM ${table}`);
