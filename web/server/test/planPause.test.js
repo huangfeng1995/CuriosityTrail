@@ -257,15 +257,6 @@ test('规划出关键抉择：只调规划、不调写手，plan_ready 带 3 个
   assert.strictEqual(JSON.parse(row.options).length, 3, '选项要随计划行落库');
 });
 
-test('待选计划可以按章取回：断流/关页面回来还能选', async () => {
-  const res = await server.request(`/api/chapters/${chapterId}/plans/pending`);
-  assert.strictEqual(res.status, 200);
-  const { pending } = await res.json();
-  assert.ok(pending, 'awaiting_choice 的计划必须能取回');
-  assert.strictEqual(pending.beatId, 'B2');
-  assert.strictEqual(pending.options.length, 3);
-});
-
 test('未选就重进：再次暂停，不替作者做决定', async () => {
   const beforePlan = planningCallCount();
   const beforeCalls = fakeModel.calls.length;

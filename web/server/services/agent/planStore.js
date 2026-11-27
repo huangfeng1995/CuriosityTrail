@@ -237,35 +237,6 @@ function parsePlan(raw) {
 }
 
 /**
- * 取本章待作者选择的计划。
- *
- * 断流、关页面、隔天回来都靠它把面板恢复出来——计划行一直在库里，
- * 不设置过期时间，也不自动替作者选一个。
- */
-async function loadPendingPlan({ workId, chapterId } = {}) {
-  if (!workId || !chapterId) return null;
-  const row = await get(
-    `SELECT * FROM chapter_plans
-     WHERE work_id = ? AND chapter_id = ? AND status = 'awaiting_choice'
-     ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
-    [workId, chapterId]
-  );
-  if (!row) return null;
-  const plan = parsePlan(row.plan);
-  const pause = pausePointOf(plan);
-  const options = parseOptions(row.options);
-  if (!pause && !options.length) return null;
-  return {
-    planId: row.id,
-    status: row.status,
-    plan,
-    beatId: pause ? pause.beatId : '',
-    options: options.length ? options : pause.options,
-    updatedAt: row.updated_at,
-  };
-}
-
-/**
  * 作者选定一个选项，或直接按原计划放行。
  *
  * 不传 optionId（null/''）＝ 放行：状态同样转 confirmed，但不额外追加
@@ -320,7 +291,6 @@ module.exports = {
   saveChapterPlan,
   pausePointOf,
   parseOptions,
-  loadPendingPlan,
   choosePlanOption,
   abandonChapterPlan,
 };

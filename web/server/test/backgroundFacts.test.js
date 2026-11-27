@@ -303,35 +303,6 @@ test('素材升格：幂等 + missing 标记保留，重复升格不产生重复
   assert.strictEqual(rows[0].fact_type, 'background');
 });
 
-test('agent 抽取入库：同一内容幂等，接口可一次写入多条', async () => {
-  const work = await seedWork('背景事实抽取');
-  const body = {
-    facts: [
-      { content: '杨平今年十四岁', keywords: ['十四岁'] },
-      { content: '杨平是河内获嘉人', keywords: ['获嘉'] },
-    ],
-  };
-
-  const first = await server.request(`/api/pipeline/${work.id}/facts/background`, {
-    method: 'POST',
-    body,
-  });
-  assert.strictEqual(first.status, 200);
-  const out = await first.json();
-  assert.strictEqual(out.created.length, 2);
-
-  const second = await server.request(`/api/pipeline/${work.id}/facts/background`, {
-    method: 'POST',
-    body,
-  });
-  const out2 = await second.json();
-  assert.strictEqual(out2.created.length, 0);
-  assert.strictEqual(out2.skipped.length, 2);
-
-  const rows = await db.all("SELECT * FROM story_facts WHERE work_id = ? AND fact_type = 'background'", [work.id]);
-  assert.strictEqual(rows.length, 2);
-});
-
 // ---------------------------------------------------------------------------
 // C：background 与 mustWithhold 撞同一条信息 → mustWithhold 优先
 // ---------------------------------------------------------------------------

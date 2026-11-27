@@ -6,7 +6,6 @@
  *   GET    /api/chapters/:id            章节详情
  *   PUT    /api/chapters/:id            更新章节（blocks 为权威数据）
  *   POST   /api/chapters/:id/summary    手动重生成章节摘要
- *   GET    /api/chapters/:id/plans/pending   本章待作者选择的关键抉择（HP12）
  *   POST   /api/chapters/:id/plans/:planId/choose    选定选项或按原计划放行
  *   POST   /api/chapters/:id/plans/:planId/abandon   放弃这次规划
  *   DELETE /api/chapters/:id            删除章节
@@ -155,26 +154,6 @@ router.post('/:id/summary', async (req, res) => {
       words: result.words,
       generatedAt: result.generatedAt,
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * 本章待作者选择的关键抉择（HP12）。
- *
- * 暂停点不设过期：作者关掉页面、隔天回来，计划行还在库里，
- * 这个接口负责把面板原样恢复出来。没有待选计划时返回 pending: null。
- */
-router.get('/:id/plans/pending', async (req, res) => {
-  try {
-    const chapter = await ownedChapter(req.params.id, req.userId);
-    if (!chapter) return res.status(404).json({ error: '章节不存在' });
-    const pending = await planStore.loadPendingPlan({
-      workId: chapter.work_id,
-      chapterId: chapter.id,
-    });
-    res.json({ pending });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
