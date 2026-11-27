@@ -1379,7 +1379,9 @@ body.ct-resizing * {
   font-weight: 600;
 }
 .ct-role-pick-icon {
-  font-size: var(--btn-fs-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
 }
 .ct-role-pick-dot {
@@ -2386,8 +2388,12 @@ body.ct-resizing * {
   transform: scaleX(1);
 }
 .ct-role-icon {
-  font-size: 12px;
+  /* 图标换成 14px 内联 SVG 后不再吃字号，只作为容器对齐文字 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
+  flex: 0 0 auto;
 }
 .ct-role-name {
   letter-spacing: 0;

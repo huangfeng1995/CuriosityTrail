@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import RoleMark from '../components/Assistant/RoleMark';
 import {
   Tabs,
   Input,
@@ -506,7 +507,7 @@ function PromptConfig() {
             onClick={() => select(r.key)}
           >
             <span className="ct-role-pick-icon" aria-hidden="true">
-              {r.icon}
+              <RoleMark roleKey={r.key} size={15} />
             </span>
             <span className="ct-role-pick-name">{r.name}</span>
             {r.overridden ? <span className="ct-role-pick-dot" title="已自定义" /> : null}

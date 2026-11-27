@@ -86,6 +86,8 @@ test('服务端消息映射成消息流：补上章节、角色名与重新生�
         role: 'assistant',
         roleKey: 'writer',
         content: '改好了',
+        // 服务端历史里存的是「emoji + 名字」，前端只认 roleKey，不转存这份 emoji
+        roleLabel: '✎ 写手',
         action: 'replace',
         findings: [{ id: 'f1' }],
         toolTrace: [{ tool: 'search' }],
@@ -98,7 +100,7 @@ test('服务端消息映射成消息流：补上章节、角色名与重新生�
   assert.equal(list.length, 2);
   assert.equal(list[0].chapterId, 'c1');
   assert.equal(list[0].serverMessageId, 'm1');
-  assert.equal(list[1].roleLabel, '✎ 写手');
+  assert.equal(list[1].roleLabel, '写手');
   assert.equal(list[1].chapterId, 'c1');
   assert.equal(list[1].prompt, '把这段收一收');
   assert.equal(list[1].applied, false);

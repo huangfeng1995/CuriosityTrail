@@ -135,7 +135,12 @@ export function mapConversationMessages(rawMessages, roles, chapterId) {
       beatCheck: m.beatCheck || null,
       planDegraded: m.planDegraded || '',
       anchorViolations: Array.isArray(m.anchorViolations) ? m.anchorViolations : [],
-      roleLabel: m.roleLabel || (role ? `${role.icon} ${role.name}` : ''),
+      // 形态缺口与后台修订：刷新/切章回来仍能对照替换。
+      shapeShortfall: Array.isArray(m.shapeShortfall) ? m.shapeShortfall : [],
+      shapeRepair: m.shapeRepair || null,
+      // 历史消息的 roleLabel 由服务端存的是「emoji + 名字」，
+      // 前端不再回放那份 emoji：按 roleKey 查本地角色名，查不到就留空。
+      roleLabel: role ? role.name : '',
       toolTrace: m.toolTrace || [],
       applied: false,
       chapterId,

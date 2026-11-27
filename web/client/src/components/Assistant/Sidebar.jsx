@@ -340,7 +340,8 @@ export default function AssistantSidebar() {
         reason: '',
         citations: [],
         findings: [],
-        roleLabel: sendRole ? `${sendRole.icon} ${sendRole.name}` : '',
+        // 角色名只取文字：图标由 RoleMark 按 key 画，服务端 emoji 不参与渲染
+        roleLabel: sendRole ? sendRole.name : '',
         applied: false,
         // 规划与章末检查的结构化结果：卡片上用小徽标展示，
         // 不塞进正文，也不改变正文列宽。
