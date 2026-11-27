@@ -664,10 +664,13 @@ body.ct-resizing * {
 }
 
 /* ---------- 栏收起后的展开按钮 ----------
-   栏收起后留在编辑区两侧的竖条：图标 + 竖排文案 + Tooltip。
+   栏收起后留在编辑区两侧的竖条：一个图标 + Tooltip。
    之前是 14px 宽、只放一个 › 字形，在 1440 宽屏上贴着屏幕最右侧，
-   作者收起后就再也找不到它了。现在加到 32px 并带上「目录与资料」
-   /「AI 助手」的竖排标签，始终可见，不依赖悬停。 */
+   作者收起后就再也找不到它了。现在加到 32px，图标始终可见。
+
+   不再放竖排文案：32px 宽的条里「AI 助手」「目录与资料」竖排下来
+   既碎又占视线，而这两件事都已有图标与悬停提示（含快捷键）。
+   可发现性靠三件事兜底：常驻图标、整条可点、Tooltip + aria-label。 */
 .ct-col-toggle {
   flex: 0 0 auto;
   width: 32px;
@@ -675,20 +678,21 @@ body.ct-resizing * {
   background: var(--bg-sunken);
   color: var(--text-secondary);
   cursor: pointer;
-  /* 顶部对齐：与把手上的收起按钮同一水平线，收起/展开不用上下找。 */
-  padding: 10px 0 0;
+  /* 顶部对齐：图标的中心与把手上的收起按钮（top 8 + 高 28）同一水平线，
+     收起 / 展开不用上下找。 */
+  padding: 14px 0 0;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  justify-content: center;
+  align-items: flex-start;
   transition: background-color 0.16s ease, color 0.16s ease;
 }
-.ct-col-toggle-label {
-  writing-mode: vertical-rl;
-  letter-spacing: 2px;
-  font-size: 12px;
-  line-height: 1.2;
-  user-select: none;
+/* 图标的悬停触发区比 15px 图形略大，鼠标不用压着像素点等提示 */
+.ct-col-toggle-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  margin: -3px;
 }
 .ct-col-toggle:hover {
   background: var(--accent-dim);
