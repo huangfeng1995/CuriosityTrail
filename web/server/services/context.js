@@ -318,6 +318,18 @@ function formatCharacter(c) {
   if (c.identity) lines.push(`背景：${c.identity}`);
   if (c.personality) lines.push(`性格：${c.personality}`);
   if (c.speech) lines.push(`说话风格：${c.speech}`);
+
+  // 历史悬疑模板的四列。为空时整行不出现，避免只留一个空标题；
+  // 每项截到 60 字，防止人物卡把上下文预算挤掉（四列全填最多 240 字）。
+  const canon = clipHead(c.canon, 60);
+  if (canon) lines.push(`正史/虚构：${canon}`);
+  const stance = clipHead(c.stance, 60);
+  if (stance) lines.push(`立场：${stance}`);
+  const bottomLine = clipHead(c.bottom_line, 60);
+  if (bottomLine) lines.push(`底线：${bottomLine}`);
+  const weakness = clipHead(c.weakness, 60);
+  if (weakness) lines.push(`弱点：${weakness}`);
+
   if (c.goal) lines.push(`核心目标：${c.goal}`);
   if (c.arc) lines.push(`成长弧：${c.arc}`);
   if (c.aliases) lines.push(`别名：${c.aliases}`);

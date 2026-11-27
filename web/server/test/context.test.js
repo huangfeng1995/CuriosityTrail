@@ -759,6 +759,71 @@ test('跨章承接：第一人称叙述被识别并沿用，对白里的「我�
   assert.ok(second.messages[0].content.includes('视角：第三人称（沿用上一章，不要中途切换）'));
 });
 
+test('人物卡四列进入写手上下文，空值不输出空标题', async () => {
+  await db.ready;
+
+  const now = new Date().toISOString();
+  const userId = (await createUser()).id;
+  const workId = 'work-character-fields';
+  const chapterId = 'chapter-character-fields';
+
+  await db.run(
+    `INSERT INTO works (id, user_id, title, genre, synopsis, outline, target_words, created_at, modified_at)
+     VALUES (?, ?, '人物四列测试', '', '', '', 0, ?, ?)`,
+    [workId, userId, now, now]
+  );
+  await db.run(
+    `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, word_count, created_at, modified_at)
+     VALUES (?, ?, '第一章', 1, '', 'draft', ?, '[]', '', 0, ?, ?)`,
+    [chapterId, workId, '沈砚走进雨里，顾棠在檐下等他。', now, now]
+  );
+
+  await db.run(
+    `INSERT INTO characters
+       (id, work_id, name, role, canon, stance, bottom_line, weakness, created_at, modified_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      'char-shen',
+      workId,
+      '沈砚',
+      '巡捕房探长',
+      '正史无此人，虚构角色',
+      '表面替租界办事，实则暗中保护学生',
+      '不会对无辜者开枪',
+      '妹妹的安危会让他失去判断',
+      now,
+      now,
+    ]
+  );
+  // 四列为空的人物：不应出现任何空标题
+  await db.run(
+    `INSERT INTO characters (id, work_id, name, role, created_at, modified_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    ['char-gu', workId, '顾棠', '报馆编辑', now, now]
+  );
+
+  const { messages } = await assembleContext({
+    workId,
+    chapterId,
+    roleKey: 'writer',
+    scope: 'chapter',
+    userId,
+  });
+  const system = messages[0].content;
+
+  assert.ok(system.includes('正史/虚构：正史无此人，虚构角色'));
+  assert.ok(system.includes('立场：表面替租界办事，实则暗中保护学生'));
+  assert.ok(system.includes('底线：不会对无辜者开枪'));
+  assert.ok(system.includes('弱点：妹妹的安危会让他失去判断'));
+
+  // 顾棠四列为空，不能只留一个冒号加换行
+  const fieldTitles = ['正史/虚构：', '立场：', '底线：', '弱点：'];
+  for (const title of fieldTitles) {
+    const occurrences = system.split(title).length - 1;
+    assert.strictEqual(occurrences, 1, `${title} 只应出现一次，空值不能输出空标题`);
+  }
+});
+
 test.after(async () => {
   env.cleanup();
 });
