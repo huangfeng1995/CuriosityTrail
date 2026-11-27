@@ -78,7 +78,9 @@ export default function MessageList({
 
   if (!messages.length && !streaming) {
     return (
-      <EmptyState className="ct-empty-welcome" text="选一个角色开始对话。" />
+      // 角色标签永远有一个是选中的，旧文案「选一个角色开始对话」
+      // 会让作者以为还得先点一下。这里直接告诉他下一步做什么。
+      <EmptyState className="ct-empty-welcome" text="直接说需求，或点上面的建议开始。" />
     );
   }
 

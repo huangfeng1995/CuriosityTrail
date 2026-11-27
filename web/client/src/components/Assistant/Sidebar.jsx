@@ -1306,7 +1306,9 @@ export default function AssistantSidebar() {
           placeholder={
             sending
               ? '继续说，本轮结束后自动发送…'
-              : `以${activeRole?.name || 'AI'}的身份提问…`
+              // 「以写手的身份提问」读起来像是作者要扮演写手；
+              // 提问的人是作者，回答的是当前角色。
+              : `向${activeRole?.name || 'AI'}提问…`
           }
           autoSize={{ minRows: 2, maxRows: 6 }}
           className="ct-ai-textarea"
