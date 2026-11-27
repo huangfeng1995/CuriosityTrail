@@ -515,7 +515,7 @@ export default function Workspace() {
       />
 
       <aside
-        className={`ct-col-right${widths.right < 336 ? ' is-narrow' : ''}`}
+        className="ct-col-right"
         style={{ width: widths.right }}
         data-hidden={hideRight ? 'true' : undefined}
       >

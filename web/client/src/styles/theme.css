@@ -558,14 +558,10 @@ textarea {
 }
 
 /* ---------- 栏宽收窄时的退让 ----------
-   栏可以拖窄，但窄到一定程度就得让位：
-   右栏的 5 个角色标签排不下名字时，只留图标。 */
-.ct-col-right.is-narrow .ct-role-name {
-  display: none;
-}
-.ct-col-right.is-narrow .ct-role-tab {
-  gap: 0;
-}
+   右栏拖到 336 以下时，五个「图标 + 名字」排不下。
+   不再把名字全藏掉硬塞五个（那样看不出自己在哪个角色），
+   改为前三个带名字 + 一个「更多」入口，其余角色进下拉：
+   当前角色若在折叠区，入口直接显示它。见 RoleTabs。 */
 
 /* ---------- 拖拽把手 ----------
    常态就是一条分隔细线，鼠标靠近才染上朱砂；
@@ -2339,6 +2335,13 @@ body.ct-resizing * {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+/* 窄栏：前几个角色 + 一个「更多」，四列等分；更窄时少露一个标签，三列 */
+.ct-role-tabs.is-compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.ct-role-tabs.is-compact.is-tight {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .ct-role-tab {
   display: inline-flex;
   align-items: center;
@@ -2386,6 +2389,25 @@ body.ct-resizing * {
 }
 .ct-role-tab.is-active::after {
   transform: scaleX(1);
+}
+/* 「更多」入口：右侧一枚小三角。当前角色被折叠时，
+   入口直接换成该角色的图标 + 名字，下划线也落在入口上。 */
+.ct-role-tab.is-more {
+  gap: 2px;
+}
+.ct-role-more-caret {
+  flex: 0 0 auto;
+  margin-left: 1px;
+  opacity: 0.65;
+}
+.ct-role-tab.is-more .ct-role-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ct-role-menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 .ct-role-icon {
   /* 图标换成 14px 内联 SVG 后不再吃字号，只作为容器对齐文字 */
