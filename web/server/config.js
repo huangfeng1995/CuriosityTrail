@@ -149,15 +149,6 @@ const memoryExtractEnabled =
 const memoryRetryBaseMs = Number(process.env.MEMORY_RETRY_BASE_MS || 1000);
 
 // ---------------------------------------------------------------------------
-// 4.2 全书审校
-// ---------------------------------------------------------------------------
-//
-// AI 层只做跨章总检：每章压成「大纲 + 开头/结尾关键段」的摘要，按字数分组，
-// 多组时再做一次跨组汇总。不再把整本正文逐批喂给模型——那与审稿人重复，
-// 30 万字要 25 批以上。摘要分组的字数上限由此控制。
-const consistencyDigestChars = Number(process.env.CONSISTENCY_DIGEST_CHARS || 24000);
-
-// ---------------------------------------------------------------------------
 // 5. 运行环境
 // ---------------------------------------------------------------------------
 const port = Number(process.env.PORT || 3001);
@@ -247,8 +238,6 @@ module.exports = {
   memoryMinScore,
   memoryExtractEnabled,
   memoryRetryBaseMs,
-  // 全书审校
-  consistencyDigestChars,
   // 异地备份
   backupOffsiteDir,
   backupOffsiteKeep,

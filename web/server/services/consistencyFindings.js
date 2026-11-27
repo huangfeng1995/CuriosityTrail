@@ -3,9 +3,9 @@
 /**
  * 一致性检查结论的生命周期。
  *
- * 检查会被反复触发（打开面板就查一次规则层、作者点「全书检查」又跑一次
- * 跨章总检）。如果结论只放在内存里，作者忽略过的问题每次重跑都会再报一遍，
- * 等于逼他对同一件事反复做决定。
+ * 检查会被反复触发（打开面板、每次保存后都会再查一次规则层）。如果结论
+ * 只放在内存里，作者忽略过的问题每次重跑都会再报一遍，等于逼他对同一件事
+ * 反复做决定。
  *
  * 这里把结论落库，用 fingerprint 认「同一个问题」：
  *   · 首次出现 → open，记 first_seen_at；
@@ -13,16 +13,13 @@
  *   · 已经是 adopted / dismissed → 保持原状态，不再以 open 报出来。
  *
  * 指纹不追求「措辞无关」，只保证同一来源、同一锚点的结论稳定：
- *   · 规则层：type + target（标题里带计数之类的内容不进指纹）；
- *   · 跨章总检：type + 归一化标题 + 所在章。
- * 模型换一种说法描述同一个问题时会被当成新结论——这比把两条不同问题
- * 误合并成一条更安全，作者最多多点一次忽略。
+ *   · 规则层：type + target（标题里带计数之类的内容不进指纹）。
+ * 这样忽略过的问题重跑时不会复活。
  */
 
 const crypto = require('crypto');
-const { all, get, run, transaction } = require('../database');
+const { all, get, transaction } = require('../database');
 
-const VALID_STATUS = new Set(['open', 'adopted', 'dismissed']);
 const VALID_SOURCE = new Set(['rule', 'cross_chapter']);
 
 const now = () => new Date().toISOString();
@@ -169,45 +166,8 @@ async function recordFindings({ userId, workId, source, findings }) {
     .map(toFinding);
 }
 
-/**
- * 修改一条结论的状态。
- *
- * 只能改自己作品下的结论：id 是前端传来的，不校验 ownership 就是越权入口。
- *
- * @param {Object} params
- * @param {string} params.userId
- * @param {string} params.workId
- * @param {string} params.id
- * @param {string} params.status adopted | dismissed | open
- * @returns {Promise<Object|null>} 更新后的结论；不存在或不属于该用户时 null
- */
-async function setFindingStatus({ userId, workId, id, status }) {
-  if (!VALID_STATUS.has(status)) {
-    const err = new Error('status 不合法');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const row = await get(
-    'SELECT * FROM consistency_findings WHERE id = ? AND user_id = ? AND work_id = ?',
-    [id, userId, workId]
-  );
-  if (!row) return null;
-
-  const ts = now();
-  await run(
-    `UPDATE consistency_findings
-        SET status = ?, updated_at = ?
-      WHERE id = ? AND user_id = ? AND work_id = ?`,
-    [status, ts, id, userId, workId]
-  );
-
-  return toFinding({ ...row, status, updated_at: ts });
-}
-
 module.exports = {
   recordFindings,
-  setFindingStatus,
   fingerprintOf,
   toFinding,
 };
