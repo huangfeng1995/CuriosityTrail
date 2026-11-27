@@ -52,6 +52,8 @@ const planStore = require('../services/agent/planStore');
 const backgroundFacts = require('../services/pipeline/backgroundFacts');
 const referenceAnchor = require('../services/agent/referenceAnchor');
 const segmentWriter = require('../services/agent/segmentWriter');
+const shapeRepairCore = require('../services/agent/shapeRepair');
+const shapeRepairTasks = require('../services/agent/shapeRepairTasks');
 const { checkAnchors } = require('../services/pipeline/anchorCheck');
 const knowledgeScan = require('../services/pipeline/knowledgeScan');
 const { buildPlanGrounding } = require('../services/agent/planGrounding');
@@ -3548,73 +3550,26 @@ router.post('/chat', async (req, res) => {
       }
     }
 
-    // ---- 交付前形态门禁（短句/对白/比喻等）----
+    // ---- 形态不合格：先交付，后台再修 ----
     //
-    // 形态不合格、重写又被 85% 守卫回滚时，不能默认交付：轮 A 短句 25.11%
-    // 就是带着缺口落库的。这里先做无损修补（按句边界合并短句），仍不达标
-    // 就明确阻断并写清哪一项、差多少；不放宽阈值，也不取消 85% 守卫。
-    // 段数 ±2 这类结构偏差仍只挂徽标：无损修补会改动正文结构，不宜自动做。
+    // 形态不合格、针对形态的重写又被 85% 守卫回滚时，不再拦下整章：
+    // 当前稿照常交付并落库，同时记下不达标项（哪项、实测值、上限/下限、差多少），
+    // 交给后台按「不砍字」策略修一版；修好后在消息里给原文/修订版对照，
+    // 作者点「用修订版」才替换正文。
     //
-    // 只在「重写被 85% 守卫回滚」时阻断：没有回滚说明还有别的修复机会，
-    // 或者本来就没触发重写，按原逻辑挂徽标交付；回滚了还带着缺口，才不能默认交付。
+    // 阈值一个不动、85% 守卫也不取消；段数 ±2 这类结构偏差仍只挂徽标，
+    // 因为修补不改段落数，不该拿它当修补目标。
     const blockingShape = finalShapeDelivery.blocking.filter((row) => row.kind !== 'count');
-    // 只认「因为形态问题被回滚」的重写：覆盖类重写缩水回滚与形态无关，
-    // 不能拿它当阻断理由（线上单测里大量缺拍重写都会缩水）。
-    const reverted = rewriteReverts.filter(
+    // 只认「因为形态问题被回滚」的重写：覆盖类重写缩水回滚与形态无关。
+    const shapeReverts = rewriteReverts.filter(
       (row) => Array.isArray(row.shapeProblems) && row.shapeProblems.length
     );
-    if (beatPlan && generatedProse && blockingShape.length && reverted.length) {
-      const detail = segmentWriter.formatShapeShortfall(blockingShape.slice(0, 4));
-      // 回滚有两种原因：砍字超过 15%，或重写没把点名的形态问题改好。
-      // 一律写成「缩水 N%」会把 168% 这种实际变长的回滚说反，得分开说。
-      const revertNote = reverted.length
-        ? `；${reverted.length} 组重写被 85% 守卫回滚（${reverted
-            .map((row) => {
-              const percent = Math.round((Number(row.ratio) || 0) * 100);
-              return percent < 85 ? `缩水至 ${percent}%` : '形态未改好';
-            })
-            .join('，')}）`
-        : '';
-      console.log(
-        JSON.stringify({
-          event: 'ai_shape_blocked',
-          traceId,
-          userId: req.userId,
-          blocking: blockingShape.map((row) => ({
-            kind: row.kind,
-            beatId: row.beatId,
-            ratio: row.ratio,
-            perKilo: row.perKilo,
-            limit: row.limit,
-            deficitChars: row.deficitChars,
-          })),
-          reverted: reverted.map((row) => ({
-            group: row.group,
-            ratio: row.ratio,
-            reason: row.reason,
-          })),
-          repair: shapeRepair,
-        })
-      );
-      send({
-        type: 'error',
-        code: 'SHAPE_UNMET',
-        message: `本章形态仍不达标，未保存：${detail}${revertNote}。请重试或改写后重跑。`,
-      });
-      send({
-        type: 'done',
-        conversationId: conversation.id,
-        provider: name,
-        stopReason: finalResult.stopReason,
-        traceId,
-      });
-      // 没交付就不能留下孤立的提问，也不能让重新生成前的那一版消失。
-      if (insertedUserMessageId) {
-        await run('DELETE FROM messages WHERE id = ?', [insertedUserMessageId]).catch(() => {});
-      }
-      await restoreRemoved();
-      return;
-    }
+    const shapeShortfall = shapeRepairCore.shortfallRows(finalShapeDelivery);
+    payload.shapeShortfall = shapeShortfall;
+    const shouldShapeRepair = Boolean(
+      beatPlan && generatedProse && chapterId && workId && blockingShape.length && shapeReverts.length
+    );
+    const shapeRepairId = shouldShapeRepair ? crypto.randomUUID() : '';
 
     // ---- 交付前全章连续性门禁（HP14 修复二）----
     //
@@ -3683,6 +3638,68 @@ router.post('/chat', async (req, res) => {
 
     // 保存助手消息
     const messageId = crypto.randomUUID();
+
+    // 先登记修补任务，再写消息：payload 里要带上任务 id 与缺口，
+    // 前端收到 action/done 就能立刻显示「后台修订中」。
+    // 唯一索引兜底「同章同时只允许一个任务」：插入失败就跳过修补，
+    // 正文与缺口照样交付，不因修补登记失败反过来影响写作。
+    if (shapeRepairId) {
+      try {
+        const nowIso = new Date().toISOString();
+        await run(
+          `INSERT INTO shape_repairs
+             (id, user_id, work_id, chapter_id, message_id, status, shortfall,
+              original_chars, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+          [
+            shapeRepairId,
+            req.userId,
+            workId,
+            chapterId,
+            messageId,
+            JSON.stringify(shapeShortfall),
+            countWords(payload.content),
+            nowIso,
+            nowIso,
+          ]
+        );
+        payload.shapeRepair = {
+          id: shapeRepairId,
+          status: 'pending',
+          shortfall: shapeShortfall,
+          revisedContent: '',
+          applied: false,
+          dismissed: false,
+          rounds: 0,
+          calls: 0,
+          durationMs: 0,
+          note: '',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+        // 到这里正文才真正要落库；更早打日志会把「连续性情阻断」误报成交付。
+        console.log(
+          JSON.stringify({
+            event: 'ai_shape_deliver_with_repair',
+            traceId,
+            userId: req.userId,
+            chapterId,
+            messageId,
+            repairId: shapeRepairId,
+            shortfall: shapeShortfall,
+            reverted: shapeReverts.map((row) => ({
+              group: row.group,
+              ratio: row.ratio,
+              reason: row.reason,
+            })),
+            localRepair: shapeRepair,
+          })
+        );
+      } catch (err) {
+        console.error('[ai] 形态修补任务登记失败（已跳过修补）:', errorText(err));
+      }
+    }
+
     await run(
       `INSERT INTO messages (id, conversation_id, role, content, role_key, action, payload, citations, created_at, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'complete')`,
@@ -3744,6 +3761,9 @@ router.post('/chat', async (req, res) => {
       briefCoverage: payload.briefCoverage || null,
       mustReveal: payload.mustReveal || null,
       segmentInfo: payload.segmentInfo || null,
+      // 形态缺口与后台修补任务：正文已交付，抢占修状态在消息里更新。
+      shapeShortfall,
+      shapeRepair: payload.shapeRepair || null,
     });
     send({
       type: 'done',
@@ -3759,7 +3779,30 @@ router.post('/chat', async (req, res) => {
       // 章末锚点断言结果（未启用模板 / 非正文 / 检查失败时为空数组）。
       // 前端不读也不影响；存在就是为了让「命中了什么」有据可查。
       anchorViolations,
+      // 形态缺口与修补任务同样在 done 里带一份：事件顺序变化时不丢面板。
+      shapeShortfall,
+      shapeRepair: payload.shapeRepair || null,
     });
+
+    // ---- 后台形态修补（先交付、后台再修）----
+    //
+    // 不 await：作者已经拿到正文，修补在后台跑；结果只写该章消息，
+    // 作者关页面或切章也不会被打断。同章已有任务时服务端会拒绝启动。
+    if (shapeRepairId && payload.shapeRepair) {
+      shapeRepairTasks.startRepairTask({
+        repairId: shapeRepairId,
+        chapterId,
+        messageId,
+        body: payload.content,
+        plan: beatPlan,
+        blockers: blockingShape,
+        namedCast: planCharacterNames,
+        provider,
+        role,
+        name,
+        traceId,
+      });
+    }
 
     // ---- 生成即记录（B）----
     //
@@ -4121,6 +4164,11 @@ router.get('/conversations/:id/messages', async (req, res) => {
         toolTrace: Array.isArray(payload && payload.skills)
           ? payload.skills.map((s) => ({ ...s, status: 'done' }))
           : [],
+        // 形态缺口与后台修补：刷新/切章回来仍能看到对照入口。
+        shapeShortfall: Array.isArray(payload && payload.shapeShortfall)
+          ? payload.shapeShortfall
+          : [],
+        shapeRepair: (payload && payload.shapeRepair) || null,
       };
     });
 
@@ -4131,6 +4179,58 @@ router.get('/conversations/:id/messages', async (req, res) => {
       updatedAt: conversation.updated_at,
       messages,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 形态后台修补
+//
+// 后台任务只写数据库，不碰已关闭的 SSE 连接；前端按章轮询第一条。
+// 所有查询都带 user_id：别人的修订任务一律当作不存在。
+// ---------------------------------------------------------------------------
+router.get('/shape-repairs/:chapterId', async (req, res) => {
+  try {
+    const chapter = await get(
+      `SELECT c.id FROM chapters c
+         JOIN works w ON w.id = c.work_id
+        WHERE c.id = ? AND w.user_id = ?`,
+      [req.params.chapterId, req.userId]
+    );
+    if (!chapter) return res.status(404).json({ error: '章节不存在' });
+    const repair = await shapeRepairTasks.getRepairByChapter(req.params.chapterId, req.userId);
+    res.json({ repair });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/shape-repairs/:id/cancel', async (req, res) => {
+  try {
+    const repair = await shapeRepairTasks.cancelRepairTask(req.params.id, req.userId);
+    if (!repair) return res.status(404).json({ error: '修订任务不存在' });
+    res.json({ repair });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/shape-repairs/:id/apply', async (req, res) => {
+  try {
+    const repair = await shapeRepairTasks.markApplied(req.params.id, req.userId);
+    if (!repair) return res.status(404).json({ error: '修订任务不存在' });
+    res.json({ repair });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/shape-repairs/:id/dismiss', async (req, res) => {
+  try {
+    const repair = await shapeRepairTasks.markDismissed(req.params.id, req.userId);
+    if (!repair) return res.status(404).json({ error: '修订任务不存在' });
+    res.json({ repair });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

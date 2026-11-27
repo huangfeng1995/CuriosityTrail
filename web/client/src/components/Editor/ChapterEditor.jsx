@@ -14,6 +14,7 @@ import { useFocus } from '../../store/focus';
 import api from '../../api/client';
 import { createBlock, countChars } from './blocks';
 import { assessRewrite } from './writebackGuard';
+import { diffInline, renderDiff } from './inlineDiff';
 import { collectCriticFindings, REASON_LABEL } from '../Assistant/findings';
 import { countBlockWords, formatWords } from '../../utils/wordCount';
 import Block from './Block';
@@ -37,70 +38,8 @@ const EDIT_ACTIONS = new Set([
   'colloquialize',
 ]);
 
-// 对照里的差异一次最多算多少格。超了就只并排显示原文与新版，不做逐字标色：
-// 两千字的长段再逐字对齐会明显卡顿，而这么大的改动本来也看不清细差。
-const DIFF_CELL_LIMIT = 240000;
-
-/** 逐字对照：返回原文/新版各自的片段，供上下两行分别标删改与新增。 */
-function diffInline(before, after) {
-  if (before === after) return null;
-  const n = before.length;
-  const m = after.length;
-  if (n * m > DIFF_CELL_LIMIT) return null;
-
-  const width = m + 1;
-  const dp = new Uint16Array((n + 1) * width);
-  for (let i = n - 1; i >= 0; i -= 1) {
-    for (let j = m - 1; j >= 0; j -= 1) {
-      dp[i * width + j] =
-        before[i] === after[j]
-          ? dp[(i + 1) * width + j + 1] + 1
-          : Math.max(dp[(i + 1) * width + j], dp[i * width + j + 1]);
-    }
-  }
-
-  const beforeSegs = [];
-  const afterSegs = [];
-  const push = (arr, type, ch) => {
-    const last = arr[arr.length - 1];
-    if (last && last.type === type) last.text += ch;
-    else arr.push({ type, text: ch });
-  };
-
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (before[i] === after[j]) {
-      push(beforeSegs, 'same', before[i]);
-      push(afterSegs, 'same', after[j]);
-      i += 1;
-      j += 1;
-    } else if (dp[(i + 1) * width + j] >= dp[i * width + j + 1]) {
-      push(beforeSegs, 'del', before[i]);
-      i += 1;
-    } else {
-      push(afterSegs, 'add', after[j]);
-      j += 1;
-    }
-  }
-  while (i < n) {
-    push(beforeSegs, 'del', before[i]);
-    i += 1;
-  }
-  while (j < m) {
-    push(afterSegs, 'add', after[j]);
-    j += 1;
-  }
-  return { beforeSegs, afterSegs };
-}
-
-/** 把对照片段渲染出来：变化的那一侧用删/增标记，未变的保持普通文字。 */
-function renderDiff(segs, changed) {
-  return segs.map((seg, i) => {
-    if (seg.type !== changed) return <React.Fragment key={i}>{seg.text}</React.Fragment>;
-    return changed === 'del' ? <del key={i}>{seg.text}</del> : <ins key={i}>{seg.text}</ins>;
-  });
-}
+// 对照里的差异算法与渲染在 ./inlineDiff 里，章节头与侧栏修订卡片共用一份。
+// 这里保留 DIFF_CELL_LIMIT 的说明位置：超长段不逐字标色，只并排显示原文与新版。
 
 // 保存状态对应的提示文案。状态来自 store，与真实落库进度一致。
 const SAVE_LABEL = {

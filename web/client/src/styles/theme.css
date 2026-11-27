@@ -1757,6 +1757,82 @@ body.ct-resizing * {
     justify-content: flex-end;
   }
 }
+
+/* 形态自检 / 后台修订面板：正文已经交付，这里只列缺口与可选修订版。
+   不抢正文的视觉层级：小字号、淡边框，和改写对照同一套配色。 */
+.ct-shape-repair {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+}
+.ct-shape-repair-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ct-shape-repair-title {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+.ct-shape-repair-state {
+  font-size: 11.5px;
+  color: var(--text-quaternary);
+}
+.ct-shape-repair-state.is-pending,
+.ct-shape-repair-state.is-running {
+  color: var(--gold);
+}
+.ct-shape-repair-state.is-done,
+.ct-shape-repair-state.is-applied {
+  color: var(--text-secondary);
+}
+.ct-shape-repair-state.is-failed {
+  color: var(--cinnabar);
+}
+.ct-shape-repair-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.ct-shape-repair-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.ct-shape-repair-metric-name {
+  margin-right: 4px;
+  color: var(--text-quaternary);
+}
+.ct-shape-repair-note {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--cinnabar);
+}
+.ct-shape-repair-compare.ct-compare {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.ct-shape-repair-cost {
+  width: 100%;
+  font-size: 11.5px;
+  color: var(--text-quaternary);
+}
+.ct-shape-repair-done {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
 .ct-wordcount {
   font-size: 12.5px;
   color: var(--text-tertiary);

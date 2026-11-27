@@ -52,8 +52,16 @@ let db = new sqlite3.Database(config.dbPath);
  * 版本 19 → 20：章节拍表落库（chapter_plans）。plan 存节拍表 JSON，
  *              outline_hash / body_hash 记规划时的大纲与正文指纹，用于判断
  *              计划是否过期；老库建空表，不碰任何已有业务表。
+ * 版本 20 → 21：形态后台修补（shape_repairs）。形态不合格、重写又被 85% 守卫
+ *              回滚时，正文先交付，后台再按不砍字策略修一版供作者对照替换。
+ *              新表只增不改：老库启动时建空表即可。
+ *              回滚方式：旧代码不读这张表，但旧代码会拒绝启动更高的 user_version，
+ *              所以要么恢复升级前备份，要么执行
+ *              `DROP TABLE shape_repairs; PRAGMA user_version = 20;`
+ *              再把服务端退回上一版。消息 payload 里多出的 shapeRepair
+ *              字段旧前端会忽略，不影响正文。
  */
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 
 /**
  * 版本号之前的老库遗留表。
@@ -715,6 +723,43 @@ CREATE TABLE IF NOT EXISTS chapter_plans (
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
+
+-- 形态后台修补（v21）。
+--
+-- 形态不合格、重写又被 85% 守卫回滚时，正文先交付并落库；这里记一条修补任务，
+-- 后台按「不砍字」策略修一版，作者在消息里对照后自己决定是否替换。
+-- 原文始终以 messages.content / chapters 为准，本表只存修订结果与状态，
+-- 不自动改写正文。
+--
+-- 一个章同一时间只允许一个 pending/running 任务：由下面的部分唯一索引强制，
+-- 服务端注册表再做一层内存去重（防重复启动）。
+CREATE TABLE IF NOT EXISTS shape_repairs (
+  id              TEXT PRIMARY KEY,
+  user_id         TEXT NOT NULL,
+  work_id         TEXT NOT NULL,
+  chapter_id      TEXT NOT NULL,
+  message_id      TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','running','done','failed','cancelled')),
+  -- 交付时的不达标项 JSON：[{kind,label,text,ratio,perKilo,limit,deficitChars}]
+  shortfall       TEXT NOT NULL DEFAULT '',
+  original_chars  INTEGER NOT NULL DEFAULT 0,
+  before_json     TEXT NOT NULL DEFAULT '',
+  after_json      TEXT NOT NULL DEFAULT '',
+  revised_content TEXT,
+  applied         INTEGER NOT NULL DEFAULT 0,
+  dismissed       INTEGER NOT NULL DEFAULT 0,
+  rounds          INTEGER NOT NULL DEFAULT 0,
+  calls           INTEGER NOT NULL DEFAULT 0,
+  duration_ms     INTEGER NOT NULL DEFAULT 0,
+  note            TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shape_repairs_active
+  ON shape_repairs(chapter_id) WHERE status IN ('pending','running');
+CREATE INDEX IF NOT EXISTS idx_shape_repairs_message
+  ON shape_repairs(message_id);
 
 `;
 

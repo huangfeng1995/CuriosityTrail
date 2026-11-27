@@ -243,9 +243,16 @@ const DIALOGUE_ONLY_RE = /^[“"][^”"]*[”"][。！？!?…]?$/;
  *
  * @param {string} text
  * @param {number} [targetRatio] 目标短句占比，默认范文×1.5 的上限
+ * @param {number} [maxJoined] 合并后单句的长度上限，默认 40；后台修补可用更大值
+ * @param {boolean} [allowQuotes] 是否允许合并「半个引语」碎片，默认 false
  * @returns {{text: string, merged: number}}
  */
-function repairShortSentences(text, targetRatio = SHORT_SENTENCE_RATIO_LIMIT) {
+function repairShortSentences(
+  text,
+  targetRatio = SHORT_SENTENCE_RATIO_LIMIT,
+  maxJoined = 40,
+  allowQuotes = false
+) {
   const source = String(text || '');
   const paragraphs = source.split(/\n+/);
   const before = measureSentenceLength(paragraphs.join('\n\n'));
@@ -267,15 +274,19 @@ function repairShortSentences(text, targetRatio = SHORT_SENTENCE_RATIO_LIMIT) {
       for (let i = 0; i < parts.length - 1; i += 1) {
         const left = parts[i];
         const right = parts[i + 1];
-        // 含引号的句子不动：对白内部并句会改变说话节奏与说话人归属。
-        if (/[“”「」]/.test(left) || /[“”「」]/.test(right)) continue;
+        // 起稿阶段不动含引号的句子：对白内部并句会改变说话节奏与说话人归属。
+        // 后台修补允许合并「半个引语」碎片（左句以句号结尾且没有闭合引号），
+        // 例如 “式样不合。 + ”掾吏说。 → “式样不合，”掾吏说。 只动句边界，不删字。
+        if (!allowQuotes && (/[“”「」]/.test(left) || /[“”「」]/.test(right))) continue;
+        // 含引号时只合并左句以句号直接收尾的「半个引语」；完整引语以 ” 收尾，不碰。
+        if (allowQuotes && /[“”「」]/.test(left) && !/[。！？!?…]+$/.test(left)) continue;
         if (!/[。！？!?…]+$/.test(left)) continue;
         const leftWords = countWords(left);
         if (leftWords > SHORT_SENTENCE_MAX_CHARS) continue;
         const joined = `${left.replace(/[。！？!?…]+$/, '，')}${right}`;
         const joinedWords = countWords(joined);
-        // 合并后还是短句就没有意义；超过 40 字又会变成另一个极端。
-        if (joinedWords <= SHORT_SENTENCE_MAX_CHARS || joinedWords > 40) continue;
+        // 合并后还是短句就没有意义；超过上限又会变成另一个极端。
+        if (joinedWords <= SHORT_SENTENCE_MAX_CHARS || joinedWords > maxJoined) continue;
         paragraphs[p] = paragraphs[p].replace(left + right, joined);
         merged += 1;
         changed = true;
@@ -352,10 +363,11 @@ function formatShapeShortfall(rows) {
         ).toFixed(1)}pp，约 ${row.deficitChars || 0} 字引语）`;
       }
       if (row.kind === 'imagery_density' || row.kind === 'quote_density' || row.kind === 'generic_reference') {
+        // 密度差值用两位小数：2.14 对 2.1 只多 0.04，保留一位会显示成「多 0.0」。
         return `${label} ${row.perKilo} 处/千字（上限 ${row.limit}，多 ${Math.max(
           0,
           row.perKilo - row.limit
-        ).toFixed(1)}）`;
+        ).toFixed(2)}）`;
       }
       return label;
     })

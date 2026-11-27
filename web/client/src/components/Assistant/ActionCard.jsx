@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Popover } from 'antd';
 import { CheckOutlined, RollbackOutlined } from '@ant-design/icons';
 import { REASON_LABEL } from './findings';
+import { diffInline, renderDiff } from '../Editor/inlineDiff';
 
 const ACTION_LABEL = {
   replace: '改写',
@@ -26,6 +27,37 @@ const ANCHOR_RULE_LABEL = {
   blank_guard: '空白区护栏',
   manual_only: '需人工核对',
 };
+
+/** 形态缺口里每项对应的 before/after 字段与单位。 */
+const SHAPE_METRIC = {
+  short_sentence: ['shortSentenceRatio', '%'],
+  dialogue_ratio: ['dialogueRatio', '%'],
+  dialogue_low: ['dialogueRatio', '%'],
+  quote_density: ['quotePerKilo', ' 处/千字'],
+  imagery_density: ['imageryPerKilo', ' 处/千字'],
+  generic_reference: ['genericPerKilo', ' 处/千字'],
+};
+
+function formatMetric(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  return String(Math.round(num * 10) / 10);
+}
+
+/** 后台修订的状态文案：先看作者是否已处理，再看任务状态。 */
+function repairStateOf(repair) {
+  if (!repair) return null;
+  if (repair.applied) return { key: 'applied', label: '已替换正文' };
+  if (repair.dismissed) return { key: 'dismissed', label: '已保留原稿' };
+  const map = {
+    pending: '后台修订中…',
+    running: '后台修订中…',
+    done: '修订完成',
+    failed: '修补未达标',
+    cancelled: '已停止修补',
+  };
+  return { key: repair.status || '', label: map[repair.status] || repair.status || '' };
+}
 
 /**
  * 冲突徽标点开后的明细：每条都给原句与定位。
@@ -82,11 +114,57 @@ export default function ActionCard({
   adoptedFindingKeys,
   onAdoptFindings,
   onJumpToFinding,
+  shapeRepair = null,
+  shapeShortfall = [],
+  onApplyRepair,
+  onKeepRepair,
+  onCancelRepair,
 }) {
   const isTextAction = ['replace', 'append', 'insert'].includes(action);
   // 空正文不渲染占位文案：卡片的 reason / findings 已经说明了情况，
   // 「（本次没有返回内容）」对作者没有信息量。
   const body = (content || '').trim();
+
+  const repair = shapeRepair && shapeRepair.id ? shapeRepair : null;
+  const shortfalls =
+    Array.isArray(shapeShortfall) && shapeShortfall.length
+      ? shapeShortfall
+      : (repair && Array.isArray(repair.shortfall) ? repair.shortfall : []);
+  const repairState = repairStateOf(repair);
+  const repairBusy = repair && ['pending', 'running'].includes(repair.status);
+  const repairDone =
+    repair &&
+    repair.status === 'done' &&
+    !repair.applied &&
+    !repair.dismissed &&
+    Boolean(repair.revisedContent);
+  const [repairOpen, setRepairOpen] = useState(false);
+  const repairDiff = useMemo(() => {
+    if (!repair || repair.status !== 'done' || !repair.revisedContent) return null;
+    return diffInline(content || '', repair.revisedContent);
+  }, [repair, content]);
+
+  // 同一类指标只显示一次：短句/对白/引号/比喻/泛称各自一行。
+  const repairMetrics = useMemo(() => {
+    const seen = new Set();
+    const rows = [];
+    for (const item of shortfalls) {
+      const metric = SHAPE_METRIC[item.kind];
+      if (!metric || seen.has(item.kind)) continue;
+      seen.add(item.kind);
+      const [field, unit] = metric;
+      const before = repair && repair.before ? repair.before[field] : undefined;
+      const after = repair && repair.after ? repair.after[field] : undefined;
+      rows.push({
+        kind: item.kind,
+        label: item.label || item.kind,
+        before: formatMetric(before),
+        after: formatMetric(after),
+        unit,
+      });
+    }
+    return rows;
+  }, [shortfalls, repair]);
 
   // 节拍与章末检查的结构化结果。徽标只占卡片内的一行元信息，
   // 不进入正文、不参与正文 34px 格线，也不改变正文列宽。
@@ -321,6 +399,107 @@ export default function ActionCard({
       )}
 
       {body && <div className="ct-action-body">{body}</div>}
+
+      {/* 形态自检 / 后台修订：正文已经交付，这里只给缺口与可选修订版。
+          修订版不自动替换，作者点「用修订版」才写回正文。 */}
+      {(shortfalls.length > 0 || repair) && (
+        <div className="ct-shape-repair">
+          <div className="ct-shape-repair-head">
+            <span className="ct-shape-repair-title">形态自检</span>
+            {repairState && (
+              <span className={`ct-shape-repair-state is-${repairState.key}`}>
+                {repairState.label}
+              </span>
+            )}
+            <span style={{ flex: 1 }} />
+            {repairBusy && (
+              <Button size="small" onClick={onCancelRepair}>
+                停止修补
+              </Button>
+            )}
+          </div>
+
+          {shortfalls.length > 0 && (
+            <ul className="ct-shape-repair-list">
+              {shortfalls.map((item) => (
+                <li key={`${item.kind}-${item.text || item.label}`}>
+                  {item.text || item.label || item.kind}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {repairDone && repairMetrics.length > 0 && (
+            <div className="ct-shape-repair-metrics">
+              {repairMetrics.map((row) => (
+                <span key={row.kind} className="ct-shape-repair-metric">
+                  <span className="ct-shape-repair-metric-name">{row.label}</span>
+                  {row.before}
+                  {row.unit} → {row.after}
+                  {row.unit}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {repair && repair.note && (
+            <div className="ct-shape-repair-note">{repair.note}</div>
+          )}
+
+          {repairDone && (
+            <div className="ct-compare ct-shape-repair-compare">
+              <div className="ct-compare-body">
+                <div className="ct-compare-row">
+                  <span className="ct-compare-tag">原文</span>
+                  <span className={`ct-compare-text${repairOpen ? ' is-open' : ''}`}>
+                    {repairDiff ? renderDiff(repairDiff.beforeSegs, 'del') : content}
+                  </span>
+                </div>
+                <div className="ct-compare-row">
+                  <span className="ct-compare-tag is-new">修订版</span>
+                  <span className={`ct-compare-text${repairOpen ? ' is-open' : ''}`}>
+                    {repairDiff
+                      ? renderDiff(repairDiff.afterSegs, 'add')
+                      : repair.revisedContent}
+                  </span>
+                </div>
+              </div>
+              <div className="ct-compare-acts">
+                <button
+                  type="button"
+                  className="ct-inline-btn is-quiet"
+                  onClick={() => setRepairOpen((v) => !v)}
+                >
+                  {repairOpen ? '收起' : '展开对照'}
+                </button>
+                <button type="button" className="ct-inline-btn" onClick={onApplyRepair}>
+                  用修订版
+                </button>
+                <button
+                  type="button"
+                  className="ct-inline-btn is-quiet"
+                  onClick={onKeepRepair}
+                >
+                  保持原样
+                </button>
+              </div>
+              <div className="ct-shape-repair-cost">
+                修补 {repair.rounds || 0} 轮 · 调用 {repair.calls || 0} 次 · 耗时{' '}
+                {((repair.durationMs || 0) / 1000).toFixed(1)}s
+              </div>
+            </div>
+          )}
+
+          {repair && repair.applied && (
+            <div className="ct-shape-repair-done">
+              已用修订版替换正文；原稿已存入历史版本，可随时回滚。
+            </div>
+          )}
+          {repair && repair.dismissed && (
+            <div className="ct-shape-repair-done">已保留原稿，修订版已丢弃。</div>
+          )}
+        </div>
+      )}
 
       {visibleFindings.length > 0 && (
         <div className="ct-finding-list">

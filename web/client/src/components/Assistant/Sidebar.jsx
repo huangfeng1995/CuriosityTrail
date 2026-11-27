@@ -4,7 +4,7 @@ import { SendOutlined, ClearOutlined, LoadingOutlined } from '@ant-design/icons'
 import { History, MoreHorizontal } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
 import { streamPost } from '../../api/sse';
-import { createBlock } from '../Editor/blocks';
+import { createBlock, chapterText } from '../Editor/blocks';
 import { assessRewrite } from '../Editor/writebackGuard';
 import { planApply } from './applyPlan';
 import {
@@ -59,6 +59,7 @@ export default function AssistantSidebar() {
     updateBlock,
     insertBlock,
     removeBlock,
+    setBlocks,
   } = useWorkspace();
 
   const [roles, setRoles] = useState([]);
@@ -523,6 +524,11 @@ export default function AssistantSidebar() {
                   // 节拍覆盖与规划降级：只做结构化徽标，不改正文。
                   beatCheck: event.beatCheck || null,
                   planDegraded: event.planDegraded || '',
+                  // 形态缺口与后台修订：正文照常交付，修订任务在后台跑。
+                  shapeShortfall: Array.isArray(event.shapeShortfall)
+                    ? event.shapeShortfall
+                    : [],
+                  shapeRepair: event.shapeRepair || null,
                   // 工具过程的最终态：以 action 事件里的 skills 为准，
                   // 它是落库的同一份数据，重载消息时也能恢复。
                   //
@@ -600,6 +606,11 @@ export default function AssistantSidebar() {
                   ...(Array.isArray(event.anchorViolations)
                     ? { anchorViolations: event.anchorViolations }
                     : {}),
+                  // 形态缺口与修订任务：事件顺序变化时也不丢面板。
+                  ...(Array.isArray(event.shapeShortfall)
+                    ? { shapeShortfall: event.shapeShortfall }
+                    : {}),
+                  ...(event.shapeRepair ? { shapeRepair: event.shapeRepair } : {}),
                 },
               });
               // 用户消息的服务端 id 同样要留着：作者可以给自己的提问
@@ -958,6 +969,181 @@ export default function AssistantSidebar() {
   );
 
   /**
+   * 后台形态修补的轮询。
+   *
+   * 修补任务跑在服务端（done 之后 SSE 已经关闭），前端只能按章拉状态。
+   * 只轮询「这条消息上还有 pending/running」的章；最多 3 分钟，拿到终态即停。
+   * 作者关页面或切章不影响服务端任务，回来时从消息 payload 恢复当前状态。
+   */
+  const shapeRepairPendingKey = useMemo(
+    () =>
+      messages
+        .filter(
+          (m) =>
+            m.shapeRepair &&
+            ['pending', 'running'].includes(m.shapeRepair.status) &&
+            (!m.chapterId || m.chapterId === chapter?.id)
+        )
+        .map((m) => `${m.id}:${m.shapeRepair.id}:${m.shapeRepair.status}`)
+        .join('|'),
+    [messages, chapter?.id]
+  );
+
+  useEffect(() => {
+    if (!chapter?.id || !shapeRepairPendingKey) return undefined;
+    let stopped = false;
+    let timer = null;
+    const startedAt = Date.now();
+
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const res = await fetch(`/api/ai/shape-repairs/${chapter.id}`, {
+          credentials: 'include',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.repair) {
+          const repair = data.repair;
+          for (const msg of messagesRef.current) {
+            if (msg.shapeRepair && msg.shapeRepair.id === repair.id) {
+              dispatch({
+                type: 'message/update',
+                id: msg.id,
+                patch: { shapeRepair: repair },
+              });
+            }
+          }
+          // 终态（done/failed/cancelled）不再轮询。
+          if (!['pending', 'running'].includes(repair.status)) return;
+        }
+      } catch (e) {
+        // 网络抖动下一轮再试；不向作者报错，正文与修订任务都不受影响。
+      }
+      if (Date.now() - startedAt > 180000) return;
+      timer = window.setTimeout(tick, 3000);
+    };
+
+    timer = window.setTimeout(tick, 3000);
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [chapter?.id, shapeRepairPendingKey, dispatch]);
+
+  /**
+   * 用修订版替换正文。
+   *
+   * 写回闸复用行内改写的 assessRewrite（60% 下限、段落数骤减拦截）；
+   * 段落数一致时逐块替换并保留块类型，不一致时拒绝自动替换，让作者对照后手动改。
+   * 正文一改就会防抖保存，服务端保存前自动快照，原稿可在历史版本里找回。
+   */
+  const applyShapeRepair = useCallback(
+    (msg) => {
+      if (msg.chapterId && chapter?.id && msg.chapterId !== chapter.id) {
+        toast.warning('这条修订属于另一章，切回那一章再替换');
+        return;
+      }
+      const revised = String(msg.shapeRepair?.revisedContent || '').trim();
+      if (!revised) {
+        toast.warning('修订版还没有生成好');
+        return;
+      }
+
+      const currentText = chapterText(blocks).trim();
+      const guard = currentText ? assessRewrite(currentText, revised) : { ok: true };
+      if (!guard.ok) {
+        toast.warning(guard.reason);
+        return;
+      }
+
+      const paragraphs = revised
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (!paragraphs.length) {
+        toast.warning('修订版没有正文');
+        return;
+      }
+
+      const prose = blocks
+        .map((block, index) => ({ block, index }))
+        .filter(({ block }) => ['paragraph', 'dialogue', 'inner'].includes(block.type || 'paragraph'));
+
+      if (!prose.length) {
+        setBlocks(paragraphs.map((text) => createBlock('paragraph', { content: text })));
+      } else if (prose.length === paragraphs.length) {
+        // 常见情况：一章一段一块，段数与修订版一一对应，逐块换内容、保留块类型。
+        const next = blocks.slice();
+        prose.forEach(({ block, index }, k) => {
+          next[index] = { ...block, content: paragraphs[k] };
+        });
+        setBlocks(next);
+      } else if (prose.length === 1) {
+        // 生成结果点「应用」后整章会落进同一个块（块内有换行）。
+        // 这时不该因为段数不同就拒绝：整块替换即可，段内换行由修订版提供。
+        const next = blocks.slice();
+        next[prose[0].index] = { ...prose[0].block, content: paragraphs.join('\n\n') };
+        setBlocks(next);
+      } else {
+        toast.warning('修订版段落数与当前正文不一致，请点「展开对照」逐段核对后手动替换');
+        return;
+      }
+
+      dispatch({
+        type: 'message/update',
+        id: msg.id,
+        patch: { shapeRepair: { ...msg.shapeRepair, applied: true } },
+      });
+      fetch(`/api/ai/shape-repairs/${msg.shapeRepair.id}/apply`, {
+        method: 'POST',
+        credentials: 'include',
+      }).catch(() => {});
+      toast.success('已用修订版替换正文，原稿已存入历史版本');
+    },
+    [blocks, chapter?.id, dispatch, setBlocks, toast]
+  );
+
+  /** 保持原样：修订版丢弃，正文不动。 */
+  const keepShapeRepair = useCallback(
+    (msg) => {
+      dispatch({
+        type: 'message/update',
+        id: msg.id,
+        patch: { shapeRepair: { ...msg.shapeRepair, dismissed: true } },
+      });
+      fetch(`/api/ai/shape-repairs/${msg.shapeRepair.id}/dismiss`, {
+        method: 'POST',
+        credentials: 'include',
+      }).catch(() => {});
+      toast.info('已保留原稿');
+    },
+    [dispatch, toast]
+  );
+
+  /** 停止后台修补：只取消这一章的任务，正文不受影响。 */
+  const cancelShapeRepair = useCallback(
+    (msg) => {
+      dispatch({
+        type: 'message/update',
+        id: msg.id,
+        patch: {
+          shapeRepair: {
+            ...msg.shapeRepair,
+            status: 'cancelled',
+            note: '作者已取消修补，正文保持原稿',
+          },
+        },
+      });
+      fetch(`/api/ai/shape-repairs/${msg.shapeRepair.id}/cancel`, {
+        method: 'POST',
+        credentials: 'include',
+      }).catch(() => {});
+      toast.info('已停止修补，正文保持原稿');
+    },
+    [dispatch, toast]
+  );
+
+  /**
    * 采纳一条或多条意见。
    *
    * 已定位的意见走 /api/ai/inline（短上下文 + 显式选区，不会被聊天历史撑爆），
@@ -1263,6 +1449,9 @@ export default function AssistantSidebar() {
           onChoosePlan={decidePlan}
           onAbandonPlan={abandonPlan}
           onDismissSystem={(msg) => dispatch({ type: 'message/remove', id: msg.id })}
+          onApplyRepair={applyShapeRepair}
+          onKeepRepair={keepShapeRepair}
+          onCancelRepair={cancelShapeRepair}
         />
       </div>
 

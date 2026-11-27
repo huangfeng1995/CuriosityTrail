@@ -66,6 +66,9 @@ export default function MessageList({
   onDismissSystem,
   onChoosePlan,
   onAbandonPlan,
+  onApplyRepair,
+  onKeepRepair,
+  onCancelRepair,
 }) {
   // 占位提示的文案。
   //
@@ -206,6 +209,11 @@ export default function MessageList({
                     adoptedFindingKeys={adoptedFindingKeys}
                     onAdoptFindings={onAdoptFindings}
                     onJumpToFinding={onJumpToFinding}
+                    shapeRepair={msg.shapeRepair || null}
+                    shapeShortfall={msg.shapeShortfall || []}
+                    onApplyRepair={() => onApplyRepair?.(msg)}
+                    onKeepRepair={() => onKeepRepair?.(msg)}
+                    onCancelRepair={() => onCancelRepair?.(msg)}
                   />
                 </>
               ) : (
