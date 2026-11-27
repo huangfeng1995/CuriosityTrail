@@ -256,13 +256,6 @@ router.get('/backups', requireAdmin, (req, res) => {
 });
 
 /**
- * 异地备份状态。设置页显示"备份到底存到哪了"。
- */
-router.get('/backups/offsite', requireAdmin, (req, res) => {
-  res.json(backup.offsiteStatus());
-});
-
-/**
  * 立刻生成一份备份。用于"我现在就要一份"和验证定时备份是否在跑。
  */
 router.post('/backups', requireAdmin, async (req, res) => {

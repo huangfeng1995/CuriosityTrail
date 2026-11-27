@@ -4,7 +4,6 @@
  * 长期记忆路由。
  *
  *   GET    /api/memory/status       记忆服务与索引状态
- *   GET    /api/memory/stats        索引统计（已索引/待处理/失败）
  *   POST   /api/memory/rebuild      重建索引
  *   POST   /api/memory/search       手动检索（调试用）
  */
@@ -38,17 +37,6 @@ router.get('/status', async (req, res) => {
       consistencyReason: consistency.reason,
       stats,
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * GET /api/memory/stats
- */
-router.get('/stats', async (req, res) => {
-  try {
-    res.json(await indexer.stats(req.userId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

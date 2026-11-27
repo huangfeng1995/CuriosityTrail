@@ -305,18 +305,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-router.get('/:id/file', async (req, res) => {
-  try {
-    const row = await ownedMaterial(req.params.id, req.userId);
-    if (!row || !row.file_path || !fs.existsSync(row.file_path)) {
-      return res.status(404).json({ error: '文件不存在' });
-    }
-    res.sendFile(row.file_path);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 /**
  * 定位引用片段在素材原文中的位置。
  *

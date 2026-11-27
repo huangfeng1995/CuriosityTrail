@@ -4,7 +4,6 @@
  * 写作进度路由。
  *
  *   GET /api/progress/:workId      单部作品的写作进度（含每日曲线）
- *   GET /api/progress              当前用户所有作品的进度汇总
  */
 
 const express = require('express');
@@ -12,14 +11,6 @@ const progress = require('../services/progress');
 const { ownedWork } = require('../services/scope');
 
 const router = express.Router();
-
-router.get('/', async (req, res) => {
-  try {
-    res.json(await progress.listAllProgress(req.userId));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 router.get('/:workId', async (req, res) => {
   const { days } = req.query;

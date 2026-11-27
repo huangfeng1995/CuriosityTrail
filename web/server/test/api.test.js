@@ -321,14 +321,6 @@ test('写作进度曲线补齐没有写作的日子', async () => {
   assert.strictEqual(stats.timeline[stats.timeline.length - 1].day, expected);
 });
 
-test('全部作品进度汇总', async () => {
-  const res = await server.request('/api/progress');
-  const list = await res.json();
-  assert.strictEqual(res.status, 200);
-  assert.ok(Array.isArray(list));
-  assert.ok(list.length >= 1);
-});
-
 // ---------------------------------------------------------------------------
 // 一致性检查
 // ---------------------------------------------------------------------------

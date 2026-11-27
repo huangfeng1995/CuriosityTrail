@@ -5,12 +5,10 @@
  *
  *   GET  /api/config/ai      读取 AI 配置（key 只回传掩码）
  *   PUT  /api/config/ai      更新 AI 配置
- *   POST /api/config/ai/test 测试某个 provider 的连通性
  */
 
 const express = require('express');
 const aiConfig = require('../services/aiConfig');
-const { createProvider } = require('../services/providers');
 const { isAdmin } = require('../services/scope');
 
 const router = express.Router();
@@ -39,22 +37,6 @@ router.put('/ai', async (req, res) => {
 
   aiConfig.updateConfig(cleaned);
   res.json(aiConfig.getPublicConfig());
-});
-
-router.post('/ai/test', async (req, res) => {
-  const { provider } = req.body || {};
-  const cfg = aiConfig.getConfig();
-
-  try {
-    const instance = createProvider(provider || cfg.provider, cfg[provider || cfg.provider] || {});
-    if (!instance.configured) {
-      return res.json({ ok: false, detail: '未配置' });
-    }
-    const status = await instance.checkStatus();
-    res.json(status);
-  } catch (err) {
-    res.status(400).json({ ok: false, detail: err.message });
-  }
 });
 
 module.exports = router;

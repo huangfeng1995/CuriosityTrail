@@ -1,7 +1,5 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const config = require('../config');
 
 const router = express.Router();
@@ -61,22 +59,6 @@ router.post('/image', upload.single('image'), (req, res) => {
     
     const imageUrl = `/uploads/${req.file.filename}`;
     res.json({ url: imageUrl, filename: req.file.filename });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.delete('/image/:filename', (req, res) => {
-  try {
-    const filename = path.basename(req.params.filename);
-    const filePath = path.join(uploadsDir, filename);
-
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      res.json({ success: true });
-    } else {
-      res.status(404).json({ error: '文件不存在' });
-    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
