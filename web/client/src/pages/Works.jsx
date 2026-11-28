@@ -30,6 +30,10 @@ export default function Works() {
 
   useEffect(() => {
     load();
+    // 侧栏删除作品后通知这里刷新，避免「删了但列表还挂着」。
+    const onWorksChanged = () => load();
+    window.addEventListener('works:changed', onWorksChanged);
+    return () => window.removeEventListener('works:changed', onWorksChanged);
   }, []);
 
   const create = async () => {

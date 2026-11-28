@@ -352,14 +352,19 @@ function scheduleRemove({ userId, sourceType, sourceId }) {
  * @param {object} params
  * @param {string} params.userId
  * @param {string} params.workId
+ * @param {string[]} [params.uris] 已经抓好（在删除事务之前）的向量 URI；不传则现场查
  */
-async function scheduleRemoveWork({ userId, workId }) {
+async function scheduleRemoveWork({ userId, workId, uris: preloadedUris }) {
   if (!client.isEnabled()) return;
-  const rows = await all(
-    'SELECT viking_uri FROM memory_chunks WHERE user_id = ? AND work_id = ?',
-    [userId, workId]
-  );
-  enqueue({ kind: 'removeWork', userId, workId, uris: rows.map((row) => row.viking_uri) });
+  const uris = Array.isArray(preloadedUris)
+    ? preloadedUris
+    : (
+        await all(
+          'SELECT viking_uri FROM memory_chunks WHERE user_id = ? AND work_id = ?',
+          [userId, workId]
+        )
+      ).map((row) => row.viking_uri);
+  enqueue({ kind: 'removeWork', userId, workId, uris });
 }
 
 /**

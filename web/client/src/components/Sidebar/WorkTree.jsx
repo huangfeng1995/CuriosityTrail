@@ -101,6 +101,8 @@ export default function WorkTree({
         await api.delete(`/works/${work.id}`);
         message.success('已删除');
         await loadWorks();
+        // 「我的作品」页有自己的列表状态，不重新挂载就不会变；广播一次让它刷新。
+        window.dispatchEvent(new CustomEvent('works:changed'));
         if (work.id === currentWorkId) {
           dispatch({ type: 'work/loaded', work: null, chapters: [] });
           dispatch({ type: 'chapter/loaded', chapter: null, blocks: [] });
