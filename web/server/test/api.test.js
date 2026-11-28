@@ -16,7 +16,8 @@ const { setupTempEnv, startServer } = require('./helpers');
 const env = setupTempEnv();
 
 const app = require('../app');
-const { ready } = require('../database');
+const { ready, get } = require('../database');
+const { buildPlanGrounding } = require('../services/agent/planGrounding');
 
 let server;
 
@@ -134,6 +135,41 @@ test('创建作品与章节', async () => {
   assert.ok(work.id);
   assert.strictEqual(chapter.work_id, work.id);
   assert.strictEqual(chapter.seq, 1);
+});
+
+test('新建章节可带本章大纲，读回一致且规划走大纲模式', async () => {
+  const workRes = await server.request('/api/works', {
+    method: 'POST',
+    body: { title: '大纲建章' },
+  });
+  const work = await workRes.json();
+  const outline =
+    '第一场：夜宿驿站，发现证物匣被撬。\n第二场：抵达县衙，主簿遗孀呈上烧焦的仓印。\n第三场：县尉设宴试探，席间有人认出他父亲的名讳。';
+
+  const res = await server.request(`/api/works/${work.id}/chapters`, {
+    method: 'POST',
+    body: { title: '第一章 夜禁', outline },
+  });
+  assert.strictEqual(res.status, 200);
+  const chapter = await res.json();
+  assert.strictEqual(chapter.outline, outline, '建章响应里要带回 outline');
+
+  const fetched = await (await server.request(`/api/chapters/${chapter.id}`)).json();
+  assert.strictEqual(fetched.outline, outline, '读回来必须与传入的一致');
+
+  const row = await get('SELECT user_id FROM works WHERE id = ?', [work.id]);
+  const grounding = await buildPlanGrounding({
+    workId: work.id,
+    chapterId: chapter.id,
+    userId: row.user_id,
+    message: '写第一章',
+  });
+  assert.strictEqual(grounding.planMode, 'outline', '有本章大纲时必须走大纲模式');
+});
+
+test('新建章节只传标题仍可用，outline 为空', async () => {
+  const { chapter } = await seedWork();
+  assert.strictEqual(chapter.outline, '');
 });
 
 test('保存章节会派生 content 快照并统计字数', async () => {

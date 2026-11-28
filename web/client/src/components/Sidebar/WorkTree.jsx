@@ -112,9 +112,14 @@ export default function WorkTree({
     });
   };
 
-  const createChapter = async (workId) => {
+  const createChapter = async (workId, outline = '') => {
     try {
-      const res = await api.post(`/works/${workId}/chapters`, {});
+      // 有本章大纲就一起带上：服务端按 outline 决定生成时走大纲模式，
+      // 不带则保持原来的「只传标题」行为。
+      const res = await api.post(
+        `/works/${workId}/chapters`,
+        outline ? { outline } : {}
+      );
       if (workId === currentWorkId) {
         await loadWork(workId);
       }
@@ -352,9 +357,7 @@ function ChapterList({ workId, currentChapterId, issueCounts, onShowIssues }) {
         type="button"
         className="ct-tree-add"
         onClick={async () => {
-          const res = await api.post(`/works/${workId}/chapters`, {});
-          await loadWork(workId);
-          await loadChapter(res.data.id);
+          await createChapter(workId);
         }}
       >
         <PlusOutlined />

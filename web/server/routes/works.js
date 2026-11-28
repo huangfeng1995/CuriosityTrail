@@ -276,7 +276,7 @@ router.get('/:id/chapters', async (req, res) => {
 });
 
 router.post('/:id/chapters', async (req, res) => {
-  const { title, volume, status } = req.body || {};
+  const { title, volume, status, outline } = req.body || {};
   try {
     const work = await ownedWork(req.params.id, req.userId);
     if (!work) return res.status(404).json({ error: '作品不存在' });
@@ -290,8 +290,8 @@ router.post('/:id/chapters', async (req, res) => {
     const id = crypto.randomUUID();
     const ts = now();
     await run(
-      `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, created_at, modified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO chapters (id, work_id, title, seq, volume, status, content, blocks, outline, created_at, modified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         req.params.id,
@@ -301,6 +301,7 @@ router.post('/:id/chapters', async (req, res) => {
         status || 'draft',
         '',
         JSON.stringify([]),
+        outline ? String(outline) : '',
         ts,
         ts,
       ]
