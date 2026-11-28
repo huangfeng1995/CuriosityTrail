@@ -81,6 +81,33 @@ test('健康检查公开可访问', async () => {
   assert.strictEqual(body.status, 'ok');
 });
 
+// ---------------------------------------------------------------------------
+// /api 404 兜底
+// ---------------------------------------------------------------------------
+
+test('不存在的 /api 路由返回 JSON 404，不落到 SPA 回退', async () => {
+  const res = await server.request('/api/__no_such_route__');
+  assert.strictEqual(res.status, 404);
+  assert.match(res.headers.get('content-type') || '', /application\/json/);
+  const body = await res.json();
+  assert.deepStrictEqual(Object.keys(body), ['error'], '错误结构要与现有响应一致');
+  assert.strictEqual(typeof body.error, 'string');
+});
+
+test('未登录访问不存在的 /api 路由仍先返回 401', async () => {
+  const res = await fetch(`${server.baseUrl}/api/__no_such_route__`);
+  assert.strictEqual(res.status, 401);
+  assert.match(res.headers.get('content-type') || '', /application\/json/);
+});
+
+test('真实存在的 /api 接口不受 404 兜底影响', async () => {
+  const health = await fetch(`${server.baseUrl}/api/health`);
+  assert.strictEqual(health.status, 200);
+  const works = await server.request('/api/works');
+  assert.strictEqual(works.status, 200);
+  assert.ok(Array.isArray(await works.json()));
+});
+
 test('错误验证码不发放会话', async () => {
   const phone = '13900000002';
   await fetch(`${server.baseUrl}/api/auth/send-code`, {

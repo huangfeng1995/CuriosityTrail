@@ -132,6 +132,15 @@ app.use('/api/card-proposals', cardProposalsRouter);
 app.use('/api/pipeline', pipelineRouter);
 app.use('/api/occurrences', occurrencesRouter);
 
+// 未匹配的 /api/* 一律回 JSON 404，不能落到下面的静态资源与 SPA 回退。
+// 放在所有 API 路由之后、静态与 SPA 回退之前：
+//   - 未登录：上面的 requireAuth 已先返回 401，不会走到这里；
+//   - 已登录但不存在的接口：这里回 404 JSON，而不是 200 的首页 HTML；
+//   - 真实接口在各自 router 内已经响应，不会走到这里。
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: '接口不存在' });
+});
+
 // 图片目录同样纳入鉴权
 app.use('/uploads', requireAuth, express.static(config.uploadsDir));
 
