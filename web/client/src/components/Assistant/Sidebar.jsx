@@ -34,7 +34,6 @@ import { useMemoryPref } from '../../hooks/useMemoryPref';
 import RoleTabs from './RoleTabs';
 import MessageList from './MessageList';
 import HistoryPanel from './HistoryPanel';
-import CardProposals from './CardProposals';
 import EmptyState from '../EmptyState';
 
 /**
@@ -81,8 +80,6 @@ export default function AssistantSidebar() {
   // 长期记忆的开关在设置页「长期记忆」里，写作页只读这个值。
   // 同一个开关在写作页再放一遍，只会让作者怀疑两处是不是同一件事。
   const [useMemory] = useMemoryPref();
-  // 卡片提案刷新信号：正文应用后异步识别完成时递增，通知侧栏重拉列表
-  const [proposalRefresh, setProposalRefresh] = useState(0);
   const [activeFindingKey, setActiveFindingKey] = useState('');
   // 已采纳的意见：批量/单条成功后都记在这里，避免重复发给写手
   const [adoptedFindingKeys, setAdoptedFindingKeys] = useState(() => new Set());
@@ -922,7 +919,11 @@ export default function AssistantSidebar() {
           text: plan.text,
           originRef: msg.id,
         }).then((data) => {
-          if (data?.proposals?.length) setProposalRefresh((n) => n + 1);
+          if (data?.proposals?.length) {
+            // 待确认只在左栏面板顶部显示：广播一次让角标与面板重拉，
+            // 不再靠侧栏里的一份本地刷新令牌。
+            window.dispatchEvent(new CustomEvent('ct:proposals-changed'));
+          }
         });
       }
     },
@@ -960,9 +961,9 @@ export default function AssistantSidebar() {
       // dismissProposalsFrom 会等这一轮识别落地再作废：识别要几秒，
       // 直接发出去会「作废 0 条」，几秒后提案又冒出来。
       if (msg.id) {
-        dismissProposalsFrom(msg.id).then((data) => {
-          if (data?.dismissed) setProposalRefresh((n) => n + 1);
-        });
+        // dismissProposalsFrom 完成后自己广播 ct:proposals-changed，
+        // 左栏角标与面板会跟着重拉，这里不再单独记刷新令牌。
+        dismissProposalsFrom(msg.id);
       }
     },
     [updateBlock, removeBlock, dispatch, toast, chapter]
@@ -1422,12 +1423,6 @@ export default function AssistantSidebar() {
       )}
 
       {notice && <div className="ct-ai-notice">{notice}</div>}
-
-      <CardProposals
-        workId={work?.id}
-        chapterId={chapter?.id}
-        refreshToken={proposalRefresh}
-      />
 
       <div ref={listRef} className="ct-ai-scroll">
         <MessageList

@@ -5,7 +5,7 @@ import api from '../../api/client';
 /**
  * 待确认的卡片提案列表。
  *
- * 左栏人物/设定/情节面板与右侧 AI 侧栏共用这一份交互：
+ * 左栏人物/设定/情节/灵感面板共用这一份交互：
  * 就地改标题 → 确认 / 丢弃。不另造一套流程，作者在哪看到都点得一样。
  *
  * 批量确认一次最多 5 条（与服务端上限一致），避免一屏提案被一键全点成事实。
@@ -30,7 +30,7 @@ export default function PendingProposals({
   const { message: toast } = AntApp.useApp();
   const draftCount = (proposals || []).filter((p) => p.stage === 'draft').length;
 
-  // 确认/丢弃后广播一次：左栏面板、角标、右侧提案条都监听这个事件，
+  // 确认/丢弃后广播一次：左栏各面板与角标都监听这个事件，
   // 谁先点的都能同步，不会出现「一边没了、另一边还挂着」。
   const notify = () => {
     window.dispatchEvent(new CustomEvent('ct:proposals-changed'));
