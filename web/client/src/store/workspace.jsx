@@ -102,6 +102,16 @@ function reducer(state, action) {
           : state.chapter;
       return { ...state, chapters, chapter };
     }
+    case 'chapter/outline': {
+      const chapters = state.chapters.map((c) =>
+        c.id === action.chapterId ? { ...c, outline: action.outline } : c
+      );
+      const chapter =
+        state.chapter && state.chapter.id === action.chapterId
+          ? { ...state.chapter, outline: action.outline }
+          : state.chapter;
+      return { ...state, chapters, chapter };
+    }
 
     case 'blocks/set':
       return { ...state, blocks: action.blocks };
@@ -525,6 +535,29 @@ export function WorkspaceProvider({ children }) {
     }
   }, []);
 
+  /**
+   * 保存本章大纲。
+   *
+   * 只发 outline 一个字段：服务端按「未传即保留」处理，不会连带改正文、
+   * 也不会触发版本快照——大纲和正文是两笔独立的存储。
+   * 回写 state 时按 chapterId 匹配，切章后才回来的响应不会污染新章。
+   */
+  const saveChapterOutline = useCallback(async (chapterId, outline) => {
+    const text = String(outline ?? '');
+    try {
+      const res = await api.put(`/chapters/${chapterId}`, { outline: text });
+      const saved = String(res.data?.outline ?? text);
+      dispatch({ type: 'chapter/outline', chapterId, outline: saved });
+      return saved;
+    } catch (e) {
+      dispatch({
+        type: 'notice/set',
+        error: '大纲保存失败：' + (e.response?.data?.error || e.message),
+      });
+      return null;
+    }
+  }, []);
+
   const loadChapter = useCallback(
     async (chapterId) => {
       const seq = ++loadSeqRef.current;
@@ -585,6 +618,7 @@ export function WorkspaceProvider({ children }) {
       loadWork,
       loadChapter,
       renameChapter,
+      saveChapterOutline,
       dropPending,
     }),
     [
@@ -602,6 +636,7 @@ export function WorkspaceProvider({ children }) {
       loadWork,
       loadChapter,
       renameChapter,
+      saveChapterOutline,
       dropPending,
     ]
   );

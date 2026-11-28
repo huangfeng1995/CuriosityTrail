@@ -1641,6 +1641,104 @@ body.ct-resizing * {
   padding-left: 44px;
   margin: 0 auto;
 }
+
+/* ---------- 本章大纲 ----------
+   常驻在章节头下方：空着时只有一行文字入口（不留空框），
+   填过就收起成「大纲 · 前 20 字」，一眼能看出这章填没填。 */
+.ct-outline {
+  max-width: var(--ct-editor-width, 1000px);
+  padding-left: 44px;
+  margin: 2px auto 0;
+}
+.ct-outline-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 6px 3px 5px;
+  margin-left: -5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+.ct-outline-entry:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.ct-outline-entry-icon {
+  font-size: 13px;
+  opacity: 0.8;
+}
+.ct-outline-entry-title {
+  flex: 0 0 auto;
+  font-weight: 500;
+}
+.ct-outline-entry-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.ct-outline-entry-empty {
+  color: var(--text-quaternary);
+}
+.ct-outline-entry-mode {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 20px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 17px;
+}
+.ct-outline-entry-hint {
+  flex: 0 0 auto;
+  color: var(--text-quaternary);
+  font-size: 11.5px;
+}
+.ct-outline-caret {
+  flex: 0 0 auto;
+  font-size: 9px !important;
+  opacity: 0.6;
+  transition: transform 0.16s ease;
+}
+.ct-outline-caret.is-open {
+  transform: rotate(180deg);
+}
+.ct-outline-panel {
+  margin: 8px 0 4px;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+}
+.ct-outline-panel textarea.ant-input {
+  background: var(--bg-container);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.ct-outline-foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+.ct-outline-mode-hint {
+  color: var(--text-quaternary);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.ct-outline-mode-hint.is-active {
+  color: var(--accent);
+}
 .ct-chapter-title {
   font-family: var(--font-serif) !important;
   font-size: 21px !important;
@@ -2354,6 +2452,9 @@ body.ct-resizing * {
   }
   /* 移动端没有块按钮沟，标题不再让位 */
   .ct-editor-head-row {
+    padding-left: 0;
+  }
+  .ct-outline {
     padding-left: 0;
   }
   .ct-editor-actions {

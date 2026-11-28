@@ -7,6 +7,8 @@ import {
   HistoryOutlined,
   DownloadOutlined,
   MoreOutlined,
+  FileTextOutlined,
+  DownOutlined,
 } from '@ant-design/icons';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { useWorkspace } from '../../store/workspace';
@@ -17,6 +19,9 @@ import { assessRewrite } from './writebackGuard';
 import { diffInline, renderDiff } from './inlineDiff';
 import { collectCriticFindings, REASON_LABEL } from '../Assistant/findings';
 import { countBlockWords, formatWords } from '../../utils/wordCount';
+
+// 与 services/agent/planGrounding.js 的 MIN_OUTLINE_CHARS_FOR_PLAN 保持一致
+const MIN_OUTLINE_CHARS = 40;
 import Block from './Block';
 import BlockPalette from './BlockPalette';
 import BlockToolbar, { ACTIONS as INLINE_ACTIONS } from './BlockToolbar';
@@ -82,9 +87,28 @@ export default function ChapterEditor() {
     saveStatus,
     dispatch,
     renameChapter,
+    saveChapterOutline,
     loadWork,
     loadChapter,
   } = useWorkspace();
+
+  // ---- 本章大纲 ----
+  // 大纲只走 chapters.outline 一个字段，与正文的防抖保存互不相干；
+  // 草稿挂在本地，切章时按 chapter.id 重置，不会把上一章的大纲带过去。
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineDraft, setOutlineDraft] = useState(() => chapter?.outline || '');
+  const [outlineSaving, setOutlineSaving] = useState(false);
+  const outlineSavingRef = useRef(false);
+  // 异步保存回来时可能已经切章：用 ref 比较，切了就不回填输入框
+  const outlineChapterRef = useRef(chapter?.id);
+
+  useEffect(() => {
+    outlineChapterRef.current = chapter?.id;
+    setOutlineOpen(false);
+    setOutlineDraft(chapter?.outline || '');
+    setOutlineSaving(false);
+    outlineSavingRef.current = false;
+  }, [chapter?.id]);
 
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [activeFindingKey, setActiveFindingKey] = useState('');
@@ -600,6 +624,44 @@ export default function ChapterEditor() {
       }));
   }, [chapter]);
 
+  // ---- 本章大纲入口 ----
+  // 40 字是服务端判定「按大纲拆拍」的下限（services/agent/planGrounding.js），
+  // 少于它仍按标题和上文推断，所以入口里直接写清「还差多少字」，
+  // 避免作者以为填了就算数。
+  const savedOutline = chapter?.outline || '';
+  const outlineFlat = savedOutline.replace(/\s+/g, ' ').trim();
+  const outlineSummary = outlineFlat
+    ? `${outlineFlat.slice(0, 20)}${outlineFlat.length > 20 ? '…' : ''}`
+    : '';
+  const outlineChars = (outlineOpen ? outlineDraft : savedOutline).trim().length;
+  const outlineDraftChars = outlineDraft.trim().length;
+  const outlineDirty = outlineDraft !== savedOutline;
+  const outlineActive = outlineFlat.length >= MIN_OUTLINE_CHARS;
+
+  const commitOutline = useCallback(
+    async (text = outlineDraft) => {
+      if (!chapter?.id || outlineSavingRef.current) return null;
+      const target = String(text ?? '');
+      const chapterId = chapter.id;
+      if (target === (chapter.outline || '')) return target;
+      outlineSavingRef.current = true;
+      setOutlineSaving(true);
+      const saved = await saveChapterOutline(chapterId, target);
+      outlineSavingRef.current = false;
+      setOutlineSaving(false);
+      if (saved === null) return null;
+      // 保存期间如果已经切章，只落库不回填，新章的输入框保持新章内容
+      if (outlineChapterRef.current === chapterId) setOutlineDraft(saved);
+      return saved;
+    },
+    [chapter, outlineDraft, saveChapterOutline]
+  );
+
+  const saveOutlineNow = useCallback(async () => {
+    const saved = await commitOutline();
+    if (saved !== null) message.success('大纲已保存');
+  }, [commitOutline]);
+
   if (!chapter) {
     const hasChapters = (chapters || []).some((c) => c.work_id === work?.id);
     // 一本还没章节的书：第一屏就放一个能点的开始，不必去左栏找那行小字。
@@ -723,6 +785,88 @@ export default function ChapterEditor() {
               </Tooltip>
             )}
           </Space>
+        </div>
+
+        {/* 本章大纲：空着时只是一行文字入口，不占空框；
+            填过之后收起成「大纲 · 前 20 字」，不用点开也知道这章填过。
+            放在章节头下方常驻，因为它直接影响这一章怎么写，
+            塞进「⋯」菜单会变成第二个点击才发现的东西。 */}
+        <div className="ct-outline">
+          <button
+            type="button"
+            className={`ct-outline-entry${outlineOpen ? ' is-open' : ''}`}
+            onClick={() => setOutlineOpen((v) => !v)}
+            aria-expanded={outlineOpen}
+            title={outlineOpen ? '收起大纲' : outlineFlat ? '展开并编辑本章大纲' : '给这一章填大纲'}
+          >
+            <FileTextOutlined className="ct-outline-entry-icon" />
+            <span className="ct-outline-entry-title">本章大纲</span>
+            {outlineFlat ? (
+              <span className="ct-outline-entry-summary">{outlineSummary}</span>
+            ) : (
+              <span className="ct-outline-entry-empty">填写</span>
+            )}
+            {/* 展开时状态在面板里说，标题行不再重复一遍 */}
+            {!outlineOpen && outlineActive ? (
+              <span className="ct-outline-entry-mode">按大纲生成</span>
+            ) : !outlineOpen && outlineFlat ? (
+              <span className="ct-outline-entry-hint">
+                再写 {Math.max(0, MIN_OUTLINE_CHARS - outlineChars)} 字启用
+              </span>
+            ) : null}
+            <DownOutlined className={`ct-outline-caret${outlineOpen ? ' is-open' : ''}`} />
+          </button>
+
+          {outlineOpen && (
+            <div className="ct-outline-panel">
+              <Input.TextArea
+                value={outlineDraft}
+                onChange={(e) => setOutlineDraft(e.target.value)}
+                onBlur={() => {
+                  if (outlineDraft !== savedOutline) commitOutline(outlineDraft);
+                }}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    saveOutlineNow();
+                  }
+                }}
+                autoSize={{ minRows: 3, maxRows: 8 }}
+                placeholder="这一章要发生什么：谁、在哪、因为什么、走到哪一步结束。"
+                aria-label="本章大纲"
+              />
+              <div className="ct-outline-foot">
+                <span className={`ct-outline-mode-hint${outlineActive ? ' is-active' : ''}`}>
+                  {outlineActive
+                    ? '已启用：写手会按这份大纲拆拍生成，不再只靠标题和上文。'
+                    : `写满 ${MIN_OUTLINE_CHARS} 字才会按大纲生成（当前 ${outlineDraftChars} 字）。`}
+                  {!outlineActive && outlineDraftChars >= MIN_OUTLINE_CHARS ? '保存后生效。' : ''}
+                </span>
+                <Space size={6}>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={outlineSaving}
+                    disabled={!outlineDirty}
+                    onClick={saveOutlineNow}
+                    title="保存（⌘/Ctrl+Enter）"
+                  >
+                    保存
+                  </Button>
+                  <Button
+                    size="small"
+                    type="text"
+                    onClick={() => {
+                      setOutlineOpen(false);
+                      if (outlineDraft !== savedOutline) commitOutline(outlineDraft);
+                    }}
+                  >
+                    收起
+                  </Button>
+                </Space>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 动作条固定在章节头：不再跟着光标飘、不压正文。
