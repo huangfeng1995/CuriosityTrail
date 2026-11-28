@@ -18,6 +18,7 @@ const {
   formatPlanBrief,
   briefCoverage,
   withholdDegradedNote,
+  briefMissingNotice,
   briefWriterBlock,
   partitionCoverage,
   buildReplanInstruction,
@@ -1639,4 +1640,17 @@ test('对手兜底：模型说「本章没有对手」但输入有官威时，�
   assert.strictEqual(opponents[0].none, undefined);
   assert.ok(opponents[0].text.includes('符传'));
   assert.strictEqual(opponents[0].source, '设定');
+});
+
+test('缺拍提示说明缺哪类拍与影响，没有缺项时为空', () => {
+  const notice = briefMissingNotice([
+    { id: 'OP1', kind: 'opponent', text: '县尉拦路试探' },
+    { id: 'LS2', kind: 'loss', text: '失去符传' },
+  ]);
+  assert.match(notice, /2 项没落进拍表/);
+  assert.match(notice, /外部对手（OP1）/);
+  assert.match(notice, /代价与损失（LS2）/);
+  assert.match(notice, /影响：.*施压方.*；.*代价没有落到具体损失/);
+  assert.match(notice, /忽略继续/);
+  assert.strictEqual(briefMissingNotice([]), '');
 });

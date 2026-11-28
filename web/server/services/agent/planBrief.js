@@ -910,6 +910,49 @@ function withholdDegradedNote(coverage) {
 }
 
 /**
+ * brief 缺项的中文名与影响，用于写前给作者的可关闭提示。
+ * 只解释「缺哪类、会影响什么」，不暴露内部字段名。
+ */
+const MISSING_KIND_LABELS = Object.freeze({
+  opponent: '外部对手',
+  loss: '代价与损失',
+  mustPresent: '必须到场的人或物',
+  mustWithhold: '必须瞒住的信息',
+  mustReveal: '必须揭示的信息',
+  evidence: '证据',
+});
+const MISSING_KIND_IMPACTS = Object.freeze({
+  opponent: '本章可能缺少明确的施压方，主角容易被事件推着走',
+  loss: '代价没有落到具体损失，取舍会显得轻',
+  mustPresent: '关键人物或物件没有到场，后续会少一个可引用的支点',
+  mustWithhold: '该瞒住的信息没有安排隐瞒，悬念可能提前泄掉',
+  mustReveal: '该揭示的信息没有落位，读者会停在旧信息上',
+  evidence: '证据没有落到具体物件或文书，推理会悬空',
+});
+
+/**
+ * 写前缺拍提示。
+ *
+ * 只给作者看一次，前端以可关闭的临时提示条展示，不进会话历史。
+ *
+ * @param {Array<{id?: string, kind?: string, text?: string}>} missing briefCoverage 的缺项
+ * @returns {string} 空串表示没有缺项
+ */
+function briefMissingNotice(missing) {
+  const rows = (Array.isArray(missing) ? missing : []).filter(Boolean);
+  if (!rows.length) return '';
+  const shown = rows.slice(0, 3).map((item) => {
+    const label = MISSING_KIND_LABELS[item.kind] || '关键动作';
+    return `${label}（${item.id || item.kind || '未编号'}）`;
+  });
+  const rest = rows.length > shown.length ? `等 ${rows.length} 项` : '';
+  const impacts = [...new Set(rows.map((item) => MISSING_KIND_IMPACTS[item.kind]))].filter(Boolean);
+  return `本章分场清单有 ${rows.length} 项没落进拍表：${shown.join('、')}${rest}。${
+    impacts.length ? `影响：${impacts.join('；')}。` : ''
+  }写之前可以补一句，或直接忽略继续。`;
+}
+
+/**
  * 给写手组指令的具体约束块。
  *
  * 只写非 inferred 的项；每行都具体到物、到人、到不得解释的内容。
@@ -2009,6 +2052,7 @@ module.exports = {
   formatPlanBrief,
   briefCoverage,
   withholdDegradedNote,
+  briefMissingNotice,
   openingOpponentCoverage,
   openingBeat,
   briefWriterBlock,

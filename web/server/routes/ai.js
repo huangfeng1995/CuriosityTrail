@@ -1543,6 +1543,15 @@ router.post('/chat', async (req, res) => {
             .filter(Boolean)
             .join('|');
 
+          // 写前缺拍提示：只在规划轮发一次，走临时 notice，不进会话历史。
+          // 缺项不能只写日志——作者看不到，写手也不会补。
+          if (!reusedPlan && briefCoverageResult && briefCoverageResult.missing.length) {
+            send({
+              type: 'notice',
+              content: planBrief.briefMissingNotice(briefCoverageResult.missing),
+            });
+          }
+
           // 落库最终采用的拍表与 brief。放在重排与 brief 落位之后，
           // 存的是写手真正会看到的那一版；复用轮次不重写，避免无谓刷新时间戳。
           //

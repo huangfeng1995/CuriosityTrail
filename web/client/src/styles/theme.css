@@ -2678,6 +2678,9 @@ body.ct-resizing * {
    原来是通栏贴边的一条色带，和面板内其他块不在同一条线上；
    改成带圆角的内嵌提示条，左右留白与消息区一致。 */
 .ct-ai-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   margin: 8px var(--ct-ai-pad) 0;
   padding: 8px 10px;
   border-radius: 7px;
@@ -2688,6 +2691,28 @@ body.ct-resizing * {
   border: 1px solid var(--border-faint);
   flex-shrink: 0;
   animation: ct-suggest-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 缺拍提示等临时通知：正文占满，关闭按钮贴右上。 */
+.ct-ai-notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ct-ai-notice-close {
+  flex-shrink: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.ct-ai-notice-close:hover {
+  opacity: 1;
 }
 
 /* ---------- 卡片提案 ---------- */

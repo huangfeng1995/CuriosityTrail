@@ -1422,7 +1422,19 @@ export default function AssistantSidebar() {
         </div>
       )}
 
-      {notice && <div className="ct-ai-notice">{notice}</div>}
+      {notice && (
+        <div className="ct-ai-notice">
+          <span className="ct-ai-notice-text">{notice}</span>
+          <button
+            type="button"
+            className="ct-ai-notice-close"
+            aria-label="关闭提示"
+            onClick={() => dispatch({ type: 'notice/set', notice: '' })}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <div ref={listRef} className="ct-ai-scroll">
         <MessageList
